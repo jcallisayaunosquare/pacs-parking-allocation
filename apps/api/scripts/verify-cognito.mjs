@@ -213,11 +213,65 @@ async function main() {
   await finish(cognito, o.UserPoolId, [adminEmail, residentEmail]);
 }
 
+
+/**
+ * Deletes the Cognito user a resident's provisioning creates, once it exists.
+ *
+ * integrations builds that user from the pacs-events stream a second or two after the
+ * resident is created, so a cleanup that runs straight away deletes nothing and the
+ * account turns up afterwards with no one left to remove it. This waits for it.
+ */
+async function deleteProvisionedUser(cognito, userPoolId, email, waitMs = 12_000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }));
+      return true;
+    } catch (e) {
+      // Not provisioned yet: wait and look again, until the budget runs out.
+      if (e?.name !== 'UserNotFoundException' || Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
 async function finish(cognito, userPoolId, usernames) {
   for (const u of usernames) {
-    await cognito
-      .send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: u }))
-      .catch(() => undefined);
+    await deleteProvisionedUser(cognito, userPoolId, u);
+  }
+
+  // The resident row too. Deleting only the Cognito user left "Provisioning Probe"
+  // sitting in the real register, which is the sort of thing an administrator finds
+  // long after the test that made it has been forgotten.
+  if (process.env.DATABASE_URL) {
+    const { default: pg } = await import('pg');
+    const db = new pg.Client({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    });
+    try {
+      await db.connect();
+      for (const mail of usernames) {
+        await db.query(
+          `delete from fairness_state
+            where resident_id in (select id from resident where email = $1)
+              and resident_id not in (select resident_id from allocation_history)`,
+          [mail],
+        );
+        await db.query('update resident set deactivated_at = now() where email = $1', [mail]);
+        await db.query(
+          `delete from resident
+            where email = $1
+              and id not in (select resident_id from allocation_history
+                             union select resident_id from spot_assignment)`,
+          [mail],
+        );
+      }
+    } catch {
+      /* best effort: a leftover row is not worth failing the run over */
+    } finally {
+      await db.end().catch(() => undefined);
+    }
   }
   const failed = results.filter((x) => !x).length;
   console.log(`\n${results.length - failed}/${results.length} checks passed`);

@@ -367,6 +367,28 @@ async function main() {
  * Needs DATABASE_URL. Without it the run still passes, but says what it left behind
  * instead of leaving it to be discovered in the admin screens later.
  */
+
+/**
+ * Deletes the Cognito user a resident's provisioning creates, once it exists.
+ *
+ * integrations builds that user from the pacs-events stream a second or two after the
+ * resident is created, so a cleanup that runs straight away deletes nothing and the
+ * account turns up afterwards with no one left to remove it. This waits for it.
+ */
+async function deleteProvisionedUser(cognito, userPoolId, email, waitMs = 12_000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }));
+      return true;
+    } catch (e) {
+      // Not provisioned yet: wait and look again, until the budget runs out.
+      if (e?.name !== 'UserNotFoundException' || Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
 async function tidyUp(cognito, userPoolId) {
   const url = process.env.DATABASE_URL;
   const left = [
@@ -411,12 +433,9 @@ async function tidyUp(cognito, userPoolId) {
       );
       await client.query('delete from parking_spot where spot_code = $1 and id not in (select spot_id from spot_assignment where spot_id is not null union select spot_id from allocation_history where spot_id is not null)', [code]);
     }
-    // The Cognito user too. integrations created it from the ResidentCreated event, so
-    // deleting only the database row leaves an account behind in the real user pool.
+    // The Cognito user too, waiting for the stream to produce it first.
     for (const mail of madeHere.residentEmails) {
-      await cognito
-        .send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: mail }))
-        .catch(() => undefined);
+      await deleteProvisionedUser(cognito, userPoolId, mail);
     }
 
     for (const mail of madeHere.residentEmails) {
