@@ -33,7 +33,7 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         type="search"
         placeholder="Filter by unit"
         [ngModel]="facade.unit() ?? ''"
-        (ngModelChange)="facade.unit.set($event || undefined)"
+        (ngModelChange)="facade.setUnit($event || undefined)"
         aria-label="Filter by unit"
       />
       <select
@@ -124,9 +124,12 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                   }
                 </td>
                 <td>
-                  <button class="btn btn--bare" type="button" (click)="openEligibility(r)">
-                    Eligibility
-                  </button>
+                  <div class="acts">
+                    <button class="btn btn--bare" type="button" (click)="openEdit(r)">Edit</button>
+                    <button class="btn btn--bare" type="button" (click)="openEligibility(r)">
+                      Eligibility
+                    </button>
+                  </div>
                 </td>
               </tr>
             }
@@ -194,6 +197,47 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           (click)="submitCreate()"
         >
           Add resident
+        </button>
+      </div>
+    </app-modal>
+
+    <app-modal
+      [open]="editOpen()"
+      [title]="'Edit — ' + (editing()?.fullName ?? '')"
+      (closed)="editOpen.set(false)"
+    >
+      <div class="field">
+        <label class="field__label" for="er-name">Full name</label>
+        <input class="input" id="er-name" [(ngModel)]="editForm.fullName" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="er-unit">Unit</label>
+        <input class="input" id="er-unit" [(ngModel)]="editForm.unitNumber" autocomplete="off" />
+      </div>
+      <label class="check">
+        <input type="checkbox" [(ngModel)]="editForm.needsAccessibleSpot" />
+        <span>Needs an accessible bay</span>
+      </label>
+
+      <div class="field">
+        <label class="field__label">Email</label>
+        <p class="field__fixed">{{ editing()?.email }}</p>
+        <p class="field__hint">
+          The email cannot be changed here. It is what a resident's sign-in matches itself
+          against, so editing it would detach the account from this record. Add the resident
+          again under the new address instead.
+        </p>
+      </div>
+
+      <div modalFoot>
+        <button class="btn btn--quiet" type="button" (click)="editOpen.set(false)">Cancel</button>
+        <button
+          class="btn"
+          type="button"
+          [disabled]="!editChanged() || facade.busy()"
+          (click)="submitEdit()"
+        >
+          Save changes
         </button>
       </div>
     </app-modal>
@@ -288,6 +332,15 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       .dim {
         color: var(--steel-faint);
       }
+      .acts {
+        display: flex;
+        gap: var(--sp-4);
+        flex-wrap: wrap;
+      }
+      .field__fixed {
+        font-weight: 600;
+        word-break: break-all;
+      }
       .reason {
         display: block;
         color: var(--revoked);
@@ -342,8 +395,11 @@ export default class ResidentsPage {
   }
 
   readonly createOpen = signal(false);
+  readonly editOpen = signal(false);
   readonly eligibilityOpen = signal(false);
   readonly editing = signal<Resident | null>(null);
+
+  editForm = { fullName: '', unitNumber: '', needsAccessibleSpot: false };
 
   eligibleDraft = true;
   reasonDraft = '';
@@ -357,7 +413,7 @@ export default class ResidentsPage {
   }
 
   setEligibleFilter(v: string): void {
-    this.facade.eligible.set(v === '' ? undefined : v === 'yes');
+    this.facade.setEligible(v === '' ? undefined : v === 'yes');
   }
 
   clearFilters(): void {
@@ -386,6 +442,48 @@ export default class ResidentsPage {
       needsAccessibleSpot: this.form.needsAccessibleSpot,
     });
     if (r) this.createOpen.set(false);
+  }
+
+  openEdit(r: Resident): void {
+    this.editing.set(r);
+    this.editForm = {
+      fullName: r.fullName,
+      unitNumber: r.unitNumber,
+      needsAccessibleSpot: r.needsAccessibleSpot,
+    };
+    this.facade.dismissError();
+    this.editOpen.set(true);
+  }
+
+  /**
+   * Only what actually changed is sent, and Save stays disabled until something does.
+   * The server rejects an empty patch, and sending a field back unchanged would still
+   * write an audit entry claiming it was edited.
+   */
+  private editPatch(): { fullName?: string; unitNumber?: string; needsAccessibleSpot?: boolean } {
+    const r = this.editing();
+    if (!r) return {};
+    const name = this.editForm.fullName.trim();
+    const unit = this.editForm.unitNumber.trim();
+    return {
+      ...(name && name !== r.fullName ? { fullName: name } : {}),
+      ...(unit && unit !== r.unitNumber ? { unitNumber: unit } : {}),
+      ...(this.editForm.needsAccessibleSpot !== r.needsAccessibleSpot
+        ? { needsAccessibleSpot: this.editForm.needsAccessibleSpot }
+        : {}),
+    };
+  }
+
+  editChanged(): boolean {
+    return Object.keys(this.editPatch()).length > 0;
+  }
+
+  async submitEdit(): Promise<void> {
+    const r = this.editing();
+    const patch = this.editPatch();
+    if (!r || Object.keys(patch).length === 0) return;
+    const done = await this.facade.update(r.id, patch);
+    if (done) this.editOpen.set(false);
   }
 
   openEligibility(r: Resident): void {

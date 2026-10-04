@@ -26,8 +26,10 @@ export class ResidentsFacade {
   private readonly repo = inject(ResidentRepository);
 
   /** URL-linkable filters: an admin list should survive a reload (§17). */
-  readonly unit = signal<string | undefined>(undefined);
-  readonly eligible = signal<boolean | undefined>(undefined);
+  private readonly _unit = signal<string | undefined>(undefined);
+  private readonly _eligible = signal<boolean | undefined>(undefined);
+  readonly unit = this._unit.asReadonly();
+  readonly eligible = this._eligible.asReadonly();
   readonly limit = signal(15);
   readonly sort = signal<ResidentSortField>('name');
   readonly dir = signal<SortDirection>('asc');
@@ -108,9 +110,25 @@ export class ResidentsFacade {
     this.trail.set([]);
   }
 
+  /**
+   * Changing a filter restarts the list, for the same reason sorting does: the cursor
+   * describes a position in the ordering the previous query produced. Keeping it asks
+   * the server for rows after a row the new filter has removed, and the answer is an
+   * empty page — the list reads "No residents match" while matching residents exist.
+   */
+  setUnit(v: string | undefined): void {
+    this._unit.set(v);
+    this.firstPage();
+  }
+
+  setEligible(v: boolean | undefined): void {
+    this._eligible.set(v);
+    this.firstPage();
+  }
+
   resetFilters(): void {
-    this.unit.set(undefined);
-    this.eligible.set(undefined);
+    this._unit.set(undefined);
+    this._eligible.set(undefined);
     this.firstPage();
   }
 

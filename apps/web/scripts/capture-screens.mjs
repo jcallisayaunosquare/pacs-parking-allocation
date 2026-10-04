@@ -145,6 +145,25 @@ async function main() {
       await shot('03c-page-two');
     }
 
+    // Editing a resident, end to end: narrow to the row this script owns, change it,
+    // and read the table back. A build that compiles says nothing about whether Save
+    // reached the server or whether the list shows the new value afterwards.
+    await page.getByRole('searchbox', { name: /filter by unit/i }).fill('000');
+    await page.waitForTimeout(1200);
+    await page.getByRole('button', { name: 'Edit' }).first().click();
+    await page.waitForTimeout(500);
+    await shot('03d-edit-resident-dialog');
+    await page.locator('#er-name').fill('Screenshot Admin Edited');
+    await page.getByRole('button', { name: /save changes/i }).click();
+    await page.waitForTimeout(1800);
+    const edited = await page.locator('.tbl td[data-label="Name"]').first().textContent();
+    if (edited?.trim() !== 'Screenshot Admin Edited') {
+      problems.push(`edit did not reach the list — row still reads "${edited?.trim()}"`);
+    }
+    await shot('03e-after-edit');
+    await page.getByRole('button', { name: /^Clear$/ }).click();
+    await page.waitForTimeout(1200);
+
     // The screen that answers "where does a resident get registered".
     await page.getByRole('button', { name: /add resident/i }).click();
     await page.waitForTimeout(600);
