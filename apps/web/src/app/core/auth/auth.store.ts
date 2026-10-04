@@ -2,7 +2,8 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { firstValueFrom } from 'rxjs';
 import { MeRepository } from '../../domain/repositories';
-import type { Principal, Role } from '../../domain/models';
+import type { ApiError, Principal, Role } from '../../domain/models';
+import { toApiError } from '../http/api-error';
 import { cognitoLogoutUrl } from './auth.config';
 
 /**
@@ -21,11 +22,23 @@ export class AuthStore {
   private readonly _principal = signal<Principal | null>(null);
   private readonly _checked = signal(false);
   private readonly _authenticated = signal(false);
+  private readonly _principalError = signal<ApiError | null>(null);
 
   readonly principal = this._principal.asReadonly();
   readonly authenticated = this._authenticated.asReadonly();
   /** False until the first `checkAuth()` resolves, so guards do not bounce too early. */
   readonly checked = this._checked.asReadonly();
+
+  /**
+   * Why the principal is missing, when it is.
+   *
+   * This used to be swallowed, which made two completely different situations look
+   * identical: an account that is genuinely not linked to a resident yet, and a
+   * `GET /me` that failed. Someone who had just signed in was told their account was
+   * not linked when in fact the request never came back.
+   */
+  readonly principalError = this._principalError.asReadonly();
+  readonly principalLoaded = computed(() => this._principal() !== null);
 
   readonly roles = computed<readonly Role[]>(() => this._principal()?.roles ?? []);
   readonly isAdmin = computed(() => this.roles().includes('ADMIN'));
@@ -57,8 +70,10 @@ export class AuthStore {
   async loadPrincipal(): Promise<void> {
     try {
       this._principal.set(await this.me.principal());
-    } catch {
+      this._principalError.set(null);
+    } catch (e) {
       this._principal.set(null);
+      this._principalError.set(toApiError(e));
     }
   }
 
@@ -69,6 +84,7 @@ export class AuthStore {
   logout(): void {
     // Drop local state first, so a failed redirect cannot leave a half-signed-in UI.
     this._principal.set(null);
+    this._principalError.set(null);
     this._authenticated.set(false);
     this.oidc.logoffLocal();
     window.location.href = cognitoLogoutUrl();

@@ -143,23 +143,52 @@ export class CallbackPage implements OnInit {
 @Component({
   selector: 'app-pending-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   template: `
-    <div class="pend">
-      <h1 class="pend__h">Your account is not linked to a resident yet</h1>
-      <p class="pend__p">
-        You are signed in as <strong>{{ auth.principal()?.email }}</strong>. Before you can
-        see your parking status, the building administration has to add you to the
-        resident register with your unit number.
-      </p>
-      <p class="pend__p">
-        Once they do, this page becomes your parking status. Nothing else is needed from
-        you.
-      </p>
-      <div class="pend__row">
-        <button class="btn btn--quiet" type="button" (click)="recheck()">Check again</button>
-        <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
+    <!--
+      Two states, deliberately told apart. They used to share this page, so a failed
+      GET /me was reported as "your account is not linked" — the wrong answer, and one
+      nobody can act on.
+    -->
+    @if (auth.principalError(); as err) {
+      <div class="pend pend--fail" role="alert">
+        <h1 class="pend__h">We could not load your account</h1>
+        <p class="pend__p">
+          You are signed in, but the server did not answer when we asked who you are, so
+          there is nothing to show yet. This is not a problem with your account.
+        </p>
+        <p class="pend__p pend__detail">{{ err.message }}</p>
+        @if (err.traceId) {
+          <p class="pend__trace">
+            Reference for support: <code>{{ err.traceId }}</code>
+          </p>
+        }
+        <div class="pend__row">
+          <button class="btn" type="button" (click)="recheck()">Try again</button>
+          <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
+        </div>
       </div>
-    </div>
+    } @else {
+      <div class="pend">
+        <h1 class="pend__h">Your account is not linked to a resident yet</h1>
+        <p class="pend__p">
+          You are signed in as <strong>{{ auth.principal()?.email }}</strong>. Before you
+          can see your parking status, the building administration has to add you to the
+          resident register with your unit number.
+        </p>
+        <p class="pend__p">
+          Once they do, this page becomes your parking status. Nothing else is needed from
+          you.
+        </p>
+        <div class="pend__row">
+          <button class="btn btn--quiet" type="button" (click)="recheck()">Check again</button>
+          @if (auth.isAdmin()) {
+            <a class="btn btn--bare" routerLink="/admin/residents">Go to administration</a>
+          }
+          <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
+        </div>
+      </div>
+    }
   `,
   styles: [
     `
@@ -176,6 +205,20 @@ export class CallbackPage implements OnInit {
       }
       .pend__p {
         color: var(--steel-soft);
+      }
+      .pend--fail {
+        border-left-color: var(--revoked);
+      }
+      .pend__detail {
+        font-size: var(--t-small);
+        color: var(--revoked);
+      }
+      .pend__trace {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+      .pend__trace code {
+        user-select: all;
       }
       .pend__row {
         display: flex;

@@ -31,6 +31,17 @@ const check = (label, pass, extra = '') => {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${extra ? '  — ' + extra : ''}`);
 };
 
+/**
+ * What this run created, so it can be tidied up afterwards.
+ *
+ * Earlier versions left everything behind: five cycles with implausible labels, retired
+ * bays and throwaway residents accumulated in the real admin screens, and because
+ * `runnable()` picks the first cycle in REGISTRATION_CLOSED, the "ready to draw" banner
+ * ended up pointing at a cycle invented by a test. A suite that dirties the system it
+ * checks is worse than no suite.
+ */
+const madeHere = { cycleLabels: [], spotCodes: [], residentEmails: [] };
+
 async function outputs() {
   const cfn = new CloudFormationClient({ region: REGION });
   const out = await cfn.send(new DescribeStacksCommand({ StackName: STACK }));
@@ -144,6 +155,7 @@ async function main() {
   check('POST /residents creates a resident', created.status === 201 && Boolean(created.json?.id),
     `status=${created.status}`);
   const residentId = created.json?.id;
+  if (created.json?.email) madeHere.residentEmails.push(created.json.email);
 
   const dupe = await call('POST', '/residents', {
     body: { email: created.json?.email, fullName: 'Dupe', unitNumber: '998' },
@@ -183,6 +195,7 @@ async function main() {
   const spotCode = `SMK-${Math.floor(Math.random() * 9000 + 1000)}`;
   const spot = await call('POST', '/spots', { body: { spotCode, level: 'B9', type: 'EV' } });
   check('POST /spots creates a spot', spot.status === 201 && spot.json?.spotCode === spotCode);
+  if (spot.status === 201) madeHere.spotCodes.push(spotCode);
 
   const badType = await call('POST', '/spots', {
     body: { spotCode: `${spotCode}X`, level: 'B9', type: 'HELICOPTER' },
@@ -207,6 +220,7 @@ async function main() {
   check('POST /cycles creates a cycle in DRAFT',
     cycle.status === 201 && cycle.json?.state === 'DRAFT', `status=${cycle.status}`);
   const cycleId = cycle.json?.id;
+  if (cycle.json?.label) madeHere.cycleLabels.push(cycle.json.label);
 
   const badDates = await call('POST', '/cycles', {
     body: {
@@ -288,10 +302,86 @@ async function main() {
   await finish(cognito, userPoolId, email);
 }
 
+/**
+ * Removes what this run created. The API has no delete endpoints for cycles, bays or
+ * residents — deliberately, since §11 puts ON DELETE RESTRICT on anything the audit
+ * trail references — so cleanup reaches past the API, and retires rather than deletes
+ * whatever a draw has already touched.
+ *
+ * Needs DATABASE_URL. Without it the run still passes, but says what it left behind
+ * instead of leaving it to be discovered in the admin screens later.
+ */
+async function tidyUp(cognito, userPoolId) {
+  const url = process.env.DATABASE_URL;
+  const left = [
+    ...madeHere.cycleLabels.map((l) => `cycle ${l}`),
+    ...madeHere.spotCodes.map((c) => `bay ${c}`),
+    ...madeHere.residentEmails.map((e) => `resident ${e}`),
+  ];
+  if (left.length === 0) return;
+
+  if (!url) {
+    console.log(`\nDATABASE_URL is not set, so these were left in place:\n  ${left.join('\n  ')}`);
+    return;
+  }
+
+  const { default: pg } = await import('pg');
+  const client = new pg.Client({
+    connectionString: url,
+    ssl: url.includes('localhost') ? false : { rejectUnauthorized: false },
+  });
+
+  try {
+    await client.connect();
+    for (const label of madeHere.cycleLabels) {
+      const { rows } = await client.query('select id from allocation_cycle where label = $1', [label]);
+      const id = rows[0]?.id;
+      if (!id) continue;
+      await client.query('delete from allocation_history where cycle_id = $1', [id]);
+      await client.query('delete from waitlist_entry where cycle_id = $1', [id]);
+      await client.query('delete from spot_assignment where cycle_id = $1', [id]);
+      await client.query('delete from allocation_run where cycle_id = $1', [id]);
+      await client.query('delete from raffle_registration where cycle_id = $1', [id]);
+      await client.query('delete from allocation_cycle where id = $1', [id]);
+    }
+    // Retire rather than delete: a bay or resident a draw has touched is referenced by
+    // allocation_history, and the schema refuses to let that be rewritten.
+    for (const code of madeHere.spotCodes) {
+      await client.query(
+        `update parking_spot set is_active = false, deactivated_at = now(),
+                notes = 'Retired by the smoke suite'
+          where spot_code = $1`,
+        [code],
+      );
+      await client.query('delete from parking_spot where spot_code = $1 and id not in (select spot_id from spot_assignment where spot_id is not null union select spot_id from allocation_history where spot_id is not null)', [code]);
+    }
+    // The Cognito user too. integrations created it from the ResidentCreated event, so
+    // deleting only the database row leaves an account behind in the real user pool.
+    for (const mail of madeHere.residentEmails) {
+      await cognito
+        .send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: mail }))
+        .catch(() => undefined);
+    }
+
+    for (const mail of madeHere.residentEmails) {
+      await client.query('update resident set deactivated_at = now() where email = $1', [mail]);
+      await client.query('delete from fairness_state where resident_id in (select id from resident where email = $1) and resident_id not in (select resident_id from allocation_history)', [mail]);
+      await client.query('delete from resident where email = $1 and id not in (select resident_id from allocation_history union select resident_id from spot_assignment)', [mail]);
+    }
+    console.log(`\ncleaned up ${left.length} item(s) created by this run`);
+  } catch (e) {
+    console.log(`\ncleanup failed (${e.message}); left behind:\n  ${left.join('\n  ')}`);
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
 async function finish(cognito, userPoolId, email) {
   await cognito
     .send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }))
     .catch(() => undefined);
+
+  await tidyUp(cognito, userPoolId);
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
