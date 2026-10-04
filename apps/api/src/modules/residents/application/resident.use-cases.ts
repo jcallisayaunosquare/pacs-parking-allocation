@@ -21,11 +21,25 @@ export interface Page<T> {
   readonly nextCursor: string | null;
 }
 
+/** The columns an administrator may sort the register by. */
+export const RESIDENT_SORT_FIELDS = ['name', 'unit', 'email', 'eligibility', 'created'] as const;
+export type ResidentSortField = (typeof RESIDENT_SORT_FIELDS)[number];
+export type SortDirection = 'asc' | 'desc';
+
+export interface ResidentListQuery {
+  readonly limit: number;
+  readonly cursor?: string;
+  readonly unit?: string;
+  readonly eligible?: boolean;
+  readonly sort?: ResidentSortField;
+  readonly dir?: SortDirection;
+}
+
 export interface ResidentRepository {
   findById(id: string): Promise<Resident | null>;
   findBySubject(subject: string): Promise<Resident | null>;
   findByEmail(email: string): Promise<Resident | null>;
-  list(input: { limit: number; cursor?: string; unit?: string; eligible?: boolean }): Promise<Page<Resident>>;
+  list(input: ResidentListQuery): Promise<Page<Resident>>;
   create(input: {
     email: string;
     fullName: string;
@@ -46,7 +60,7 @@ export class ResidentUseCases {
     private readonly clock: Clock,
   ) {}
 
-  async list(input: { limit: number; cursor?: string; unit?: string; eligible?: boolean }) {
+  async list(input: ResidentListQuery) {
     return ok(await this.repo.list(input));
   }
 

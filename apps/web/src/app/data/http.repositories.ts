@@ -15,6 +15,7 @@ import type {
   RunResult,
   SpotType,
 } from '../domain/models';
+import type { ResidentListQuery } from '../domain/repositories';
 import {
   CycleRepository,
   DashboardRepository,
@@ -98,16 +99,13 @@ export class HttpDashboardRepository extends DashboardRepository {
 export class HttpResidentRepository extends ResidentRepository {
   private readonly http = inject(HttpClient);
 
-  async list(input: {
-    limit: number;
-    cursor?: string;
-    unit?: string;
-    eligible?: boolean;
-  }): Promise<Page<Resident>> {
+  async list(input: ResidentListQuery): Promise<Page<Resident>> {
     let params = new HttpParams().set('limit', input.limit);
     if (input.cursor) params = params.set('cursor', input.cursor);
     if (input.unit) params = params.set('unit', input.unit);
     if (input.eligible !== undefined) params = params.set('eligible', input.eligible);
+    if (input.sort) params = params.set('sort', input.sort);
+    if (input.dir) params = params.set('dir', input.dir);
 
     const res = await firstValueFrom(
       this.http.get<PageDto<ResidentDto>>(`${API}/residents`, { params }),

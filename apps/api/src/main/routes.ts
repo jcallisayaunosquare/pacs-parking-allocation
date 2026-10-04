@@ -5,6 +5,7 @@ import { toDateOnly } from '../shared/clock';
 import { csv, created, errorResponse, noContent, okJson } from '../shared/http/response';
 import type { RequestContext, Route } from '../shared/http/router';
 import { isAdmin } from '../modules/identity/domain/principal';
+import { RESIDENT_SORT_FIELDS } from '../modules/residents/application/resident.use-cases';
 import type { AppContainer } from './composition-root';
 
 /** Zod at the HTTP adapter: runtime validation plus inferred types (§10). */
@@ -25,7 +26,9 @@ const parse = <T extends z.ZodTypeAny>(
 
 const PAGE_LIMIT_CEILING = 100; // §16 cross-cutting rule
 
-const limitSchema = z.coerce.number().int().min(1).max(PAGE_LIMIT_CEILING).default(25);
+const limitSchema = z.coerce.number().int().min(1).max(PAGE_LIMIT_CEILING).default(15);
+const sortFieldSchema = z.enum(RESIDENT_SORT_FIELDS).default('created');
+const sortDirSchema = z.enum(['asc', 'desc']).default('asc');
 const uuid = z.string().uuid();
 const spotType = z.enum(['STANDARD', 'ACCESSIBLE', 'EV']);
 
@@ -261,11 +264,22 @@ export function buildRoutes(app: AppContainer): Route[] {
       handler: async (ctx) => {
         const limit = parse(limitSchema, ctx.query.limit ?? undefined);
         if (!limit.ok) return badRequest(limit.details, ctx);
+
+        // Sort keys are an allowlist, never a column name off the query string: that
+        // is how a sort parameter turns into an injection point (A03).
+        const sort = parse(sortFieldSchema, ctx.query.sort ?? undefined);
+        if (!sort.ok) return badRequest(sort.details, ctx);
+        const dir = parse(sortDirSchema, ctx.query.dir ?? undefined);
+        if (!dir.ok) return badRequest(dir.details, ctx);
+
         const eligible =
           ctx.query.eligible === undefined ? undefined : ctx.query.eligible === 'true';
+
         return respond(
           await app.residents.list({
             limit: limit.data,
+            sort: sort.data,
+            dir: dir.data,
             ...(ctx.query.cursor ? { cursor: ctx.query.cursor } : {}),
             ...(ctx.query.unit ? { unit: ctx.query.unit } : {}),
             ...(eligible === undefined ? {} : { eligible }),

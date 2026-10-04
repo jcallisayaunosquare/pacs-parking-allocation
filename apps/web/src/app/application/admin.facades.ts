@@ -1,5 +1,6 @@
 import { Injectable, computed, inject, resource, signal } from '@angular/core';
 import type { ApiError, ParkingSpot, SpotType } from '../domain/models';
+import type { ResidentSortField, SortDirection } from '../domain/repositories';
 import {
   CycleRepository,
   MetricsRepository,
@@ -27,8 +28,19 @@ export class ResidentsFacade {
   /** URL-linkable filters: an admin list should survive a reload (§17). */
   readonly unit = signal<string | undefined>(undefined);
   readonly eligible = signal<boolean | undefined>(undefined);
-  readonly limit = signal(25);
+  readonly limit = signal(15);
+  readonly sort = signal<ResidentSortField>('name');
+  readonly dir = signal<SortDirection>('asc');
+
   private readonly cursor = signal<string | undefined>(undefined);
+  /**
+   * The cursors of the pages already visited, so "previous" is possible at all.
+   *
+   * Keyset paging only knows how to go forwards — a cursor says "after this row", not
+   * "before it". Remembering where each page started is what turns that into a pager
+   * someone can actually use, and it costs one string per page.
+   */
+  private readonly trail = signal<(string | undefined)[]>([]);
 
   private readonly page = resource({
     params: () => ({
@@ -36,10 +48,14 @@ export class ResidentsFacade {
       cursor: this.cursor(),
       unit: this.unit(),
       eligible: this.eligible(),
+      sort: this.sort(),
+      dir: this.dir(),
     }),
     loader: ({ params }) =>
       this.repo.list({
         limit: params.limit,
+        sort: params.sort,
+        dir: params.dir,
         ...(params.cursor ? { cursor: params.cursor } : {}),
         ...(params.unit ? { unit: params.unit } : {}),
         ...(params.eligible === undefined ? {} : { eligible: params.eligible }),
@@ -55,15 +71,47 @@ export class ResidentsFacade {
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
 
+  readonly pageNumber = computed(() => this.trail().length + 1);
+  readonly hasPrevious = computed(() => this.trail().length > 0);
+  readonly hasNext = computed(() => this.nextCursor() !== null);
+
   nextPage(): void {
     const c = this.nextCursor();
-    if (c) this.cursor.set(c);
+    if (!c) return;
+    this.trail.update((t) => [...t, this.cursor()]);
+    this.cursor.set(c);
+  }
+
+  previousPage(): void {
+    const t = this.trail();
+    if (t.length === 0) return;
+    this.cursor.set(t[t.length - 1]);
+    this.trail.set(t.slice(0, -1));
+  }
+
+  /**
+   * Sorting by a column starts the list again. The cursor describes a position in one
+   * particular ordering, so carrying it into another would land on an unrelated row.
+   */
+  sortBy(field: ResidentSortField): void {
+    if (this.sort() === field) {
+      this.dir.update((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      this.sort.set(field);
+      this.dir.set('asc');
+    }
+    this.firstPage();
+  }
+
+  firstPage(): void {
+    this.cursor.set(undefined);
+    this.trail.set([]);
   }
 
   resetFilters(): void {
     this.unit.set(undefined);
     this.eligible.set(undefined);
-    this.cursor.set(undefined);
+    this.firstPage();
   }
 
   refresh(): void {

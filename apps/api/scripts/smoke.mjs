@@ -230,6 +230,50 @@ async function main() {
   const overLimit = await call('GET', '/residents?limit=5000');
   check('a limit above the ceiling of 100 is 400', overLimit.status === 400);
 
+  // ---------------------------------------------------- sorting and paging
+  //
+  // A cursor anchored on the wrong column is the classic way to get this wrong: the
+  // first page looks right, and the second repeats rows or drops them. So the check
+  // walks the whole register a page at a time and insists it saw every resident once,
+  // in order.
+  const walk = async (sort, dir) => {
+    const seen = [];
+    const keys = [];
+    let cursor;
+    for (let page = 0; page < 20; page++) {
+      const qs = new URLSearchParams({ limit: '5', sort, dir });
+      if (cursor) qs.set('cursor', cursor);
+      const res = await call('GET', `/residents?${qs}`);
+      if (res.status !== 200) return { error: `status ${res.status}` };
+      for (const r of res.json.items) {
+        seen.push(r.id);
+        keys.push(sort === 'name' ? r.fullName : sort === 'unit' ? r.unitNumber : r.email);
+      }
+      cursor = res.json.nextCursor;
+      if (!cursor) break;
+    }
+    return { seen, keys };
+  };
+
+  const byName = await walk('name', 'asc');
+  check('paging a sorted list returns every resident', !byName.error && byName.seen.length > 5,
+    byName.error ?? `${byName.seen.length} rows`);
+  check('paging a sorted list never repeats a resident',
+    new Set(byName.seen).size === byName.seen.length,
+    `${byName.seen.length} rows, ${new Set(byName.seen).size} distinct`);
+  check('the order holds across page boundaries',
+    byName.keys.every((k, i) => i === 0 || byName.keys[i - 1].localeCompare(k) <= 0),
+    byName.keys.slice(0, 3).join(' <= '));
+
+  const desc = await walk('unit', 'desc');
+  check('descending order holds across page boundaries too',
+    !desc.error && desc.keys.every((k, i) => i === 0 || desc.keys[i - 1].localeCompare(k) >= 0),
+    desc.error ?? desc.keys.slice(0, 3).join(' >= '));
+
+  const badSort = await call('GET', '/residents?sort=full_name;drop');
+  check('an unknown sort key is rejected rather than reaching a query',
+    badSort.status === 400, `status=${badSort.status}`);
+
   const badUuid = await call('GET', '/residents/not-a-uuid');
   check('a malformed id is rejected before it reaches a query', badUuid.status === 400 &&
     badUuid.json?.details?.[0]?.field === 'id');

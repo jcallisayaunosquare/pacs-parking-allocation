@@ -98,9 +98,9 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           <tbody>
             @for (s of facade.spots(); track s.id) {
               <tr [class.row--out]="!s.isActive">
-                <td class="code stencil">{{ s.spotCode }}</td>
-                <td>{{ s.level }}</td>
-                <td>
+                <td class="code stencil" data-label="Bay">{{ s.spotCode }}</td>
+                <td data-label="Level">{{ s.level }}</td>
+                <td data-label="Type">
                   @switch (s.type) {
                     @case ('ACCESSIBLE') {
                       <app-status-pill label="Accessible" tone="attention" />
@@ -113,14 +113,14 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                     }
                   }
                 </td>
-                <td>
+                <td data-label="Status">
                   @if (s.isActive) {
                     <app-status-pill label="In service" tone="held" />
                   } @else {
                     <app-status-pill label="Out of service" tone="revoked" />
                   }
                 </td>
-                <td class="dim">{{ s.notes || '—' }}</td>
+                <td class="dim" data-label="Notes">{{ s.notes || '—' }}</td>
                 <td>
                   <button
                     class="btn btn--bare"
@@ -225,6 +225,19 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         flex-wrap: wrap;
         border-bottom: 1px solid var(--rule);
         padding-bottom: var(--sp-4);
+      }
+
+      @media (max-width: 40rem) {
+        .head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .tally {
+          gap: var(--sp-5);
+        }
+        .filters .select {
+          width: 100%;
+        }
       }
 
       .code {

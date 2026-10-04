@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/cor
 import { FormsModule } from '@angular/forms';
 import { ResidentsFacade } from '../../application/admin.facades';
 import type { Resident } from '../../domain/models';
+import type { ResidentSortField } from '../../domain/repositories';
 import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
@@ -74,10 +75,19 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         <table class="tbl">
           <thead>
             <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Unit</th>
-              <th scope="col">Email</th>
-              <th scope="col">Eligibility</th>
+              @for (col of sortableColumns; track col.field) {
+                <th scope="col" [attr.aria-sort]="ariaSort(col.field)">
+                  <button
+                    class="tbl__sort"
+                    type="button"
+                    [attr.aria-sort]="ariaSort(col.field)"
+                    (click)="facade.sortBy(col.field)"
+                  >
+                    {{ col.label }}
+                    <span class="tbl__arrow" [class]="arrowClass(col.field)" aria-hidden="true"></span>
+                  </button>
+                </th>
+              }
               <th scope="col">Accessible bay</th>
               <th scope="col">Sign-in</th>
               <th scope="col"><span class="sr-only">Actions</span></th>
@@ -86,10 +96,10 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           <tbody>
             @for (r of facade.residents(); track r.id) {
               <tr>
-                <td class="name">{{ r.fullName }}</td>
-                <td class="unit">{{ r.unitNumber }}</td>
-                <td class="dim">{{ r.email }}</td>
-                <td>
+                <td class="name" data-label="Name">{{ r.fullName }}</td>
+                <td class="unit" data-label="Unit">{{ r.unitNumber }}</td>
+                <td class="dim" data-label="Email">{{ r.email }}</td>
+                <td data-label="Eligibility">
                   @if (r.isEligible) {
                     <app-status-pill label="Eligible" tone="held" />
                   } @else {
@@ -99,14 +109,14 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                     }
                   }
                 </td>
-                <td>
+                <td data-label="Accessible bay">
                   @if (r.needsAccessibleSpot) {
                     <app-status-pill label="Required" tone="attention" />
                   } @else {
                     <span class="dim">No</span>
                   }
                 </td>
-                <td>
+                <td data-label="Sign-in">
                   @if (r.externalSubject) {
                     <app-status-pill label="Linked" tone="held" />
                   } @else {
@@ -124,18 +134,27 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         </table>
       </div>
 
-      @if (facade.nextCursor()) {
-        <div class="more">
-          <button
-            class="btn btn--quiet btn--sm"
-            type="button"
-            [disabled]="facade.busy()"
-            (click)="facade.nextPage()"
-          >
-            Load more
-          </button>
-        </div>
-      }
+      <nav class="pager" aria-label="Pages">
+        <button
+          class="btn btn--quiet btn--sm"
+          type="button"
+          [disabled]="!facade.hasPrevious()"
+          (click)="facade.previousPage()"
+        >
+          Previous
+        </button>
+        <span class="pager__at">
+          Page {{ facade.pageNumber() }} · {{ facade.residents().length }} shown
+        </span>
+        <button
+          class="btn btn--quiet btn--sm"
+          type="button"
+          [disabled]="!facade.hasNext()"
+          (click)="facade.nextPage()"
+        >
+          Next
+        </button>
+      </nav>
     </app-view-state>
 
     <app-modal [open]="createOpen()" title="Add resident" (closed)="createOpen.set(false)">
@@ -275,14 +294,52 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         font-size: var(--t-fine);
         margin-top: var(--sp-1);
       }
-      .more {
+      .pager {
         margin-top: var(--sp-4);
+        display: flex;
+        align-items: center;
+        gap: var(--sp-4);
+        flex-wrap: wrap;
+      }
+      .pager__at {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+
+      @media (max-width: 40rem) {
+        .head,
+        .filters {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .filters .input,
+        .filters .select {
+          width: 100%;
+        }
       }
     `,
   ],
 })
 export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
+
+  readonly sortableColumns: { field: ResidentSortField; label: string }[] = [
+    { field: 'name', label: 'Name' },
+    { field: 'unit', label: 'Unit' },
+    { field: 'email', label: 'Email' },
+    { field: 'eligibility', label: 'Eligibility' },
+  ];
+
+  /** Announced to screen readers, and what the arrow is drawn from. */
+  ariaSort(field: ResidentSortField): 'ascending' | 'descending' | 'none' {
+    if (this.facade.sort() !== field) return 'none';
+    return this.facade.dir() === 'asc' ? 'ascending' : 'descending';
+  }
+
+  arrowClass(field: ResidentSortField): string {
+    const s = this.ariaSort(field);
+    return s === 'ascending' ? 'tbl__arrow--asc' : s === 'descending' ? 'tbl__arrow--desc' : '';
+  }
 
   readonly createOpen = signal(false);
   readonly eligibilityOpen = signal(false);

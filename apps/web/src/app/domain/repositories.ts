@@ -33,13 +33,22 @@ export abstract class MeRepository {
   abstract principal(): Promise<Principal>;
 }
 
+/** The columns the register may be sorted by. Mirrors the server's allowlist. */
+export const RESIDENT_SORT_FIELDS = ['name', 'unit', 'email', 'eligibility', 'created'] as const;
+export type ResidentSortField = (typeof RESIDENT_SORT_FIELDS)[number];
+export type SortDirection = 'asc' | 'desc';
+
+export interface ResidentListQuery {
+  limit: number;
+  cursor?: string;
+  unit?: string;
+  eligible?: boolean;
+  sort?: ResidentSortField;
+  dir?: SortDirection;
+}
+
 export abstract class ResidentRepository {
-  abstract list(input: {
-    limit: number;
-    cursor?: string;
-    unit?: string;
-    eligible?: boolean;
-  }): Promise<Page<Resident>>;
+  abstract list(input: ResidentListQuery): Promise<Page<Resident>>;
   abstract get(id: string): Promise<Resident>;
   abstract create(input: {
     email: string;

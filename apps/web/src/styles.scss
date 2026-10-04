@@ -408,6 +408,110 @@ textarea.input {
   overflow-x: auto;
 }
 
+/* A sortable heading is a button, so it is reachable and announced as one. */
+.tbl__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  font-size: var(--t-fine);
+  color: var(--steel-soft);
+  cursor: pointer;
+}
+
+.tbl__sort:hover {
+  color: var(--steel);
+}
+
+.tbl__sort[aria-sort='ascending'],
+.tbl__sort[aria-sort='descending'] {
+  color: var(--steel);
+}
+
+/* The arrow is drawn, not an icon font, and stays out of the accessible name. */
+.tbl__arrow {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  opacity: 0.35;
+}
+
+.tbl__arrow--asc {
+  border-bottom: 5px solid currentColor;
+  opacity: 1;
+}
+
+.tbl__arrow--desc {
+  border-top: 5px solid currentColor;
+  opacity: 1;
+}
+
+/**
+ * Below 52rem a table stops being a table.
+ *
+ * Horizontal scrolling hides the columns that carry the decision — eligibility, whether
+ * a bay is in service — behind a gesture nobody makes. Each row becomes a block and
+ * each cell carries its own heading, taken from the `data-label` the template sets, so
+ * the information survives at phone width instead of being scrolled out of reach.
+ */
+@media (max-width: 52rem) {
+  .tbl,
+  .tbl tbody,
+  .tbl tr,
+  .tbl td {
+    display: block;
+    width: 100%;
+  }
+
+  .tbl thead {
+    display: none;
+  }
+
+  .tbl tr {
+    border-bottom: 2px solid var(--rule);
+    padding: var(--sp-3) 0;
+  }
+
+  .tbl tbody tr:hover td {
+    background: transparent;
+  }
+
+  .tbl td {
+    border: 0;
+    padding: var(--sp-1) 0;
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: var(--sp-3);
+    align-items: baseline;
+    text-align: left !important;
+    /*
+     * `anywhere` rather than `break-word`: only `anywhere` counts the break when the
+     * browser works out the column's minimum size, so a long address like
+     * jesuscallisayasalinas2@gmail.com wraps instead of being cut off at the edge.
+     */
+    overflow-wrap: anywhere;
+  }
+
+  .tbl td::before {
+    content: attr(data-label);
+    font-size: var(--t-fine);
+    font-weight: 600;
+    color: var(--steel-faint);
+  }
+
+  /* A cell with no label is an actions cell: let it run full width. */
+  .tbl td:not([data-label]) {
+    display: block;
+    padding-top: var(--sp-2);
+  }
+}
+
 /* ==================================================================== dialog */
 
 dialog.modal {

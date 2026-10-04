@@ -117,8 +117,8 @@ import { ViewStateHost } from '../../shared/ui/view-state';
               <tbody>
                 @for (a of assignments(); track a.residentId) {
                   <tr>
-                    <td>{{ a.fullName }}</td>
-                    <td class="code stencil">{{ a.spotCode }}</td>
+                    <td data-label="Resident">{{ a.fullName }}</td>
+                    <td class="code stencil" data-label="Bay">{{ a.spotCode }}</td>
                   </tr>
                 }
               </tbody>
@@ -152,8 +152,8 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           <tbody>
             @for (c of facade.allCycles(); track c.id) {
               <tr>
-                <td class="code stencil">{{ c.label }}</td>
-                <td>
+                <td class="code stencil" data-label="Cycle">{{ c.label }}</td>
+                <td data-label="Status">
                   @switch (c.state) {
                     @case ('DRAFT') {
                       <app-status-pill label="Draft" tone="idle" />
@@ -172,8 +172,10 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                     }
                   }
                 </td>
-                <td>{{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}</td>
-                <td class="dim">
+                <td data-label="Quarter">
+                  {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
+                </td>
+                <td class="dim" data-label="Registration">
                   {{ c.registrationOpensAt | date: 'd MMM' }} to
                   {{ c.registrationClosesAt | date: 'd MMM' }}
                 </td>
@@ -362,6 +364,17 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: var(--sp-3);
+      }
+
+      @media (max-width: 40rem) {
+        .head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .record__nums,
+        .seal {
+          gap: var(--sp-5);
+        }
       }
       @media (max-width: 26rem) {
         .dates {

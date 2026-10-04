@@ -132,6 +132,19 @@ async function main() {
     await page.goto(`${APP}/admin/residents`, { waitUntil: 'networkidle' });
     await shot('03-residents');
 
+    // Sorting: click a heading and photograph what the table did.
+    await page.getByRole('button', { name: /^Unit/ }).click();
+    await page.waitForTimeout(1200);
+    await shot('03b-sorted-by-unit');
+
+    // Page two, to show the pager actually moves.
+    const next = page.getByRole('button', { name: 'Next' });
+    if (await next.isEnabled()) {
+      await next.click();
+      await page.waitForTimeout(1200);
+      await shot('03c-page-two');
+    }
+
     // The screen that answers "where does a resident get registered".
     await page.getByRole('button', { name: /add resident/i }).click();
     await page.waitForTimeout(600);
@@ -147,10 +160,33 @@ async function main() {
     await page.goto(`${APP}/admin/metrics`, { waitUntil: 'networkidle' });
     await shot('07-fairness');
 
-    // Narrow viewport: the resident screen has to work on a phone.
+    // Narrow viewport: every screen has to work on a phone, not just the dashboard.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(APP, { waitUntil: 'networkidle' });
-    await shot('08-dashboard-phone');
+    for (const [path, name] of [
+      ['/', '08-dashboard-phone'],
+      ['/admin/residents', '09-residents-phone'],
+      ['/admin/spots', '10-bays-phone'],
+      ['/admin/cycles', '11-cycles-phone'],
+      ['/admin/metrics', '12-fairness-phone'],
+    ]) {
+      await page.goto(`${APP}${path}`, { waitUntil: 'networkidle' });
+      await shot(name);
+      // A phone layout that scrolls sideways has failed, whatever it looks like.
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > window.innerWidth + 1,
+      );
+      if (overflow) problems.push(`horizontal overflow at 390px on ${path}`);
+
+      // The page as a whole can fit while a single cell still cuts its value off — a long
+      // email did exactly that. Measure each cell against the box it was given.
+      const clipped = await page.evaluate(() =>
+        [...document.querySelectorAll('.tbl td')]
+          .filter((td) => td.scrollWidth > td.clientWidth + 1)
+          .map((td) => `${td.dataset.label ?? 'actions'}: ${td.textContent.trim().slice(0, 40)}`)
+          .slice(0, 3),
+      );
+      for (const c of clipped) problems.push(`cell clipped at 390px on ${path} — ${c}`);
+    }
   } catch (e) {
     problems.push(`FLOW: ${e instanceof Error ? e.message : String(e)}`);
     await shot('error').catch(() => undefined);

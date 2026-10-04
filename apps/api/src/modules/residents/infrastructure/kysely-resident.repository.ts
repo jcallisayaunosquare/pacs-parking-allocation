@@ -1,6 +1,13 @@
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import type { Database } from '../../../shared/db/schema';
-import type { Page, Resident, ResidentRepository } from '../application/resident.use-cases';
+import type {
+  Page,
+  Resident,
+  ResidentListQuery,
+  ResidentRepository,
+  ResidentSortField,
+  SortDirection,
+} from '../application/resident.use-cases';
 
 type Row = {
   id: string;
@@ -13,6 +20,43 @@ type Row = {
   needs_accessible_spot: boolean;
   created_at: Date;
   deactivated_at: Date | null;
+};
+
+/** The sort key an administrator picks, mapped to the column that implements it. */
+const SORT_COLUMNS: Record<ResidentSortField, 'full_name' | 'unit_number' | 'email' | 'is_eligible' | 'created_at'> = {
+  name: 'full_name',
+  unit: 'unit_number',
+  email: 'email',
+  eligibility: 'is_eligible',
+  created: 'created_at',
+};
+
+/** The value stored in the cursor for a row, in the column's own text form. */
+const cursorValue = (field: ResidentSortField, row: Row): string => {
+  switch (field) {
+    case 'name':
+      return row.full_name;
+    case 'unit':
+      return row.unit_number;
+    case 'email':
+      return row.email;
+    case 'eligibility':
+      return String(row.is_eligible);
+    case 'created':
+      return new Date(row.created_at).toISOString();
+  }
+};
+
+/** Turns that text back into something Postgres will compare against the column. */
+const parseCursorValue = (field: ResidentSortField, raw: string): string | boolean | Date => {
+  switch (field) {
+    case 'eligibility':
+      return raw === 'true';
+    case 'created':
+      return new Date(raw);
+    default:
+      return raw;
+  }
 };
 
 const toResident = (r: Row): Resident => ({
@@ -55,41 +99,59 @@ export class KyselyResidentRepository implements ResidentRepository {
   }
 
   /**
-   * Cursor pagination keyed on (created_at, id) — stable under concurrent inserts,
-   * unlike OFFSET. Hard ceiling of 100 is enforced by the HTTP schema (§16).
+   * Keyset pagination, sorted by whichever column the administrator chose.
+   *
+   * The cursor has to be keyed on the same column as the sort, not on created_at:
+   * a cursor that remembers "the last row by creation date" is meaningless once the
+   * list is ordered by name, and page two comes back wrong. So the cursor carries the
+   * sort value and the id, and the query asks for the rows after that pair.
+   *
+   * The id is the tie-breaker, which is what makes the order total — without it, two
+   * residents with the same surname can straddle a page boundary and one of them is
+   * never shown. OFFSET would avoid the bookkeeping but skips rows when something is
+   * inserted between requests.
    */
-  async list(input: {
-    limit: number;
-    cursor?: string;
-    unit?: string;
-    eligible?: boolean;
-  }): Promise<Page<Resident>> {
+  async list(input: ResidentListQuery): Promise<Page<Resident>> {
+    const field: ResidentSortField = input.sort ?? 'created';
+    const dir: SortDirection = input.dir ?? (field === 'created' ? 'asc' : 'asc');
+    const column = SORT_COLUMNS[field];
+    const after = dir === 'asc';
+
     let q = this.db.selectFrom('resident').selectAll().where('deactivated_at', 'is', null);
 
     if (input.unit) q = q.where('unit_number', '=', input.unit);
     if (input.eligible !== undefined) q = q.where('is_eligible', '=', input.eligible);
+
     if (input.cursor) {
-      const [at, id] = Buffer.from(input.cursor, 'base64url').toString('utf8').split('|');
-      if (at && id) {
-        q = q.where((eb) =>
-          eb.or([
-            eb('created_at', '>', new Date(at)),
-            eb.and([eb('created_at', '=', new Date(at)), eb('id', '>', id)]),
-          ]),
+      const decoded = Buffer.from(input.cursor, 'base64url').toString('utf8');
+      const sep = decoded.lastIndexOf('|');
+      const rawValue = decoded.slice(0, sep);
+      const id = decoded.slice(sep + 1);
+
+      if (id) {
+        // Row comparison: (col, id) > (value, id). Postgres compares the tuple
+        // left to right, which is exactly the keyset rule, in one index-friendly
+        // expression rather than an OR of inequalities.
+        const value = parseCursorValue(field, rawValue);
+        q = q.where(
+          after
+            ? sql<boolean>`(${sql.ref(column)}, "id") > (${value}, ${id})`
+            : sql<boolean>`(${sql.ref(column)}, "id") < (${value}, ${id})`,
         );
       }
     }
 
     const rows = (await q
-      .orderBy('created_at')
-      .orderBy('id')
+      .orderBy(column, dir)
+      .orderBy('id', dir)
       .limit(input.limit + 1)
       .execute()) as Row[];
 
-    const items = rows.slice(0, input.limit).map(toResident);
-    const last = rows.length > input.limit ? items[items.length - 1] : undefined;
+    const page = rows.slice(0, input.limit);
+    const items = page.map(toResident);
+    const last = rows.length > input.limit ? page[page.length - 1] : undefined;
     const nextCursor = last
-      ? Buffer.from(`${last.createdAt.toISOString()}|${last.id}`, 'utf8').toString('base64url')
+      ? Buffer.from(`${cursorValue(field, last)}|${last.id}`, 'utf8').toString('base64url')
       : null;
 
     return { items, nextCursor };
