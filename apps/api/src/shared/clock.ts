@@ -33,3 +33,13 @@ export const cryptoSeedSource: SeedSource = {
 };
 
 export const fixedSeedSource = (seed: bigint): SeedSource => ({ next: () => seed });
+
+/**
+ * Serialises a date-only value as `YYYY-MM-DD`.
+ *
+ * `starts_on` and `ends_on` are `date` columns: a calendar day, with no time and no
+ * zone. Sending them as a timestamp makes every client west of UTC render the day
+ * before — a quarter beginning on 1 January showed as 31 December in GMT-4. The
+ * contract calls these `format: date` for exactly this reason.
+ */
+export const toDateOnly = (d: Date): string => d.toISOString().slice(0, 10);

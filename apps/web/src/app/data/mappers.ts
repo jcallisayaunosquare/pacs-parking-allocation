@@ -31,6 +31,20 @@ import type {
 const date = (iso: string): Date => new Date(iso);
 const maybeDate = (iso: string | null | undefined): Date | null => (iso ? new Date(iso) : null);
 
+/**
+ * Parses a calendar day as local midnight.
+ *
+ * `startsOn` and `endsOn` are days, not instants. `new Date('2027-01-01')` is parsed as
+ * UTC midnight, which in any zone west of UTC renders as 31 December — a quarter
+ * beginning on 1 January showed as the day before. Building the date from its parts
+ * keeps the day the server meant.
+ */
+const dayOnly = (value: string): Date => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!m) return new Date(value);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+};
+
 export const toResident = (d: ResidentDto): Resident => ({
   id: d.id,
   email: d.email,
@@ -54,8 +68,8 @@ export const toSpot = (d: ParkingSpotDto): ParkingSpot => ({
 export const toCycle = (d: CycleDto): Cycle => ({
   id: d.id,
   label: d.label,
-  startsOn: date(d.startsOn),
-  endsOn: date(d.endsOn),
+  startsOn: dayOnly(d.startsOn),
+  endsOn: dayOnly(d.endsOn),
   state: d.state,
   registrationOpensAt: date(d.registrationOpensAt),
   registrationClosesAt: date(d.registrationClosesAt),

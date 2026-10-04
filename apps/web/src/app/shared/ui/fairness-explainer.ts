@@ -75,21 +75,29 @@ import type { Fairness } from '../../domain/models';
         color: var(--steel-soft);
       }
 
-      /* One mark per slip of paper in the hat. Countable, so it is counted. */
+      /**
+       * One mark per slip of paper in the hat. Countable, so it is counted.
+       *
+       * The marks stand on a ruled line: a single mark floating on its own read as a
+       * rendering glitch rather than as the number one, and weight 1 is the commonest
+       * case there is.
+       */
       .fair__marks {
-        display: flex
-;
+        display: flex;
         align-items: flex-end;
-        gap: 4px;
-        height: 1.5rem;
-        margin-top: var(--sp-2);
+        gap: 5px;
+        height: 2rem;
+        margin-top: var(--sp-3);
+        padding-bottom: 5px;
+        border-bottom: 2px solid var(--steel);
+        min-width: 7rem;
+        width: fit-content;
       }
 
       .fair__mark {
-        width: 7px;
+        width: 9px;
         height: 100%;
         background: var(--bay-line);
-        border-bottom: 2px solid var(--bay-line-deep);
       }
 
       .fair__more {

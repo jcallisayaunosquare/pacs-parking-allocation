@@ -30,3 +30,7 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Playwright diagnostic output (screenshots, console dumps)
+apps/web/diagnose-out/
+apps/web/test-results/

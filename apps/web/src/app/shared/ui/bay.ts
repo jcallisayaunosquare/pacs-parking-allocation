@@ -27,16 +27,16 @@ export type BayVariant = 'held' | 'waiting' | 'open' | 'closed';
       <span class="bay__line" aria-hidden="true"></span>
 
       <div class="bay__body">
-        <div class="bay__top">
-          <p class="bay__code stencil" [class.bay__code--small]="longCode()">{{ code() }}</p>
-          @if (status()) {
+        @if (status()) {
+          <div class="bay__tag">
             <app-status-pill
               [label]="status()!"
               [tone]="statusTone()"
               [onDark]="variant() === 'held' || variant() === 'waiting'"
             />
-          }
-        </div>
+          </div>
+        }
+        <p class="bay__code stencil" [class.bay__code--small]="longCode()">{{ code() }}</p>
 
         @if (caption()) {
           <p class="bay__caption">{{ caption() }}</p>
@@ -71,12 +71,13 @@ export type BayVariant = 'held' | 'waiting' | 'open' | 'closed';
         gap: var(--sp-2);
       }
 
-      .bay__top {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: var(--sp-4);
-        flex-wrap: wrap;
+      /*
+       * The status sits above the code, like the marking painted at the head of a bay.
+       * Pushed to the opposite corner it read as unrelated chrome: the eye landed on
+       * the code and never travelled to find it.
+       */
+      .bay__tag {
+        margin-bottom: var(--sp-2);
       }
 
       .bay__code {

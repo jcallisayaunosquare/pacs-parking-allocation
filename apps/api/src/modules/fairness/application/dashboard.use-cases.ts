@@ -1,6 +1,6 @@
 import { ok, type Result } from '../../../shared/result';
 import { fail } from '../../../shared/errors';
-import type { Clock } from '../../../shared/clock';
+import { toDateOnly, type Clock } from '../../../shared/clock';
 import type { AssignmentRepository, CachePort, CycleRepository } from '../../allocation/application/ports';
 import type { ResidentRepository } from '../../residents/application/resident.use-cases';
 import { drawWeight, explain, type FairnessState } from '../domain/fairness';
@@ -102,11 +102,17 @@ export class DashboardUseCases {
         drawWeight: drawWeight(state.score),
         explanation: explain(state, assignment !== null),
       },
+      // The whole Cycle, not a subset. The contract types this field as Cycle (§16),
+      // and startsOn/endsOn were missing — so the client built `new Date(undefined)`,
+      // and the dashboard timeline died on an Invalid Date rather than on anything that
+      // pointed back here.
       nextCycle: nextCycle
         ? {
             id: nextCycle.id,
             label: nextCycle.label,
             state: nextCycle.state,
+            startsOn: toDateOnly(nextCycle.startsOn),
+            endsOn: toDateOnly(nextCycle.endsOn),
             registrationOpensAt: nextCycle.registrationOpensAt.toISOString(),
             registrationClosesAt: nextCycle.registrationClosesAt.toISOString(),
           }

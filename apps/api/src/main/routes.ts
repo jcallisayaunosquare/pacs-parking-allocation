@@ -1,6 +1,7 @@
-﻿import { z } from 'zod';
+import { z } from 'zod';
 import { failure } from '../shared/errors';
 import type { Result } from '../shared/result';
+import { toDateOnly } from '../shared/clock';
 import { csv, created, errorResponse, noContent, okJson } from '../shared/http/response';
 import type { RequestContext, Route } from '../shared/http/router';
 import { isAdmin } from '../modules/identity/domain/principal';
@@ -86,6 +87,30 @@ const respond = <T>(
   ctx: RequestContext,
   present: (v: T) => ReturnType<typeof okJson> = (v) => okJson(v, ctx.traceId),
 ) => (r.ok ? present(r.value) : errorResponse(r.error, ctx.traceId));
+
+/**
+ * Cycles on the wire. `startsOn` and `endsOn` are calendar days, not instants, so they
+ * go out as `YYYY-MM-DD` — the contract's `format: date`. Serialising them as
+ * timestamps made a quarter starting on 1 January read as 31 December for anyone west
+ * of UTC.
+ */
+const presentCycle = (c: {
+  id: string;
+  label: string;
+  startsOn: Date;
+  endsOn: Date;
+  state: string;
+  registrationOpensAt: Date;
+  registrationClosesAt: Date;
+}) => ({
+  id: c.id,
+  label: c.label,
+  state: c.state,
+  startsOn: toDateOnly(c.startsOn),
+  endsOn: toDateOnly(c.endsOn),
+  registrationOpensAt: c.registrationOpensAt.toISOString(),
+  registrationClosesAt: c.registrationClosesAt.toISOString(),
+});
 
 const badRequest = (details: { field: string; issue: string }[], ctx: RequestContext) =>
   errorResponse(failure('VALIDATION_FAILED', 'The request failed validation.', details), ctx.traceId);
@@ -344,7 +369,10 @@ export function buildRoutes(app: AppContainer): Route[] {
       method: 'GET',
       path: '/cycles',
       roles: ['ADMIN', 'RESIDENT'],
-      handler: async (ctx) => respond(await app.cycles.list(), ctx, (items) => okJson({ items }, ctx.traceId)),
+      handler: async (ctx) =>
+        respond(await app.cycles.list(), ctx, (items) =>
+          okJson({ items: items.map(presentCycle) }, ctx.traceId),
+        ),
     },
     {
       method: 'POST',
@@ -353,7 +381,7 @@ export function buildRoutes(app: AppContainer): Route[] {
       handler: async (ctx) => {
         const b = parse(cycleCreateSchema, ctx.body);
         if (!b.ok) return badRequest(b.details, ctx);
-        return respond(await app.cycles.create(b.data), ctx, (v) => created(v, ctx.traceId));
+        return respond(await app.cycles.create(b.data), ctx, (v) => created(presentCycle(v), ctx.traceId));
       },
     },
     {
@@ -361,14 +389,18 @@ export function buildRoutes(app: AppContainer): Route[] {
       path: '/cycles/{id}/open-registration',
       roles: ['ADMIN'],
       handler: async (ctx) =>
-        respond(await app.cycles.guardedTransition(ctx.params.id!, 'REGISTRATION_OPEN'), ctx),
+        respond(await app.cycles.guardedTransition(ctx.params.id!, 'REGISTRATION_OPEN'), ctx, (v) =>
+          okJson(presentCycle(v), ctx.traceId),
+        ),
     },
     {
       method: 'POST',
       path: '/cycles/{id}/close-registration',
       roles: ['ADMIN'],
       handler: async (ctx) =>
-        respond(await app.cycles.guardedTransition(ctx.params.id!, 'REGISTRATION_CLOSED'), ctx),
+        respond(await app.cycles.guardedTransition(ctx.params.id!, 'REGISTRATION_CLOSED'), ctx, (v) =>
+          okJson(presentCycle(v), ctx.traceId),
+        ),
     },
 
     // -------------------------------------------------------------------- runs

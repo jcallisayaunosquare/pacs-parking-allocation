@@ -26,7 +26,11 @@
     "@angular/build": "^22.2.1",
     "@angular/cli": "^22.2.1",
     "@angular/compiler-cli": "^22.2.0",
+    "@aws-sdk/client-cloudformation": "^3.1146.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.709.0",
+    "@playwright/test": "^1.63.0",
     "jsdom": "^30.0.0",
+    "pg": "^8.13.1",
     "prettier": "^3.8.1",
     "typescript": "~6.0.2",
     "vitest": "^5.0.0"

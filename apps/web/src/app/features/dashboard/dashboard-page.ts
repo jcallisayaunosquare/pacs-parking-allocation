@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { DashboardFacade } from '../../application/dashboard.facade';
 import { Bay } from '../../shared/ui/bay';
+import type { Cycle } from '../../domain/models';
 import type { PillTone } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { FairnessExplainer } from '../../shared/ui/fairness-explainer';
@@ -142,18 +143,12 @@ import { ConfirmService } from '../../shared/ui/confirm';
         <section class="cycle">
           <h2 class="sec__h">Next cycle {{ c.label }}</h2>
           <ol class="timeline">
-            <li class="timeline__step" [class.timeline__step--done]="past(c.registrationOpensAt)">
-              <span class="timeline__when">{{ c.registrationOpensAt | date: 'd MMM' }}</span>
-              <span class="timeline__what">Registration opens</span>
-            </li>
-            <li class="timeline__step" [class.timeline__step--done]="past(c.registrationClosesAt)">
-              <span class="timeline__when">{{ c.registrationClosesAt | date: 'd MMM' }}</span>
-              <span class="timeline__what">Registration closes</span>
-            </li>
-            <li class="timeline__step" [class.timeline__step--done]="past(c.startsOn)">
-              <span class="timeline__when">{{ c.startsOn | date: 'd MMM' }}</span>
-              <span class="timeline__what">Quarter begins</span>
-            </li>
+            @for (step of timeline(c); track step.what) {
+              <li class="timeline__step" [class.timeline__step--done]="step.done">
+                <span class="timeline__when">{{ step.when | date: 'd MMM' }}</span>
+                <span class="timeline__what">{{ step.what }}</span>
+              </li>
+            }
           </ol>
         </section>
       }
@@ -326,8 +321,22 @@ export default class DashboardPage {
     return t === 'ACCESSIBLE' ? 'accessible bay' : t === 'EV' ? 'EV bay' : 'standard bay';
   }
 
-  past(at: Date): boolean {
-    return at.getTime() <= Date.now();
+  /**
+   * The cycle timeline, with any unusable date left out rather than rendered.
+   *
+   * DatePipe throws on an Invalid Date, which takes the whole dashboard down with it.
+   * A date arriving broken is a server problem — and one was, the dashboard payload was
+   * omitting startsOn — but a resident should lose one line, not the page.
+   */
+  timeline(c: Cycle): { when: Date; what: string; done: boolean }[] {
+    const steps: { when: Date; what: string }[] = [
+      { when: c.registrationOpensAt, what: 'Registration opens' },
+      { when: c.registrationClosesAt, what: 'Registration closes' },
+      { when: c.startsOn, what: 'Quarter begins' },
+    ];
+    return steps
+      .filter((s) => s.when instanceof Date && !Number.isNaN(s.when.getTime()))
+      .map((s) => ({ ...s, done: s.when.getTime() <= Date.now() }));
   }
 
   closingNote(closesAt: Date): string {
