@@ -322,6 +322,12 @@ resources:
       Properties:
         Domain: pacs-${self:provider.stage}-${aws:accountId}
         UserPoolId: !Ref UserPool
+        # Managed login v2, not the classic hosted UI. Version 1 can only be given a
+        # logo and a little CSS, so the sign-in page — the one screen the app does not
+        # render itself — would stay a default AWS form. Pinned here because it was
+        # first set by hand, and a deploy would otherwise quietly put it back to 1.
+        # The branding itself is applied by `pnpm brand` from branding/.
+        ManagedLoginVersion: 2
 
     AdminGroup:
       Type: AWS::Cognito::UserPoolGroup

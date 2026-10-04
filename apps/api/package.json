@@ -14,6 +14,7 @@
     "migrate:up": "node-pg-migrate up -m migrations -j ts --tsconfig tsconfig.json",
     "migrate:down": "node-pg-migrate down -m migrations -j ts --tsconfig tsconfig.json",
     "seed": "tsx scripts/seed.ts",
+    "brand": "node scripts/apply-login-branding.mjs",
     "deploy:dev": "serverless deploy --stage dev",
     "deploy:prod": "serverless deploy --stage prod",
     "remove:dev": "serverless remove --stage dev"
