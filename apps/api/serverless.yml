@@ -137,9 +137,32 @@ functions:
       - httpApi:
           path: /health
           method: GET
+      # Methods are listed one by one on purpose. `method: '*'` creates an ANY route,
+      # which also matches the browser's CORS preflight — and a preflight carries no
+      # Authorization header by specification, so the Cognito authorizer answered it
+      # with 401 and the browser then never sent the real request. Nothing reached the
+      # function, so there was nothing in the logs to find either.
+      #
+      # Leaving OPTIONS unrouted hands it to API Gateway's own CORS handling, which is
+      # what the `cors` block above configures.
       - httpApi:
           path: /{proxy+}
-          method: '*'
+          method: GET
+          authorizer:
+            name: cognito
+      - httpApi:
+          path: /{proxy+}
+          method: POST
+          authorizer:
+            name: cognito
+      - httpApi:
+          path: /{proxy+}
+          method: PATCH
+          authorizer:
+            name: cognito
+      - httpApi:
+          path: /{proxy+}
+          method: DELETE
           authorizer:
             name: cognito
 

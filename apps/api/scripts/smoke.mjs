@@ -24,6 +24,8 @@ import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-clo
 const REGION = process.env.AWS_REGION ?? 'us-east-2';
 const STAGE = process.env.STAGE ?? 'dev';
 const STACK = `pacs-api-${STAGE}`;
+/** Must match the origin in serverless.yml's httpApi.cors.allowedOrigins. */
+const ALLOWED_ORIGIN = 'http://localhost:4200';
 
 const results = [];
 const check = (label, pass, extra = '') => {
@@ -126,6 +128,60 @@ async function main() {
     }
     return { status: res.status, json, text, contentType: res.headers.get('content-type'), raw };
   };
+
+  // ------------------------------------------------------------------- cors
+  //
+  // These exist because the suite missed a bug that made the whole app unusable in a
+  // browser while every other check passed. The route was declared with method '*',
+  // which creates an ANY route that also matches the CORS preflight; a preflight
+  // carries no Authorization header by specification, so the Cognito authorizer
+  // answered OPTIONS with 401 and the browser never sent the real request.
+  //
+  // Node's fetch does not preflight, so nothing here noticed. These checks preflight
+  // explicitly.
+  const preflight = async (path, method, headers) =>
+    fetch(`${base}${path}`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: ALLOWED_ORIGIN,
+        'access-control-request-method': method,
+        'access-control-request-headers': headers,
+      },
+    });
+
+  const pfMe = await preflight('/me', 'GET', 'authorization');
+  check(
+    'a CORS preflight on an authenticated route is not rejected',
+    pfMe.status >= 200 && pfMe.status < 300,
+    `status=${pfMe.status}`,
+  );
+  check(
+    'the preflight allows our origin',
+    pfMe.headers.get('access-control-allow-origin') === ALLOWED_ORIGIN,
+    pfMe.headers.get('access-control-allow-origin') ?? '(no header)',
+  );
+
+  const pfRun = await preflight(
+    '/cycles/00000000-0000-0000-0000-000000000000/runs',
+    'POST',
+    'authorization,content-type,idempotency-key',
+  );
+  const allowedHeaders = (pfRun.headers.get('access-control-allow-headers') ?? '').toLowerCase();
+  check(
+    'the preflight allows Idempotency-Key, which the run endpoint requires',
+    allowedHeaders.includes('idempotency-key'),
+    allowedHeaders || '(no header)',
+  );
+
+  const pfEvil = await fetch(`${base}/me`, {
+    method: 'OPTIONS',
+    headers: { origin: 'https://evil.example.test', 'access-control-request-method': 'GET' },
+  });
+  check(
+    'a preflight from an unknown origin is not granted one',
+    pfEvil.headers.get('access-control-allow-origin') === null,
+    pfEvil.headers.get('access-control-allow-origin') ?? '(no header, as it should be)',
+  );
 
   // ------------------------------------------------------------------- auth
   const anon = await fetch(`${base}/health`);
