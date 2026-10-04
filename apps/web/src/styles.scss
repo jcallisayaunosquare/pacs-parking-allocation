@@ -1,80 +1,469 @@
 /**
- * Global styles. Deliberately thin: layout and typography live with their components,
- * and PrimeNG's Aura preset supplies the component tokens.
+ * PACS design system.
  *
- * The @layer order matters — it is what lets a component style override a PrimeNG one
- * without !important, and it has to match the `cssLayer` option in app.config.ts.
+ * The visual language comes from the subject: a residential parking structure. Raw
+ * concrete for the ground, painted steel for the one solid block, and the yellow of a
+ * painted bay line as the single accent — load-bearing, because it is what marks a
+ * space as yours. Nothing has a shadow; concrete is matte.
+ *
+ * Painted things have square corners, because paint does. Objects you press have a
+ * small radius, because objects do. That distinction is the only use of radius here.
+ *
+ * There is no component library behind this. The controls are native elements with
+ * classes, which is why they can look like this instead of like a vendor's theme.
  */
-@layer base, primeng;
 
-@layer base {
-  :root {
-    color-scheme: light;
-    --pacs-ink: #1d1d1d;
-    --pacs-muted: #5d5d5d;
-    --pacs-rule: #e2e0dc;
-  }
+/* ============================================================== foundations */
 
-  * {
-    box-sizing: border-box;
-  }
+:root {
+  color-scheme: light;
 
-  html,
-  body {
-    margin: 0;
-    padding: 0;
-  }
+  /* ------------------------------------------------------------------ surface */
+  --concrete: #e4e2dd;
+  --concrete-deep: #d8d5cf;
+  --slab: #f3f1ed;
+  --white: #ffffff;
 
-  body {
-    font-family:
-      'Inter',
-      -apple-system,
-      BlinkMacSystemFont,
-      'Segoe UI',
-      Roboto,
-      sans-serif;
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--pacs-ink);
-    background: #f7f6f4;
-    -webkit-font-smoothing: antialiased;
-  }
+  /* ---------------------------------------------------------------------- ink */
+  --steel: #243041;
+  --steel-soft: #46566b;
+  --steel-faint: #727f8d;
+  --stencil: #f6f5f2;
 
-  a {
-    color: #1d5438;
-  }
+  /* ------------------------------------------- the one accent: painted bay line */
+  --bay-line: #e8b931;
+  --bay-line-deep: #a8810f;
 
-  /* Visible focus everywhere (NFR-13, WCAG 2.1 AA). Never remove this. */
-  :focus-visible {
-    outline: 2px solid #2c6b4a;
-    outline-offset: 2px;
-  }
+  /* ------------------------------------ status, all >= 4.5:1 on their own wash */
+  --held: #2a6349;
+  --held-wash: #d9e7df;
+  --waiting: #35537180;
+  --waiting-ink: #2f4c6b;
+  --waiting-wash: #dae4ee;
+  --attention: #7d5110;
+  --attention-wash: #f1e5cd;
+  --revoked: #873624;
+  --revoked-wash: #f0dad4;
+  --idle: #55606b;
+  --idle-wash: #dcdad5;
 
-  code {
-    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
-    font-size: 0.9em;
-  }
+  /* -------------------------------------------------------------------- lines */
+  --rule: #c5c1b9;
+  --rule-soft: #d5d1ca;
 
-  /* Small utilities the templates lean on, so each component does not redeclare them. */
-  .w-full {
-    width: 100%;
-  }
-  .mb-2 {
-    margin-bottom: 0.5rem;
-  }
-  .mb-3 {
-    margin-bottom: 0.75rem;
-  }
-  .mt-2 {
-    margin-top: 0.5rem;
-  }
+  /* --------------------------------------------------------------------- type */
+  --face: 'Archivo', ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0.01ms !important;
-      transition-duration: 0.01ms !important;
-    }
+  /* A 1.26 scale on a 16px body. */
+  --t-fine: 0.8125rem;
+  --t-small: 0.9375rem;
+  --t-body: 1rem;
+  --t-lead: 1.25rem;
+  --t-title: 1.5625rem;
+  --t-head: 1.9375rem;
+
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --sp-7: 3rem;
+  --sp-8: 4.5rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--face);
+  font-size: var(--t-body);
+  line-height: 1.55;
+  color: var(--steel);
+  background: var(--concrete);
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+  max-width: 68ch;
+}
+
+a {
+  color: var(--steel);
+  text-decoration-color: var(--bay-line-deep);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--steel);
+}
+
+/* Keyboard focus is never removed (NFR-13, WCAG 2.1 AA). */
+:focus-visible {
+  outline: 2px solid var(--steel);
+  outline-offset: 2px;
+}
+
+code {
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  font-size: 0.9em;
+}
+
+/**
+ * Stencil: the type treatment that carries the design. Archivo's width axis pushed
+ * wide and heavy, tracking tightened — the way a bay number is painted on concrete.
+ * For bay codes and the few numbers that are the point of a screen, never for labels.
+ */
+.stencil {
+  font-variation-settings:
+    'wdth' 118,
+    'wght' 760;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
+}
+
+/* =================================================================== buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 2.5rem;
+  padding: 0 var(--sp-4);
+  border: 1.5px solid var(--steel);
+  border-radius: 3px;
+  background: var(--steel);
+  color: var(--stencil);
+  font: inherit;
+  font-size: var(--t-small);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 90ms ease-out,
+    color 90ms ease-out;
+}
+
+.btn:hover:not(:disabled) {
+  background: #1a2533;
+  border-color: #1a2533;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The primary action on a page: the bay line underneath it, so the eye finds it. */
+.btn--go {
+  background: var(--bay-line);
+  border-color: var(--bay-line-deep);
+  color: #2b2004;
+}
+.btn--go:hover:not(:disabled) {
+  background: #d9ab28;
+  border-color: var(--bay-line-deep);
+}
+
+.btn--quiet {
+  background: transparent;
+  color: var(--steel);
+}
+.btn--quiet:hover:not(:disabled) {
+  background: var(--concrete-deep);
+  color: var(--steel);
+}
+
+.btn--bare {
+  background: transparent;
+  border-color: transparent;
+  color: var(--steel-soft);
+  padding: 0 var(--sp-2);
+  min-height: 2rem;
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 3px;
+}
+.btn--bare:hover:not(:disabled) {
+  background: transparent;
+  color: var(--steel);
+  text-decoration-color: var(--bay-line-deep);
+}
+
+.btn--danger {
+  background: transparent;
+  border-color: var(--revoked);
+  color: var(--revoked);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--revoked);
+  color: var(--white);
+}
+
+/* On the steel bay, where the normal palette disappears. */
+.btn--on-dark {
+  background: transparent;
+  border-color: #6d7a88;
+  color: var(--stencil);
+}
+.btn--on-dark:hover:not(:disabled) {
+  background: #32404f;
+  border-color: #8c98a5;
+}
+
+.btn--sm {
+  min-height: 2.1rem;
+  font-size: var(--t-fine);
+  padding: 0 var(--sp-3);
+}
+
+/* ==================================================================== fields */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.field__label {
+  font-size: var(--t-fine);
+  font-weight: 600;
+  color: var(--steel-soft);
+}
+
+.field__hint {
+  font-size: var(--t-fine);
+  color: var(--steel-faint);
+}
+
+.input,
+.select {
+  min-height: 2.5rem;
+  padding: 0 var(--sp-3);
+  border: 1.5px solid var(--rule);
+  border-radius: 3px;
+  background: var(--white);
+  color: var(--steel);
+  font: inherit;
+  font-size: var(--t-small);
+}
+
+textarea.input {
+  padding: var(--sp-2) var(--sp-3);
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--steel-faint);
+}
+
+.input:focus-visible,
+.select:focus-visible {
+  border-color: var(--steel);
+  outline: 2px solid var(--bay-line);
+  outline-offset: 0;
+}
+
+.input::placeholder {
+  color: var(--steel-faint);
+}
+
+.select {
+  /* Native select, restyled. No vendor dropdown, no portal, no focus bugs. */
+  appearance: none;
+  padding-right: var(--sp-6);
+  background-image: linear-gradient(45deg, transparent 50%, var(--steel-soft) 50%),
+    linear-gradient(135deg, var(--steel-soft) 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) calc(50% + 2px),
+    calc(100% - 12px) calc(50% + 2px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* A checkbox drawn as a painted mark rather than a rounded chip. */
+.check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  cursor: pointer;
+  font-size: var(--t-small);
+}
+
+.check input[type='checkbox'] {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0.17rem 0 0;
+  border: 1.5px solid var(--steel-faint);
+  border-radius: 2px;
+  background: var(--white);
+  cursor: pointer;
+}
+
+.check input[type='checkbox']:checked {
+  background: var(--steel);
+  border-color: var(--steel);
+  /* The tick, drawn rather than loaded as an icon font. */
+  background-image: linear-gradient(
+      -45deg,
+      transparent 45%,
+      var(--bay-line) 45%,
+      var(--bay-line) 58%,
+      transparent 58%
+    ),
+    linear-gradient(45deg, transparent 58%, var(--bay-line) 58%, var(--bay-line) 71%, transparent 71%);
+  background-size: 100% 100%;
+}
+
+.check input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--bay-line);
+  outline-offset: 2px;
+}
+
+/* ==================================================================== tables */
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-small);
+}
+
+.tbl th {
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--t-fine);
+  color: var(--steel-soft);
+  padding: 0 var(--sp-3) var(--sp-2);
+  border-bottom: 2px solid var(--steel);
+  white-space: nowrap;
+}
+
+.tbl td {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: baseline;
+}
+
+.tbl tbody tr:hover td {
+  background: var(--slab);
+}
+
+.tbl th:first-child,
+.tbl td:first-child {
+  padding-left: 0;
+}
+
+.tbl th:last-child,
+.tbl td:last-child {
+  padding-right: 0;
+  text-align: right;
+}
+
+.tbl__wrap {
+  overflow-x: auto;
+}
+
+/* ==================================================================== dialog */
+
+dialog.modal {
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: var(--concrete);
+  color: var(--steel);
+  max-width: min(32rem, calc(100vw - 2rem));
+  width: 100%;
+  box-shadow: 0 24px 60px rgb(36 48 65 / 28%);
+}
+
+dialog.modal::backdrop {
+  background: rgb(36 48 65 / 48%);
+}
+
+.modal__head {
+  padding: var(--sp-4) var(--sp-5) 0;
+}
+
+.modal__title {
+  font-size: var(--t-lead);
+}
+
+.modal__body {
+  padding: var(--sp-4) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.modal__foot {
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  border-top: 1px solid var(--rule);
+}
+
+/* ================================================================== messages */
+
+.msg {
+  border-left: 3px solid var(--rule);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--t-small);
+}
+
+.msg--bad {
+  border-left-color: var(--revoked);
+  background: var(--revoked-wash);
+  color: var(--revoked);
+}
+
+.msg--warn {
+  border-left-color: var(--attention);
+  background: var(--attention-wash);
+  color: var(--attention);
 }

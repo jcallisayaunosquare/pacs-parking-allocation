@@ -1,55 +1,57 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { AuthStore } from '../../core/auth/auth.store';
 
 /**
- * The three pages the login round trip needs. Small enough to live together, and they
- * only make sense as a set.
+ * The four pages the sign-in round trip needs. They only make sense as a set, so they
+ * live together.
  */
 
 @Component({
   selector: 'app-login-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule],
   template: `
     <div class="gate">
-      <h1 class="gate__title">PACS</h1>
-      <p class="gate__sub">Asignación de estacionamiento</p>
-      <p class="gate__body">
-        Ingresá con la cuenta del edificio. Te lleva a la pantalla de Cognito y vuelve acá.
+      <p class="gate__mark stencil">PACS</p>
+      <h1 class="gate__h">Parking allocation</h1>
+      <p class="gate__p">
+        A quarterly draw for the building's parking bays. Sign in to see where you stand.
       </p>
-      <p-button label="Ingresar" icon="pi pi-sign-in" (onClick)="auth.login()" />
+      <button class="btn btn--go" type="button" (click)="auth.login()">Sign in</button>
+      <p class="gate__fine">
+        Accounts are created by the building administration. If you do not have one, ask
+        them to add you.
+      </p>
     </div>
   `,
   styles: [
     `
       .gate {
-        max-width: 26rem;
-        margin: 15vh auto 0;
-        text-align: center;
+        max-width: 30rem;
+        margin: 16vh auto 0;
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 0.5rem;
+        align-items: flex-start;
+        gap: var(--sp-3);
+        border-left: 10px solid var(--bay-line);
+        padding-left: var(--sp-5);
       }
-      .gate__title {
+      .gate__mark {
+        font-size: 2.75rem;
         margin: 0;
-        font-size: 2rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
       }
-      .gate__sub {
-        margin: 0;
-        color: #6a6a6a;
-        font-size: 0.9rem;
+      .gate__h {
+        font-size: var(--t-title);
+        font-weight: 500;
+        color: var(--steel-soft);
       }
-      .gate__body {
-        margin: 0.8rem 0 1rem;
-        color: #5d5d5d;
-        line-height: 1.55;
-        font-size: 0.92rem;
+      .gate__p {
+        margin-bottom: var(--sp-2);
+      }
+      .gate__fine {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+        margin-top: var(--sp-2);
       }
     `,
   ],
@@ -59,29 +61,50 @@ export class LoginPage {
 }
 
 /**
- * Where Cognito redirects back to. The OIDC client has already processed the code by
- * the time this renders (the app initializer runs `checkAuth()` on every load,
- * including this one), so the job here is only to send the user where they were going.
+ * Where Cognito redirects back to. The OIDC client has already exchanged the code by
+ * the time this renders, because the app initializer runs `checkAuth()` on every load
+ * including this one. The only job here is sending the person where they were going.
  */
 @Component({
   selector: 'app-callback-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ProgressSpinnerModule],
   template: `
     <div class="wait" aria-live="polite">
-      <p-progress-spinner [style]="{ width: '2.5rem', height: '2.5rem' }" strokeWidth="4" />
-      <p>Completando el ingreso…</p>
+      <span class="wait__bar"></span>
+      <p>Signing you in</p>
     </div>
   `,
   styles: [
     `
       .wait {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 1rem;
-        margin-top: 20vh;
-        color: #5d5d5d;
+        max-width: 24rem;
+        margin: 22vh auto 0;
+        color: var(--steel-soft);
+      }
+      .wait__bar {
+        display: block;
+        height: 6px;
+        background: var(--concrete-deep);
+        overflow: hidden;
+        position: relative;
+        margin-bottom: var(--sp-3);
+      }
+      /* The one piece of non-user-triggered motion in the product: it marks waiting. */
+      .wait__bar::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        width: 40%;
+        background: var(--bay-line);
+        animation: slide 1.1s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
       }
     `,
   ],
@@ -99,13 +122,86 @@ export class CallbackPage implements OnInit {
     }
 
     const returnUrl = new URLSearchParams(window.location.search).get('returnUrl');
-    // An admin with no resident row has no dashboard, so send them somewhere useful.
     const fallback = this.auth.hasResidentRecord()
       ? '/'
       : this.auth.isAdmin()
         ? '/admin/residents'
-        : '/forbidden';
+        : '/pending';
     void this.router.navigateByUrl(returnUrl ?? fallback);
+  }
+}
+
+/**
+ * A signed-in account with no resident record.
+ *
+ * This used to land on the forbidden page, which told someone who had just created an
+ * account and verified their email that they had no access — technically true and
+ * completely unhelpful. The state is now named for what it is: the account works, it
+ * is simply not linked to a resident yet, which happens when an administrator adds
+ * them (FR-10) and the provisioning event comes back round.
+ */
+@Component({
+  selector: 'app-pending-page',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <div class="pend">
+      <h1 class="pend__h">Your account is not linked to a resident yet</h1>
+      <p class="pend__p">
+        You are signed in as <strong>{{ auth.principal()?.email }}</strong>. Before you can
+        see your parking status, the building administration has to add you to the
+        resident register with your unit number.
+      </p>
+      <p class="pend__p">
+        Once they do, this page becomes your parking status. Nothing else is needed from
+        you.
+      </p>
+      <div class="pend__row">
+        <button class="btn btn--quiet" type="button" (click)="recheck()">Check again</button>
+        <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
+      </div>
+    </div>
+  `,
+  styles: [
+    `
+      .pend {
+        max-width: 40rem;
+        border-left: 10px solid var(--attention);
+        padding-left: var(--sp-5);
+        display: flex;
+        flex-direction: column;
+        gap: var(--sp-3);
+      }
+      .pend__h {
+        font-size: var(--t-title);
+      }
+      .pend__p {
+        color: var(--steel-soft);
+      }
+      .pend__row {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-4);
+        margin-top: var(--sp-2);
+      }
+      .pend__out {
+        background: none;
+        border: 0;
+        padding: 0;
+        color: var(--steel-soft);
+        text-decoration: underline;
+        cursor: pointer;
+        font-size: var(--t-fine);
+      }
+    `,
+  ],
+})
+export class PendingPage {
+  readonly auth = inject(AuthStore);
+  private readonly router = inject(Router);
+
+  async recheck(): Promise<void> {
+    await this.auth.loadPrincipal();
+    if (this.auth.hasResidentRecord()) void this.router.navigateByUrl('/');
   }
 }
 
@@ -113,52 +209,35 @@ export class CallbackPage implements OnInit {
 @Component({
   selector: 'app-forbidden-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, RouterLink],
+  imports: [RouterLink],
   template: `
-    <div class="gate" role="alert">
-      <i class="pi pi-lock gate__icon" aria-hidden="true"></i>
-      <h1 class="gate__title">No tenés acceso a esta sección</h1>
-      <p class="gate__body">
-        @if (auth.isAdmin()) {
-          Tu cuenta es de administración y no tiene una ficha de residente, así que no hay
-          un panel personal que mostrar.
-        } @else {
-          Esta pantalla es solo para administradores del edificio.
-        }
+    <div class="stop" role="alert">
+      <h1 class="stop__h">This page is for building administrators</h1>
+      <p class="stop__p">
+        Your account does not have that permission. If it should, ask the building
+        administration to grant it.
       </p>
-      <p-button
-        [label]="auth.isAdmin() ? 'Ir a residentes' : 'Volver a mi panel'"
-        [routerLink]="auth.isAdmin() ? '/admin/residents' : '/'"
-        severity="secondary"
-      />
+      <a class="btn btn--quiet" [routerLink]="auth.isAdmin() ? '/admin/residents' : '/'">
+        {{ auth.isAdmin() ? 'Go to residents' : 'Back to my parking' }}
+      </a>
     </div>
   `,
   styles: [
     `
-      .gate {
-        max-width: 32rem;
-        margin: 15vh auto 0;
-        text-align: center;
+      .stop {
+        max-width: 40rem;
+        border-left: 10px solid var(--revoked);
+        padding-left: var(--sp-5);
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 0.6rem;
+        align-items: flex-start;
+        gap: var(--sp-3);
       }
-      .gate__icon {
-        font-size: 1.8rem;
-        opacity: 0.5;
+      .stop__h {
+        font-size: var(--t-title);
       }
-      .gate__title {
-        margin: 0;
-        font-size: 1.25rem;
-        font-weight: 660;
-      }
-      .gate__body {
-        margin: 0 0 0.8rem;
-        color: #5d5d5d;
-        line-height: 1.55;
-        font-size: 0.92rem;
-        max-width: 48ch;
+      .stop__p {
+        color: var(--steel-soft);
       }
     `,
   ],

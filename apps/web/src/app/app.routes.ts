@@ -12,17 +12,23 @@ import { adminGuard, authGuard, residentGuard } from './core/auth/guards';
 export const routes: Routes = [
   {
     path: 'login',
-    title: 'Ingresar · PACS',
+    title: 'Sign in — PACS',
     loadComponent: () => import('./features/auth/auth-pages').then((m) => m.LoginPage),
   },
   {
     path: 'callback',
-    title: 'Ingresando · PACS',
+    title: 'Signing in — PACS',
     loadComponent: () => import('./features/auth/auth-pages').then((m) => m.CallbackPage),
   },
   {
+    path: 'pending',
+    title: 'Account not linked — PACS',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/auth/auth-pages').then((m) => m.PendingPage),
+  },
+  {
     path: 'forbidden',
-    title: 'Sin acceso · PACS',
+    title: 'No access — PACS',
     loadComponent: () => import('./features/auth/auth-pages').then((m) => m.ForbiddenPage),
   },
 
@@ -30,13 +36,13 @@ export const routes: Routes = [
   {
     path: '',
     pathMatch: 'full',
-    title: 'Mi estacionamiento · PACS',
+    title: 'My parking — PACS',
     canActivate: [residentGuard],
     loadComponent: () => import('./features/dashboard/dashboard-page'),
   },
   {
     path: 'history',
-    title: 'Mi historial · PACS',
+    title: 'My history — PACS',
     canActivate: [residentGuard],
     loadComponent: () => import('./features/history/history-page'),
   },
@@ -49,22 +55,22 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', redirectTo: 'residents' },
       {
         path: 'residents',
-        title: 'Residentes · PACS',
+        title: 'Residents — PACS',
         loadComponent: () => import('./features/admin/residents-page'),
       },
       {
         path: 'spots',
-        title: 'Lugares · PACS',
+        title: 'Bays — PACS',
         loadComponent: () => import('./features/admin/spots-page'),
       },
       {
         path: 'cycles',
-        title: 'Ciclos · PACS',
+        title: 'Cycles and draws — PACS',
         loadComponent: () => import('./features/admin/cycles-page'),
       },
       {
         path: 'metrics',
-        title: 'Equidad · PACS',
+        title: 'Fairness — PACS',
         loadComponent: () => import('./features/admin/metrics-page'),
       },
     ],

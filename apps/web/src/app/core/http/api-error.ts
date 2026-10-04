@@ -24,7 +24,7 @@ export function toApiError(e: unknown): ApiError {
     if (e.status === 0) {
       return {
         code: 'NETWORK_ERROR',
-        message: 'No se pudo contactar el servidor. Revisá tu conexión.',
+        message: 'The server did not respond. Check your connection and try again.',
         traceId: null,
         status: 0,
       };
@@ -33,7 +33,7 @@ export function toApiError(e: unknown): ApiError {
     if (body && typeof body === 'object' && body.error) {
       return {
         code: body.error,
-        message: body.message ?? 'La solicitud falló.',
+        message: body.message ?? 'The request failed.',
         ...(body.details ? { details: body.details } : {}),
         traceId: body.traceId ?? e.headers.get('x-trace-id'),
         status: e.status,

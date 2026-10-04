@@ -54,5 +54,7 @@ export const residentGuard: CanActivateFn = async (_route, state) => {
 
   const auth = inject(AuthStore);
   if (auth.hasResidentRecord()) return true;
-  return inject(Router).createUrlTree(auth.isAdmin() ? ['/admin/residents'] : ['/forbidden']);
+  // Not forbidden - unlinked. An admin has somewhere useful to go; a resident whose
+  // account exists but is not in the register yet needs to be told that, not refused.
+  return inject(Router).createUrlTree(auth.isAdmin() ? ['/admin/residents'] : ['/pending']);
 };

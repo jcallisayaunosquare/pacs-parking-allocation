@@ -1,121 +1,129 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ButtonModule } from 'primeng/button';
-import { ConfirmDialogModule } from 'primeng/confirmdialog';
-import { DatePickerModule } from 'primeng/datepicker';
-import { DialogModule } from 'primeng/dialog';
-import { MessageModule } from 'primeng/message';
-import { TableModule } from 'primeng/table';
-import { ConfirmationService } from 'primeng/api';
 import { CyclesFacade } from '../../application/admin.facades';
 import type { Cycle, RunAssignment } from '../../domain/models';
+import { ConfirmService } from '../../shared/ui/confirm';
+import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 
 /**
- * Admin — cycles and runs (UC-04, UC-05, §17).
+ * Admin — cycles and draws (UC-04, UC-05, §17).
  *
- * The run button is the most consequential control in the product, so it is guarded
- * three ways: it only appears for the one cycle in REGISTRATION_CLOSED (the only state
- * a run may start from, §11), it goes through a confirm dialog, and the request carries
- * an Idempotency-Key so a double click replays instead of drawing twice.
+ * The draw button is the most consequential control in the product, so it is guarded
+ * three ways: it appears only for the one cycle in REGISTRATION_CLOSED, which is the
+ * only state a draw may start from (§11); it goes through a confirmation; and the
+ * request carries an idempotency key, so a double click replays the first draw rather
+ * than running a second one.
  *
- * The seed is shown after a run on purpose: it is what makes the result auditable, and
- * an admin who can quote it can answer "why did I lose?" with something checkable.
+ * The seed is shown afterwards and set like a stamp, because it is the artefact that
+ * makes the result checkable — an administrator who can quote it can answer "why did I
+ * lose?" with something a neighbour can verify rather than a reassurance.
  */
 @Component({
   selector: 'app-cycles-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    DatePipe,
-    FormsModule,
-    ButtonModule,
-    ConfirmDialogModule,
-    DatePickerModule,
-    DialogModule,
-    MessageModule,
-    TableModule,
-    StatusPill,
-    ViewStateHost,
-  ],
-  providers: [ConfirmationService],
+  imports: [DatePipe, FormsModule, Modal, StatusPill, ViewStateHost],
   template: `
-    <p-confirm-dialog />
-
     <header class="head">
-      <h1 class="title">Ciclos y sorteos</h1>
-      <p-button label="Nuevo ciclo" icon="pi pi-plus" size="small" (onClick)="openCreate()" />
+      <div>
+        <h1 class="head__h">Cycles and draws</h1>
+        <p class="head__p">One cycle per quarter: open registration, close it, run the draw.</p>
+      </div>
+      <button class="btn" type="button" (click)="openCreate()">New cycle</button>
     </header>
 
     @if (facade.error(); as e) {
-      <p-message severity="error" styleClass="w-full">
-        <b>{{ e.code }}</b> — {{ e.message }}
-      </p-message>
+      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
     }
 
     @if (facade.runnable(); as c) {
-      <section class="runnable">
-        <div>
-          <h2 class="runnable__title">{{ c.label }} está listo para sortear</h2>
-          <p class="runnable__body">
-            La inscripción está cerrada. Ejecutar el sorteo asigna los lugares, arma la lista
-            de espera y pone el ciclo en curso. No se puede deshacer.
+      <section class="ready">
+        <span class="ready__line" aria-hidden="true"></span>
+        <div class="ready__body">
+          <h2 class="ready__h">{{ c.label }} is ready to draw</h2>
+          <p class="ready__p">
+            Registration is closed. Running the draw assigns the bays, builds the
+            waitlist and updates everyone's score. It cannot be undone.
           </p>
+          <button
+            class="btn btn--go"
+            type="button"
+            [disabled]="facade.busy()"
+            (click)="runDraw(c)"
+          >
+            Run the draw
+          </button>
         </div>
-        <p-button
-          label="Ejecutar sorteo"
-          icon="pi pi-play"
-          [loading]="facade.busy()"
-          (onClick)="confirmRun(c)"
-        />
       </section>
     }
 
     @if (facade.lastRun(); as run) {
-      <section class="result">
-        <h2 class="card__title">Último sorteo</h2>
-        <div class="result__grid">
-          <div><b>{{ run.entrants }}</b><span>participantes</span></div>
-          <div><b>{{ run.assigned }}</b><span>asignados</span></div>
-          <div><b>{{ run.waitlisted }}</b><span>en espera</span></div>
-          <div><b>{{ run.state }}</b><span>estado</span></div>
+      <section class="record">
+        <h2 class="sec__h">Last draw</h2>
+
+        <div class="record__nums">
+          <div>
+            <span class="record__n stencil">{{ run.entrants }}</span>
+            <span class="record__l">entered</span>
+          </div>
+          <div>
+            <span class="record__n stencil">{{ run.assigned }}</span>
+            <span class="record__l">got a bay</span>
+          </div>
+          <div>
+            <span class="record__n stencil">{{ run.waitlisted }}</span>
+            <span class="record__l">waitlisted</span>
+          </div>
         </div>
-        <p class="result__seed">
-          Semilla <code>{{ run.randomSeed }}</code> · algoritmo
-          <code>{{ run.algorithmVersion }}</code>
-          <small>
-            Con la misma semilla y los mismos participantes, el sorteo da exactamente el
-            mismo resultado. Eso es lo que lo hace auditable.
-          </small>
+
+        <dl class="seal">
+          <div>
+            <dt>Seed</dt>
+            <dd><code>{{ run.randomSeed }}</code></dd>
+          </div>
+          <div>
+            <dt>Algorithm</dt>
+            <dd><code>{{ run.algorithmVersion }}</code></dd>
+          </div>
+          <div>
+            <dt>Finished</dt>
+            <dd>{{ run.finishedAt ? (run.finishedAt | date: 'd MMM y, HH:mm') : '—' }}</dd>
+          </div>
+        </dl>
+        <p class="seal__p">
+          The same seed and the same entrants always produce the same result. That is what
+          makes this draw checkable rather than merely trusted.
         </p>
-        <p-button
-          label="Ver asignaciones"
-          severity="secondary"
-          size="small"
-          [text]="true"
-          (onClick)="loadAssignments(run.runId)"
-        />
+
+        <button
+          class="btn btn--quiet btn--sm"
+          type="button"
+          (click)="loadAssignments(run.runId)"
+        >
+          Show who got what
+        </button>
 
         @if (assignments().length > 0) {
-          <p-table
-            [value]="assignments()"
-            styleClass="p-datatable-sm mt-2"
-            [tableStyle]="{ 'min-width': '24rem' }"
-          >
-            <ng-template #header>
-              <tr>
-                <th scope="col">Residente</th>
-                <th scope="col">Lugar</th>
-              </tr>
-            </ng-template>
-            <ng-template #body let-a>
-              <tr>
-                <td>{{ a.fullName }}</td>
-                <td class="strong">{{ a.spotCode }}</td>
-              </tr>
-            </ng-template>
-          </p-table>
+          <div class="tbl__wrap">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th scope="col">Resident</th>
+                  <th scope="col">Bay</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (a of assignments(); track a.residentId) {
+                  <tr>
+                    <td>{{ a.fullName }}</td>
+                    <td class="code stencil">{{ a.spotCode }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         }
       </section>
     }
@@ -123,255 +131,255 @@ import { ViewStateHost } from '../../shared/ui/view-state';
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="4"
-      emptyTitle="Todavía no hay ciclos"
-      emptyBody="Un ciclo define el trimestre, la ventana de inscripción y el momento del sorteo."
-      emptyActionLabel="Nuevo ciclo"
+      emptyTitle="No cycles yet"
+      emptyBody="A cycle sets the quarter it covers, the registration window, and when the draw runs."
+      emptyActionLabel="New cycle"
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <p-table
-        [value]="[...facade.allCycles()]"
-        styleClass="p-datatable-sm"
-        [tableStyle]="{ 'min-width': '48rem' }"
-      >
-        <ng-template #header>
-          <tr>
-            <th scope="col">Ciclo</th>
-            <th scope="col">Estado</th>
-            <th scope="col">Vigencia</th>
-            <th scope="col">Inscripción</th>
-            <th scope="col"></th>
-          </tr>
-        </ng-template>
-
-        <ng-template #body let-c>
-          <tr>
-            <td class="strong">{{ c.label }}</td>
-            <td>
-              @switch (c.state) {
-                @case ('DRAFT') {
-                  <app-status-pill label="Borrador" tone="muted" />
-                }
-                @case ('REGISTRATION_OPEN') {
-                  <app-status-pill label="Inscripción abierta" tone="ok" />
-                }
-                @case ('REGISTRATION_CLOSED') {
-                  <app-status-pill label="Listo para sortear" tone="warn" />
-                }
-                @case ('ACTIVE') {
-                  <app-status-pill label="En curso" tone="ok" />
-                }
-                @default {
-                  <app-status-pill label="Cerrado" tone="muted" />
-                }
-              }
-            </td>
-            <td>{{ c.startsOn | date: 'd MMM y' }} – {{ c.endsOn | date: 'd MMM y' }}</td>
-            <td class="muted">
-              {{ c.registrationOpensAt | date: 'd MMM' }} –
-              {{ c.registrationClosesAt | date: 'd MMM' }}
-            </td>
-            <td class="actions">
-              @switch (c.state) {
-                @case ('DRAFT') {
-                  <p-button
-                    label="Abrir inscripción"
-                    size="small"
-                    [text]="true"
-                    [loading]="facade.busy()"
-                    (onClick)="facade.openRegistration(c.id)"
-                  />
-                }
-                @case ('REGISTRATION_OPEN') {
-                  <p-button
-                    label="Cerrar inscripción"
-                    size="small"
-                    [text]="true"
-                    severity="secondary"
-                    [loading]="facade.busy()"
-                    (onClick)="facade.closeRegistration(c.id)"
-                  />
-                }
-                @default {
-                  <span class="muted">—</span>
-                }
-              }
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <h2 class="sec__h">All cycles</h2>
+      <div class="tbl__wrap">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Cycle</th>
+              <th scope="col">Status</th>
+              <th scope="col">Quarter</th>
+              <th scope="col">Registration</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (c of facade.allCycles(); track c.id) {
+              <tr>
+                <td class="code stencil">{{ c.label }}</td>
+                <td>
+                  @switch (c.state) {
+                    @case ('DRAFT') {
+                      <app-status-pill label="Draft" tone="idle" />
+                    }
+                    @case ('REGISTRATION_OPEN') {
+                      <app-status-pill label="Registration open" tone="held" />
+                    }
+                    @case ('REGISTRATION_CLOSED') {
+                      <app-status-pill label="Ready to draw" tone="attention" />
+                    }
+                    @case ('ACTIVE') {
+                      <app-status-pill label="In effect" tone="held" />
+                    }
+                    @default {
+                      <app-status-pill label="Closed" tone="idle" />
+                    }
+                  }
+                </td>
+                <td>{{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}</td>
+                <td class="dim">
+                  {{ c.registrationOpensAt | date: 'd MMM' }} to
+                  {{ c.registrationClosesAt | date: 'd MMM' }}
+                </td>
+                <td>
+                  @switch (c.state) {
+                    @case ('DRAFT') {
+                      <button
+                        class="btn btn--bare"
+                        type="button"
+                        [disabled]="facade.busy()"
+                        (click)="facade.openRegistration(c.id)"
+                      >
+                        Open registration
+                      </button>
+                    }
+                    @case ('REGISTRATION_OPEN') {
+                      <button
+                        class="btn btn--bare"
+                        type="button"
+                        [disabled]="facade.busy()"
+                        (click)="facade.closeRegistration(c.id)"
+                      >
+                        Close registration
+                      </button>
+                    }
+                    @default {
+                      <span class="dim">—</span>
+                    }
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     </app-view-state>
 
-    <p-dialog
-      header="Nuevo ciclo"
-      [(visible)]="createOpen"
-      [modal]="true"
-      [style]="{ width: '30rem' }"
-      [draggable]="false"
-    >
-      <div class="form">
-        <label for="nc-start">Comienza</label>
-        <p-datepicker inputId="nc-start" [(ngModel)]="form.startsOn" dateFormat="dd/mm/yy" />
-
-        <label for="nc-end">Termina</label>
-        <p-datepicker inputId="nc-end" [(ngModel)]="form.endsOn" dateFormat="dd/mm/yy" />
-
-        <label for="nc-open">Inscripción abre</label>
-        <p-datepicker inputId="nc-open" [(ngModel)]="form.opensAt" dateFormat="dd/mm/yy" />
-
-        <label for="nc-close">Inscripción cierra</label>
-        <p-datepicker inputId="nc-close" [(ngModel)]="form.closesAt" dateFormat="dd/mm/yy" />
-
-        <p class="hint">
-          La etiqueta (por ejemplo 2026-Q2) se deriva de la fecha de inicio, así que dos
-          administradores no pueden escribirla distinto.
-        </p>
+    <app-modal [open]="createOpen()" title="New cycle" (closed)="createOpen.set(false)">
+      <div class="dates">
+        <div class="field">
+          <label class="field__label" for="nc-start">Quarter begins</label>
+          <input class="input" id="nc-start" type="date" [(ngModel)]="form.startsOn" />
+        </div>
+        <div class="field">
+          <label class="field__label" for="nc-end">Quarter ends</label>
+          <input class="input" id="nc-end" type="date" [(ngModel)]="form.endsOn" />
+        </div>
+        <div class="field">
+          <label class="field__label" for="nc-open">Registration opens</label>
+          <input class="input" id="nc-open" type="date" [(ngModel)]="form.opensAt" />
+        </div>
+        <div class="field">
+          <label class="field__label" for="nc-close">Registration closes</label>
+          <input class="input" id="nc-close" type="date" [(ngModel)]="form.closesAt" />
+        </div>
       </div>
+      <p class="field__hint">
+        The label, such as 2026-Q2, comes from the start date, so two administrators
+        cannot spell it differently.
+      </p>
 
-      <ng-template #footer>
-        <p-button label="Cancelar" severity="secondary" [text]="true" (onClick)="createOpen = false" />
-        <p-button
-          label="Crear"
-          [loading]="facade.busy()"
-          [disabled]="!canSubmit()"
-          (onClick)="submitCreate()"
-        />
-      </ng-template>
-    </p-dialog>
+      <div modalFoot>
+        <button class="btn btn--quiet" type="button" (click)="createOpen.set(false)">Cancel</button>
+        <button
+          class="btn"
+          type="button"
+          [disabled]="!canSubmit() || facade.busy()"
+          (click)="submitCreate()"
+        >
+          Create cycle
+        </button>
+      </div>
+    </app-modal>
   `,
   styles: [
     `
       :host {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: var(--sp-6);
       }
       .head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 1rem;
-      }
-      .title {
-        margin: 0;
-        font-size: 1.35rem;
-        font-weight: 680;
-      }
-      .card__title {
-        margin: 0;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        font-weight: 700;
-        color: #6a6a6a;
-      }
-      .runnable {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1.5rem;
-        flex-wrap: wrap;
-        border: 2px solid #ddbd7e;
-        background: #fbf6ec;
-        border-radius: 12px;
-        padding: 1rem 1.15rem;
-      }
-      .runnable__title {
-        margin: 0;
-        font-size: 1.02rem;
-        font-weight: 660;
-      }
-      .runnable__body {
-        margin: 0.3rem 0 0;
-        font-size: 0.88rem;
-        color: #5d5d5d;
-        max-width: 58ch;
-      }
-      .result {
-        border: 1px solid #9ec9b1;
-        background: #f4faf6;
-        border-radius: 12px;
-        padding: 1rem 1.15rem;
-      }
-      .result__grid {
-        display: flex;
-        gap: 1.75rem;
-        margin-top: 0.6rem;
+        gap: var(--sp-5);
         flex-wrap: wrap;
       }
-      .result__grid div {
+      .head__h {
+        font-size: var(--t-head);
+      }
+      .head__p {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
+      }
+      .sec__h {
+        font-size: var(--t-lead);
+        margin-bottom: var(--sp-3);
+      }
+
+      /* The one thing on this page that should stop an administrator's eye. */
+      .ready {
+        display: flex;
+        background: var(--steel);
+        color: var(--stencil);
+      }
+      .ready__line {
+        flex: 0 0 10px;
+        background: var(--bay-line);
+      }
+      .ready__body {
+        padding: var(--sp-5);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--sp-3);
+      }
+      .ready__h {
+        font-size: var(--t-title);
+      }
+      .ready__p {
+        color: #c3cbd6;
+        max-width: 60ch;
+      }
+
+      .record {
+        border-top: 2px solid var(--steel);
+        padding-top: var(--sp-4);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--sp-4);
+      }
+      .record__nums {
+        display: flex;
+        gap: var(--sp-7);
+        flex-wrap: wrap;
+      }
+      .record__nums > div {
         display: flex;
         flex-direction: column;
       }
-      .result__grid b {
-        font-size: 1.3rem;
-        line-height: 1;
+      .record__n {
+        font-size: 2.25rem;
       }
-      .result__grid span {
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #7a7a7a;
-        margin-top: 0.2rem;
+      .record__l {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
       }
-      .result__seed {
-        margin: 0.8rem 0 0.4rem;
-        font-size: 0.85rem;
+
+      /* The audit record, set like a stamp rather than a statistic. */
+      .seal {
+        display: flex;
+        gap: var(--sp-6);
+        flex-wrap: wrap;
+        margin: 0;
+        padding: var(--sp-3) var(--sp-4);
+        background: var(--concrete-deep);
+        border-left: 3px solid var(--steel);
       }
-      .result__seed code {
-        background: #e7f1ea;
-        padding: 0.1rem 0.35rem;
-        border-radius: 4px;
+      .seal dt {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+      .seal dd {
+        margin: 2px 0 0;
+      }
+      .seal code {
         user-select: all;
+        font-size: var(--t-small);
       }
-      .result__seed small {
-        display: block;
-        margin-top: 0.35rem;
-        color: #5d5d5d;
+      .seal__p {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
         max-width: 64ch;
-        line-height: 1.45;
       }
-      .strong {
-        font-weight: 620;
+
+      .code {
+        font-size: 1.05rem;
       }
-      .muted {
-        color: #7a7a7a;
+      .dim {
+        color: var(--steel-faint);
       }
-      .actions {
-        text-align: right;
+
+      .dates {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--sp-3);
       }
-      .form {
-        display: flex;
-        flex-direction: column;
-        gap: 0.45rem;
-      }
-      .form label {
-        font-size: 0.82rem;
-        font-weight: 600;
-        margin-top: 0.4rem;
-      }
-      .hint {
-        margin: 0.7rem 0 0;
-        font-size: 0.8rem;
-        color: #6a6a6a;
-        line-height: 1.45;
+      @media (max-width: 26rem) {
+        .dates {
+          grid-template-columns: 1fr;
+        }
       }
     `,
   ],
 })
 export default class CyclesPage {
   readonly facade = inject(CyclesFacade);
-  private readonly confirm = inject(ConfirmationService);
+  private readonly confirm = inject(ConfirmService);
 
   readonly assignments = signal<RunAssignment[]>([]);
+  readonly createOpen = signal(false);
 
-  createOpen = false;
-  form: { startsOn: Date | null; endsOn: Date | null; opensAt: Date | null; closesAt: Date | null } = {
-    startsOn: null,
-    endsOn: null,
-    opensAt: null,
-    closesAt: null,
-  };
+  /** Native date inputs speak `yyyy-MM-dd` strings, which is also what the API wants. */
+  form = { startsOn: '', endsOn: '', opensAt: '', closesAt: '' };
 
   canSubmit(): boolean {
     const f = this.form;
@@ -379,38 +387,39 @@ export default class CyclesPage {
   }
 
   openCreate(): void {
-    this.form = { startsOn: null, endsOn: null, opensAt: null, closesAt: null };
+    this.form = { startsOn: '', endsOn: '', opensAt: '', closesAt: '' };
     this.facade.dismissError();
-    this.createOpen = true;
+    this.createOpen.set(true);
   }
 
   async submitCreate(): Promise<void> {
     const f = this.form;
-    if (!f.startsOn || !f.endsOn || !f.opensAt || !f.closesAt) return;
+    if (!this.canSubmit()) return;
     const r = await this.facade.create({
-      startsOn: f.startsOn.toISOString().slice(0, 10),
-      endsOn: f.endsOn.toISOString().slice(0, 10),
-      registrationOpensAt: f.opensAt.toISOString(),
-      registrationClosesAt: f.closesAt.toISOString(),
+      startsOn: f.startsOn,
+      endsOn: f.endsOn,
+      // The window is a timestamp in the contract; midnight UTC on the chosen day.
+      registrationOpensAt: new Date(`${f.opensAt}T00:00:00Z`).toISOString(),
+      registrationClosesAt: new Date(`${f.closesAt}T23:59:59Z`).toISOString(),
     });
-    if (r) this.createOpen = false;
+    if (r) this.createOpen.set(false);
   }
 
-  confirmRun(c: Cycle): void {
-    this.confirm.confirm({
-      header: `¿Ejecutar el sorteo de ${c.label}?`,
-      message:
-        'Se asignan los lugares, se arma la lista de espera y se actualizan los puntajes ' +
-        'de equidad. La operación no se puede deshacer y queda en el historial de auditoría.',
-      acceptLabel: 'Sí, sortear',
-      rejectLabel: 'Cancelar',
-      accept: async () => {
-        this.assignments.set([]);
-        await this.facade.executeRun(c.id);
-        const run = this.facade.lastRun();
-        if (run) await this.loadAssignments(run.runId);
-      },
+  async runDraw(c: Cycle): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: `Run the draw for ${c.label}?`,
+      body:
+        'Bays are assigned, the waitlist is built, and every score is updated. This ' +
+        'cannot be undone, and it is recorded in the audit history.',
+      confirmLabel: 'Run the draw',
+      cancelLabel: 'Not yet',
     });
+    if (!ok) return;
+
+    this.assignments.set([]);
+    await this.facade.executeRun(c.id);
+    const run = this.facade.lastRun();
+    if (run) await this.loadAssignments(run.runId);
   }
 
   async loadAssignments(runId: string): Promise<void> {

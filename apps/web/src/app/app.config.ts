@@ -6,9 +6,6 @@ import {
 } from '@angular/core';
 import { provideRouter, withComponentInputBinding, withInMemoryScrolling } from '@angular/router';
 import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
-import { providePrimeNG } from 'primeng/config';
-import Aura from '@primeuix/themes/aura';
-import { ConfirmationService, MessageService } from 'primeng/api';
 import { provideAuth } from 'angular-auth-oidc-client';
 
 import { routes } from './app.routes';
@@ -38,10 +35,13 @@ import {
 /**
  * The composition root of the frontend (§10): the one place that binds the domain's
  * abstract repository contracts to their HTTP implementations. Swap a line here and the
- * whole app runs against fakes — which is exactly what the unit tests do.
+ * whole app runs against fakes, which is what the unit tests do.
  *
- * Nothing above the data ring imports HttpClient, and nothing below `features/` imports
- * PrimeNG.
+ * There is no UI component library in this list. PrimeNG was the original choice in §10,
+ * from when it was MIT; version 22 is part of PrimeUI, a commercial family that requires
+ * a license key and annual eligibility renewal even on its free tier, and it prints a
+ * license notice without one. The controls are native elements with our own classes
+ * instead — no key, no renewal, and the design is not fighting a vendor theme's tokens.
  */
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -53,26 +53,11 @@ export const appConfig: ApplicationConfig = {
       withInMemoryScrolling({ scrollPositionRestoration: 'top' }),
     ),
 
-    // `withFetch` so requests are abortable — `resource()` cancels in-flight loads
+    // `withFetch` so requests are abortable — `resource()` cancels an in-flight load
     // when its params change, which is what stops a fast filter from racing itself.
     provideHttpClient(withFetch(), withInterceptors([authInterceptor, traceInterceptor])),
 
     provideAuth(authConfig),
-
-    providePrimeNG({
-      theme: {
-        preset: Aura,
-        options: {
-          // Scope the dark selector to something we never set, so the app stays light
-          // and predictable instead of following the OS at random.
-          darkModeSelector: '.pacs-dark',
-          cssLayer: { name: 'primeng', order: 'base, primeng' },
-        },
-      },
-      ripple: false,
-    }),
-    MessageService,
-    ConfirmationService,
 
     // ------------------------------------------------- domain → data bindings
     { provide: MeRepository, useClass: HttpMeRepository },
@@ -84,7 +69,7 @@ export const appConfig: ApplicationConfig = {
     { provide: MetricsRepository, useClass: HttpMetricsRepository },
 
     /**
-     * Resolve the session before the first route renders. Without this a reload on a
+     * Resolve the session before the first route renders. Without this, a reload on a
      * guarded URL bounces to /login for a frame before the token is known, which looks
      * like a bug even though it corrects itself.
      */

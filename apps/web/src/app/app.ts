@@ -1,52 +1,59 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { ToastModule } from 'primeng/toast';
 import { AuthStore } from './core/auth/auth.store';
+import { ConfirmHost } from './shared/ui/confirm';
 
 /**
- * The app shell (§17, Figure 17.2): auth context, nav, toasts, and the outlet.
+ * The shell: auth context, navigation, toasts, outlet (§17, Figure 17.2).
  *
- * Navigation is built from the roles on the token. An admin also gets the resident
- * shell, which is why the admin links are additive rather than a separate layout.
+ * The header is a band of painted steel, which is where the product's identity lives —
+ * the rest of the chrome stays out of the way. Navigation is built from the roles on
+ * the token, and an admin keeps the resident shell too, so the admin links are
+ * additive rather than a separate layout.
  */
 @Component({
   selector: 'app-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, ButtonModule, ToastModule],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmHost],
   template: `
-    <a class="skip" href="#main">Saltar al contenido</a>
-    <p-toast position="bottom-right" />
+    <a class="skip" href="#main">Skip to content</a>
+    <app-confirm-host />
 
     @if (auth.authenticated()) {
       <header class="bar">
-        <nav class="bar__nav" aria-label="Principal">
-          <span class="bar__brand">PACS</span>
-          @for (link of links(); track link.path) {
-            <a
-              class="bar__link"
-              [routerLink]="link.path"
-              routerLinkActive="bar__link--on"
-              [routerLinkActiveOptions]="{ exact: link.exact }"
-            >
-              {{ link.label }}
-            </a>
-          }
-        </nav>
-        <div class="bar__right">
-          <span class="bar__who">{{ auth.displayName() }}</span>
-          @if (auth.isAdmin()) {
-            <span class="bar__role">admin</span>
-          }
-          <p-button
-            label="Salir"
-            icon="pi pi-sign-out"
-            severity="secondary"
-            [text]="true"
-            size="small"
-            (onClick)="auth.logout()"
-          />
+        <div class="bar__inner">
+          <div class="bar__id">
+            <span class="bar__mark stencil">PACS</span>
+            <span class="bar__what">Parking allocation</span>
+          </div>
+
+          <div class="bar__end">
+            <span class="bar__who">{{ auth.displayName() }}</span>
+            @if (auth.isAdmin()) {
+              <span class="bar__role">Administrator</span>
+            }
+            <button class="bar__out" type="button" (click)="auth.logout()">Sign out</button>
+          </div>
         </div>
+
+        @if (links().length > 0) {
+          <nav class="nav" aria-label="Sections">
+            <ul class="nav__list">
+              @for (link of links(); track link.path) {
+                <li>
+                  <a
+                    class="nav__link"
+                    [routerLink]="link.path"
+                    routerLinkActive="nav__link--on"
+                    [routerLinkActiveOptions]="{ exact: link.exact }"
+                  >
+                    {{ link.label }}
+                  </a>
+                </li>
+              }
+            </ul>
+          </nav>
+        }
       </header>
     }
 
@@ -57,82 +64,123 @@ import { AuthStore } from './core/auth/auth.store';
   styles: [
     `
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
         min-height: 100vh;
-        background: #f7f6f4;
       }
+
       .skip {
         position: absolute;
         left: -9999px;
       }
       .skip:focus {
-        left: 0.5rem;
-        top: 0.5rem;
+        left: var(--sp-3);
+        top: var(--sp-3);
         z-index: 100;
-        background: #fff;
-        padding: 0.5rem 0.9rem;
-        border-radius: 6px;
-        border: 2px solid #2c6b4a;
+        background: var(--slab);
+        color: var(--steel);
+        padding: var(--sp-2) var(--sp-4);
+        border: 2px solid var(--steel);
+        border-radius: 4px;
       }
+
+      /* The painted band. The only place the brand asserts itself. */
       .bar {
+        background: var(--steel);
+        color: var(--stencil);
+        border-bottom: 5px solid var(--bay-line);
+      }
+
+      .bar__inner {
+        max-width: 68rem;
+        margin: 0 auto;
+        padding: var(--sp-4) var(--sp-5) var(--sp-3);
         display: flex;
-        align-items: center;
+        align-items: baseline;
         justify-content: space-between;
-        gap: 1rem;
-        padding: 0.6rem 1.25rem;
-        background: #fff;
-        border-bottom: 1px solid #e2e0dc;
+        gap: var(--sp-5);
         flex-wrap: wrap;
       }
-      .bar__nav {
+
+      .bar__id {
         display: flex;
-        align-items: center;
-        gap: 1.1rem;
-        flex-wrap: wrap;
+        align-items: baseline;
+        gap: var(--sp-3);
       }
-      .bar__brand {
-        font-weight: 760;
-        letter-spacing: -0.01em;
-        margin-right: 0.4rem;
+      .bar__mark {
+        font-size: 1.45rem;
+        color: var(--stencil);
       }
-      .bar__link {
-        text-decoration: none;
-        color: #4a4a4a;
-        font-size: 0.88rem;
-        padding: 0.3rem 0;
-        border-bottom: 2px solid transparent;
+      .bar__what {
+        font-size: var(--t-fine);
+        color: #a9b4c1;
       }
-      .bar__link:hover {
-        color: #1d1d1d;
-      }
-      .bar__link--on {
-        color: #1d5438;
-        border-bottom-color: #2c6b4a;
-        font-weight: 620;
-      }
-      .bar__right {
+
+      .bar__end {
         display: flex;
-        align-items: center;
-        gap: 0.6rem;
+        align-items: baseline;
+        gap: var(--sp-3);
+        font-size: var(--t-fine);
       }
       .bar__who {
-        font-size: 0.85rem;
-        color: #4a4a4a;
+        color: #c3cbd6;
       }
       .bar__role {
-        font-size: 0.68rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        background: #e7eef8;
-        color: #22456f;
-        padding: 0.1rem 0.4rem;
-        border-radius: 4px;
-        font-weight: 700;
+        color: var(--bay-line);
+        font-weight: 600;
       }
-      .main {
-        max-width: 72rem;
+      .bar__out {
+        background: none;
+        border: 0;
+        padding: 0;
+        color: var(--stencil);
+        cursor: pointer;
+        font-size: var(--t-fine);
+        text-decoration: underline;
+        text-decoration-color: #6d7a88;
+        text-underline-offset: 3px;
+      }
+      .bar__out:hover {
+        text-decoration-color: var(--bay-line);
+      }
+
+      .nav {
+        max-width: 68rem;
         margin: 0 auto;
-        padding: 1.5rem 1.25rem 4rem;
+        padding: 0 var(--sp-5);
+      }
+      .nav__list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        gap: var(--sp-5);
+        flex-wrap: wrap;
+      }
+      .nav__link {
+        display: inline-block;
+        padding: var(--sp-2) 0 calc(var(--sp-3) - 3px);
+        color: #c3cbd6;
+        text-decoration: none;
+        border-bottom: 3px solid transparent;
+        font-size: 0.9375rem;
+      }
+      .nav__link:hover {
+        color: var(--stencil);
+      }
+      /* The active tab is marked with the bay line, same language as a held space. */
+      .nav__link--on {
+        color: var(--stencil);
+        font-weight: 600;
+        border-bottom-color: var(--bay-line);
+      }
+
+      .main {
+        flex: 1;
+        width: 100%;
+        max-width: 68rem;
+        margin: 0 auto;
+        padding: var(--sp-6) var(--sp-5) var(--sp-8);
       }
     `,
   ],
@@ -143,14 +191,14 @@ export class App {
   readonly links = computed(() => {
     const out: { path: string; label: string; exact: boolean }[] = [];
     if (this.auth.hasResidentRecord()) {
-      out.push({ path: '/', label: 'Mi panel', exact: true });
-      out.push({ path: '/history', label: 'Historial', exact: false });
+      out.push({ path: '/', label: 'My parking', exact: true });
+      out.push({ path: '/history', label: 'History', exact: false });
     }
     if (this.auth.isAdmin()) {
-      out.push({ path: '/admin/residents', label: 'Residentes', exact: false });
-      out.push({ path: '/admin/spots', label: 'Lugares', exact: false });
-      out.push({ path: '/admin/cycles', label: 'Ciclos', exact: false });
-      out.push({ path: '/admin/metrics', label: 'Equidad', exact: false });
+      out.push({ path: '/admin/residents', label: 'Residents', exact: false });
+      out.push({ path: '/admin/spots', label: 'Bays', exact: false });
+      out.push({ path: '/admin/cycles', label: 'Cycles and draws', exact: false });
+      out.push({ path: '/admin/metrics', label: 'Fairness', exact: false });
     }
     return out;
   });

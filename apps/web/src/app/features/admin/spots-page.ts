@@ -1,251 +1,241 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ButtonModule } from 'primeng/button';
-import { DialogModule } from 'primeng/dialog';
-import { InputTextModule } from 'primeng/inputtext';
-import { MessageModule } from 'primeng/message';
-import { SelectModule } from 'primeng/select';
-import { TableModule } from 'primeng/table';
-import { ToggleSwitchModule } from 'primeng/toggleswitch';
 import { SpotsFacade } from '../../application/admin.facades';
 import type { ParkingSpot, SpotType } from '../../domain/models';
+import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 
 /**
- * Admin — parking inventory (FR-16, §17).
+ * Admin — the bay inventory (FR-16, §17).
  *
- * Deactivation is the interesting case: the server refuses it with 409 while the spot
- * is assigned for the current cycle, because taking a bay out from under someone who
- * is parked in it is an operational problem, not a data one. The UI surfaces that
- * refusal as it is, rather than hiding the control and leaving the admin guessing.
+ * Taking a bay out of service is refused by the server with a 409 while it is assigned
+ * for the current quarter, because removing a bay from under someone parked in it is an
+ * operational problem rather than a data one. The control stays visible and the refusal
+ * is shown, instead of hiding the button and leaving the administrator guessing.
  */
 @Component({
   selector: 'app-spots-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    FormsModule,
-    ButtonModule,
-    DialogModule,
-    InputTextModule,
-    MessageModule,
-    SelectModule,
-    TableModule,
-    ToggleSwitchModule,
-    StatusPill,
-    ViewStateHost,
-  ],
+  imports: [FormsModule, Modal, StatusPill, ViewStateHost],
   template: `
     <header class="head">
-      <h1 class="title">Inventario de lugares</h1>
-      <p-button label="Nuevo lugar" icon="pi pi-plus" size="small" (onClick)="openCreate()" />
+      <div>
+        <h1 class="head__h">Bays</h1>
+        <p class="head__p">What the draw has to hand out.</p>
+      </div>
+      <button class="btn" type="button" (click)="openCreate()">Add bay</button>
     </header>
 
     @if (facade.counts(); as c) {
-      <div class="stats">
-        <div><b>{{ c.total }}</b><span>totales</span></div>
-        <div><b>{{ c.active }}</b><span>activos</span></div>
-        <div><b>{{ c.accessible }}</b><span>accesibles</span></div>
-        <div><b>{{ c.ev }}</b><span>eléctricos</span></div>
+      <div class="tally">
+        <div class="tally__item">
+          <span class="tally__n stencil">{{ c.active }}</span>
+          <span class="tally__l">in service</span>
+        </div>
+        <div class="tally__item">
+          <span class="tally__n stencil">{{ c.total - c.active }}</span>
+          <span class="tally__l">out of service</span>
+        </div>
+        <div class="tally__item">
+          <span class="tally__n stencil">{{ c.accessible }}</span>
+          <span class="tally__l">accessible</span>
+        </div>
+        <div class="tally__item">
+          <span class="tally__n stencil">{{ c.ev }}</span>
+          <span class="tally__l">EV</span>
+        </div>
       </div>
     }
 
     <div class="filters">
-      <p-select
-        [options]="typeOptions"
-        optionLabel="label"
-        optionValue="value"
-        placeholder="Todos los tipos"
-        [ngModel]="facade.type()"
-        (ngModelChange)="facade.type.set($event ?? undefined)"
-        [showClear]="true"
-        ariaLabel="Filtrar por tipo"
-      />
-      <label class="only-active">
-        <p-toggle-switch
+      <select
+        class="select"
+        [ngModel]="facade.type() ?? ''"
+        (ngModelChange)="facade.type.set($event || undefined)"
+        aria-label="Filter by type"
+      >
+        <option value="">Any type</option>
+        @for (o of typeOptions; track o.value) {
+          <option [value]="o.value">{{ o.label }}</option>
+        }
+      </select>
+      <label class="check">
+        <input
+          type="checkbox"
           [ngModel]="facade.activeOnly()"
           (ngModelChange)="facade.activeOnly.set($event)"
-          inputId="only-active"
         />
-        <span>Solo activos</span>
+        <span>In service only</span>
       </label>
     </div>
 
     @if (facade.error(); as e) {
-      <p-message severity="error" styleClass="w-full">{{ e.message }}</p-message>
+      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
     }
 
     <app-view-state
       [state]="facade.state()"
-      [skeletonCount]="5"
-      emptyTitle="Sin lugares en el inventario"
-      emptyBody="Un sorteo necesita al menos un lugar activo. Creá el primero para poder ejecutar un ciclo."
-      emptyActionLabel="Nuevo lugar"
+      [skeletonCount]="6"
+      emptyTitle="No bays in the inventory"
+      emptyBody="A draw needs at least one bay in service. Add the first one before opening a cycle."
+      emptyActionLabel="Add bay"
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <p-table
-        [value]="[...facade.spots()]"
-        styleClass="p-datatable-sm"
-        [tableStyle]="{ 'min-width': '40rem' }"
-      >
-        <ng-template #header>
-          <tr>
-            <th scope="col">Código</th>
-            <th scope="col">Nivel</th>
-            <th scope="col">Tipo</th>
-            <th scope="col">Estado</th>
-            <th scope="col">Notas</th>
-            <th scope="col"></th>
-          </tr>
-        </ng-template>
-
-        <ng-template #body let-s>
-          <tr>
-            <td class="strong">{{ s.spotCode }}</td>
-            <td>{{ s.level }}</td>
-            <td>
-              @switch (s.type) {
-                @case ('ACCESSIBLE') {
-                  <app-status-pill label="Accesible" tone="warn" />
-                }
-                @case ('EV') {
-                  <app-status-pill label="Eléctrico" tone="wait" />
-                }
-                @default {
-                  <app-status-pill label="Estándar" tone="muted" />
-                }
-              }
-            </td>
-            <td>
-              @if (s.isActive) {
-                <app-status-pill label="Activo" tone="ok" />
-              } @else {
-                <app-status-pill label="Fuera de servicio" tone="bad" />
-              }
-            </td>
-            <td class="muted">{{ s.notes ?? '—' }}</td>
-            <td class="actions">
-              <p-button
-                [label]="s.isActive ? 'Dar de baja' : 'Reactivar'"
-                severity="secondary"
-                [text]="true"
-                size="small"
-                [loading]="facade.busy()"
-                (onClick)="toggle(s)"
-              />
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <div class="tbl__wrap">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Bay</th>
+              <th scope="col">Level</th>
+              <th scope="col">Type</th>
+              <th scope="col">Status</th>
+              <th scope="col">Notes</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (s of facade.spots(); track s.id) {
+              <tr [class.row--out]="!s.isActive">
+                <td class="code stencil">{{ s.spotCode }}</td>
+                <td>{{ s.level }}</td>
+                <td>
+                  @switch (s.type) {
+                    @case ('ACCESSIBLE') {
+                      <app-status-pill label="Accessible" tone="attention" />
+                    }
+                    @case ('EV') {
+                      <app-status-pill label="EV" tone="waiting" />
+                    }
+                    @default {
+                      <span class="dim">Standard</span>
+                    }
+                  }
+                </td>
+                <td>
+                  @if (s.isActive) {
+                    <app-status-pill label="In service" tone="held" />
+                  } @else {
+                    <app-status-pill label="Out of service" tone="revoked" />
+                  }
+                </td>
+                <td class="dim">{{ s.notes || '—' }}</td>
+                <td>
+                  <button
+                    class="btn btn--bare"
+                    type="button"
+                    [disabled]="facade.busy()"
+                    (click)="toggle(s)"
+                  >
+                    {{ s.isActive ? 'Take out of service' : 'Put back in service' }}
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     </app-view-state>
 
-    <p-dialog
-      header="Nuevo lugar"
-      [(visible)]="createOpen"
-      [modal]="true"
-      [style]="{ width: '28rem' }"
-      [draggable]="false"
-    >
-      <div class="form">
-        <label for="ns-code">Código</label>
-        <input pInputText id="ns-code" [(ngModel)]="form.spotCode" placeholder="B2-14" />
-
-        <label for="ns-level">Nivel</label>
-        <input pInputText id="ns-level" [(ngModel)]="form.level" placeholder="B2" />
-
-        <label for="ns-type">Tipo</label>
-        <p-select
-          inputId="ns-type"
-          [options]="typeOptions"
-          optionLabel="label"
-          optionValue="value"
-          [(ngModel)]="form.type"
-        />
-
-        <label for="ns-notes">Notas</label>
-        <input pInputText id="ns-notes" [(ngModel)]="form.notes" />
+    <app-modal [open]="createOpen()" title="Add bay" (closed)="createOpen.set(false)">
+      <div class="field">
+        <label class="field__label" for="ns-code">Bay code</label>
+        <input class="input" id="ns-code" [(ngModel)]="form.spotCode" placeholder="B2-14" />
       </div>
+      <div class="field">
+        <label class="field__label" for="ns-level">Level</label>
+        <input class="input" id="ns-level" [(ngModel)]="form.level" placeholder="B2" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="ns-type">Type</label>
+        <select class="select" id="ns-type" [(ngModel)]="form.type">
+          @for (o of typeOptions; track o.value) {
+            <option [value]="o.value">{{ o.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="field">
+        <label class="field__label" for="ns-notes">Notes</label>
+        <input class="input" id="ns-notes" [(ngModel)]="form.notes" placeholder="Optional" />
+      </div>
+      <p class="field__hint">
+        Bay codes are what residents read on the floor, so use the code painted there.
+      </p>
 
-      <ng-template #footer>
-        <p-button label="Cancelar" severity="secondary" [text]="true" (onClick)="createOpen = false" />
-        <p-button
-          label="Crear"
-          [loading]="facade.busy()"
-          [disabled]="!form.spotCode.trim() || !form.level.trim()"
-          (onClick)="submitCreate()"
-        />
-      </ng-template>
-    </p-dialog>
+      <div modalFoot>
+        <button class="btn btn--quiet" type="button" (click)="createOpen.set(false)">Cancel</button>
+        <button
+          class="btn"
+          type="button"
+          [disabled]="!form.spotCode.trim() || !form.level.trim() || facade.busy()"
+          (click)="submitCreate()"
+        >
+          Add bay
+        </button>
+      </div>
+    </app-modal>
   `,
   styles: [
     `
       :host {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: var(--sp-4);
       }
       .head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 1rem;
-      }
-      .title {
-        margin: 0;
-        font-size: 1.35rem;
-        font-weight: 680;
-      }
-      .stats {
-        display: flex;
-        gap: 1.75rem;
+        gap: var(--sp-5);
         flex-wrap: wrap;
       }
-      .stats div {
+      .head__h {
+        font-size: var(--t-head);
+      }
+      .head__p {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
+      }
+
+      .tally {
+        display: flex;
+        gap: var(--sp-7);
+        flex-wrap: wrap;
+      }
+      .tally__item {
         display: flex;
         flex-direction: column;
+        border-top: 3px solid var(--steel);
+        padding-top: var(--sp-2);
+        min-width: 7rem;
       }
-      .stats b {
-        font-size: 1.35rem;
-        line-height: 1;
+      .tally__n {
+        font-size: 2rem;
       }
-      .stats span {
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #7a7a7a;
-        margin-top: 0.2rem;
+      .tally__l {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
       }
+
       .filters {
         display: flex;
-        gap: 1rem;
+        gap: var(--sp-5);
         align-items: center;
         flex-wrap: wrap;
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: var(--sp-4);
       }
-      .only-active {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 0.88rem;
+
+      .code {
+        font-size: 1.05rem;
       }
-      .strong {
-        font-weight: 620;
+      .row--out .code {
+        color: var(--steel-faint);
+        text-decoration: line-through;
       }
-      .muted {
-        color: #7a7a7a;
-      }
-      .actions {
-        text-align: right;
-      }
-      .form {
-        display: flex;
-        flex-direction: column;
-        gap: 0.45rem;
-      }
-      .form label {
-        font-size: 0.82rem;
-        font-weight: 600;
-        margin-top: 0.4rem;
+      .dim {
+        color: var(--steel-faint);
       }
     `,
   ],
@@ -254,12 +244,13 @@ export default class SpotsPage {
   readonly facade = inject(SpotsFacade);
 
   readonly typeOptions: { label: string; value: SpotType }[] = [
-    { label: 'Estándar', value: 'STANDARD' },
-    { label: 'Accesible', value: 'ACCESSIBLE' },
-    { label: 'Eléctrico', value: 'EV' },
+    { label: 'Standard', value: 'STANDARD' },
+    { label: 'Accessible', value: 'ACCESSIBLE' },
+    { label: 'EV', value: 'EV' },
   ];
 
-  createOpen = false;
+  readonly createOpen = signal(false);
+
   form: { spotCode: string; level: string; type: SpotType; notes: string } = {
     spotCode: '',
     level: '',
@@ -270,7 +261,7 @@ export default class SpotsPage {
   openCreate(): void {
     this.form = { spotCode: '', level: '', type: 'STANDARD', notes: '' };
     this.facade.dismissError();
-    this.createOpen = true;
+    this.createOpen.set(true);
   }
 
   async submitCreate(): Promise<void> {
@@ -280,7 +271,7 @@ export default class SpotsPage {
       type: this.form.type,
       notes: this.form.notes.trim() || null,
     });
-    if (r) this.createOpen = false;
+    if (r) this.createOpen.set(false);
   }
 
   toggle(s: ParkingSpot): void {

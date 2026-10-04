@@ -162,7 +162,7 @@ describe('toApiError', () => {
   it('names a connectivity failure rather than showing status 0', () => {
     const e = toApiError(new HttpErrorResponse({ status: 0 }));
     expect(e.code).toBe('NETWORK_ERROR');
-    expect(e.message).toContain('conexión');
+    expect(e.message).toContain('connection');
   });
 
   it('handles something that is not an HttpErrorResponse at all', () => {

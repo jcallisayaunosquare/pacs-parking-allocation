@@ -28,6 +28,11 @@ export const authConfig: PassedInitialConfig = {
     // Cognito access tokens last 15 minutes by design, so renewal is routine.
     ignoreNonceAfterRefresh: true,
     triggerAuthorizationResultEvent: true,
+    // Cognito does not advertise `offline_access` — its discovery document lists only
+    // openid, email, phone and profile — and issues refresh tokens based on the app
+    // client's RefreshTokenValidity instead. The library's warning is a false positive
+    // here, so it is silenced rather than left for the next person to chase.
+    disableRefreshTokenOfflineAccessScopeWarning: true,
     autoUserInfo: false,
     logLevel: environment.production ? LogLevel.Error : LogLevel.Warn,
     // Only the API gets the bearer token — never a third-party origin.

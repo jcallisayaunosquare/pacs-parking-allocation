@@ -1,75 +1,76 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { TableModule } from 'primeng/table';
 import { DashboardFacade } from '../../application/dashboard.facade';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 
 /**
- * UC-10 — every past outcome and the score that produced it.
+ * UC-10 — every past result and the score it was drawn against.
  *
- * The score column is the point of the screen: it is the snapshot taken at draw time
- * (§11), never recalculated, which is what lets a resident see why a past run went the
- * way it did instead of being told to trust it.
+ * The score column is the reason this page exists: it is the snapshot taken at draw
+ * time (§11) and never recalculated, so a resident can see why a past draw went the way
+ * it did instead of being asked to trust it. A plain list rather than a data grid,
+ * because four quarters a year is not a data grid.
  */
 @Component({
   selector: 'app-history-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, TableModule, StatusPill, ViewStateHost],
+  imports: [DatePipe, StatusPill, ViewStateHost],
   template: `
-    <header class="page__head">
-      <h1 class="page__title">Tu historial</h1>
-      <p class="page__sub">
-        El puntaje mostrado es el que tenías en el momento del sorteo, no el actual.
+    <header class="head">
+      <h1 class="head__h">Your results</h1>
+      <p class="head__p">
+        The score shown is the one you held when the draw ran, not your score today.
       </p>
     </header>
 
     <app-view-state
       [state]="facade.historyState()"
-      [skeletonCount]="4"
-      emptyTitle="Todavía no participaste en un sorteo"
-      emptyBody="En cuanto se ejecute el primer sorteo en el que estés anotado, el resultado va a aparecer acá con el puntaje que tenías."
+      [skeletonCount]="5"
+      emptyTitle="You have not been in a draw yet"
+      emptyBody="Once a draw runs with you entered, the result appears here along with the score it was drawn against."
       (retry)="facade.refresh()"
     >
-      <p-table
-        [value]="[...facade.history()]"
-        [paginator]="facade.history().length > 10"
-        [rows]="10"
-        styleClass="p-datatable-sm"
-        [tableStyle]="{ 'min-width': '34rem' }"
-      >
-        <ng-template #header>
-          <tr>
-            <th scope="col">Ciclo</th>
-            <th scope="col">Resultado</th>
-            <th scope="col">Lugar</th>
-            <th scope="col" class="num">Puntaje al sortear</th>
-            <th scope="col">Fecha</th>
-          </tr>
-        </ng-template>
+      <ol class="list">
+        @for (h of facade.history(); track h.cycle + h.recordedAt.toISOString()) {
+          <li class="row" [class.row--won]="h.result === 'ASSIGNED'">
+            <span class="row__line" aria-hidden="true"></span>
 
-        <ng-template #body let-h>
-          <tr>
-            <td class="cycle">{{ h.cycle }}</td>
-            <td>
+            <div class="row__main">
+              <span class="row__cycle stencil">{{ h.cycle }}</span>
+              <span class="row__what">
+                @switch (h.result) {
+                  @case ('ASSIGNED') {
+                    Won bay {{ h.spotCode }}
+                  }
+                  @case ('WAITLISTED') {
+                    Waitlist position {{ h.position }}
+                  }
+                  @default {
+                    Did not take part
+                  }
+                }
+              </span>
+            </div>
+
+            <div class="row__end">
               @switch (h.result) {
                 @case ('ASSIGNED') {
-                  <app-status-pill label="Asignado" tone="ok" />
+                  <app-status-pill label="Won" tone="held" />
                 }
                 @case ('WAITLISTED') {
-                  <app-status-pill [label]="'Lista de espera #' + h.position" tone="wait" />
+                  <app-status-pill label="Waitlisted" tone="waiting" />
                 }
                 @default {
-                  <app-status-pill label="No participó" tone="muted" />
+                  <app-status-pill label="Skipped" tone="idle" />
                 }
               }
-            </td>
-            <td>{{ h.spotCode ?? '—' }}</td>
-            <td class="num">{{ h.scoreAtDraw }}</td>
-            <td>{{ h.recordedAt | date: 'd MMM y' }}</td>
-          </tr>
-        </ng-template>
-      </p-table>
+              <span class="row__score">{{ h.scoreAtDraw }} score at draw</span>
+              <span class="row__when">{{ h.recordedAt | date: 'd MMM y' }}</span>
+            </div>
+          </li>
+        }
+      </ol>
     </app-view-state>
   `,
   styles: [
@@ -77,24 +78,76 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       :host {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: var(--sp-5);
       }
-      .page__title {
+      .head__h {
+        font-size: var(--t-head);
+      }
+      .head__p {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
+      }
+
+      .list {
+        list-style: none;
         margin: 0;
-        font-size: 1.35rem;
-        font-weight: 680;
+        padding: 0;
       }
-      .page__sub {
-        margin: 0.25rem 0 0;
-        color: #5d5d5d;
-        font-size: 0.88rem;
-        max-width: 60ch;
+
+      .row {
+        display: grid;
+        grid-template-columns: 6px 1fr auto;
+        gap: var(--sp-4);
+        align-items: center;
+        padding: var(--sp-3) 0;
+        border-bottom: 1px solid var(--rule-soft);
       }
-      .cycle {
-        font-weight: 650;
+
+      /* The painted line marks the quarters you actually won. */
+      .row__line {
+        align-self: stretch;
+        background: var(--rule);
       }
-      .num {
-        text-align: right;
+      .row--won .row__line {
+        background: var(--bay-line);
+      }
+
+      .row__main {
+        display: flex;
+        align-items: baseline;
+        gap: var(--sp-4);
+        flex-wrap: wrap;
+      }
+      .row__cycle {
+        font-size: 1.15rem;
+        min-width: 5.5rem;
+      }
+      .row__what {
+        color: var(--steel-soft);
+      }
+
+      .row__end {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-4);
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .row__score,
+      .row__when {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+
+      @media (max-width: 40rem) {
+        .row {
+          grid-template-columns: 6px 1fr;
+        }
+        .row__end {
+          grid-column: 2;
+          justify-content: flex-start;
+          gap: var(--sp-3);
+        }
       }
     `,
   ],

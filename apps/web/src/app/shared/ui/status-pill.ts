@@ -1,85 +1,74 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-export type PillTone = 'ok' | 'wait' | 'warn' | 'bad' | 'muted';
+export type PillTone = 'held' | 'waiting' | 'attention' | 'revoked' | 'idle';
 
 /**
- * A status pill that pairs colour with a word.
+ * A status marker that reads as a painted tag, not a rounded chip.
  *
- * §17's accessibility rule: no meaning is carried by colour alone (NFR-13, WCAG 2.1
- * AA). The label is the information; the tone only reinforces it. An icon is included
- * so the distinction also survives greyscale printing and colour-blind vision.
+ * Colour never carries the meaning on its own (NFR-13, WCAG 2.1 AA): the word is the
+ * information and the tone reinforces it, so the state survives greyscale and
+ * colour-blind vision. A left rule rather than a full outline, so a row of these does
+ * not turn into a row of identical bubbles.
+ *
+ * `onDark` is for use inside the steel bay, where the washes would disappear.
  */
 @Component({
   selector: 'app-status-pill',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <span class="pill" [class]="'pill--' + tone()" role="status">
-      <i class="pill__icon" [class]="icon()" aria-hidden="true"></i>
-      <span class="pill__label">{{ label() }}</span>
-    </span>
+    <span class="tag" [class]="classes()" role="status">{{ label() }}</span>
   `,
   styles: [
     `
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.2rem 0.65rem;
-        border-radius: 999px;
-        font-size: 0.78rem;
+      .tag {
+        display: inline-block;
+        padding: 0.18rem 0.55rem;
+        border-left: 3px solid currentColor;
+        font-size: var(--t-fine);
         font-weight: 600;
-        letter-spacing: 0.02em;
-        border: 1px solid transparent;
+        letter-spacing: 0.005em;
         white-space: nowrap;
       }
-      .pill__icon {
-        font-size: 0.7rem;
+
+      .tag--held {
+        color: var(--held);
+        background: var(--held-wash);
       }
-      /* Contrast ratios here are all >= 4.5:1 against their background. */
-      .pill--ok {
-        background: #e2f0e8;
-        color: #1d5438;
-        border-color: #9ec9b1;
+      .tag--waiting {
+        color: var(--waiting);
+        background: var(--waiting-wash);
       }
-      .pill--wait {
-        background: #e7eef8;
-        color: #22456f;
-        border-color: #a8c0dd;
+      .tag--attention {
+        color: var(--attention);
+        background: var(--attention-wash);
       }
-      .pill--warn {
-        background: #fbf0dc;
-        color: #6b4708;
-        border-color: #ddbd7e;
+      .tag--revoked {
+        color: var(--revoked);
+        background: var(--revoked-wash);
       }
-      .pill--bad {
-        background: #f8e2db;
-        color: #7c2d14;
-        border-color: #dba694;
+      .tag--idle {
+        color: var(--idle);
+        background: var(--idle-wash);
       }
-      .pill--muted {
-        background: #ececec;
-        color: #4a4a4a;
-        border-color: #c8c8c8;
+
+      /* Inside the bay the washes vanish, so invert to the painted-line colour. */
+      .tag--on-dark {
+        background: transparent;
+        color: var(--bay-line);
+      }
+      .tag--on-dark.tag--idle,
+      .tag--on-dark.tag--waiting {
+        color: #c3cbd6;
       }
     `,
   ],
 })
 export class StatusPill {
   readonly label = input.required<string>();
-  readonly tone = input<PillTone>('muted');
+  readonly tone = input<PillTone>('idle');
+  readonly onDark = input(false);
 
-  readonly icon = computed(() => {
-    switch (this.tone()) {
-      case 'ok':
-        return 'pi pi-check-circle';
-      case 'wait':
-        return 'pi pi-clock';
-      case 'warn':
-        return 'pi pi-exclamation-triangle';
-      case 'bad':
-        return 'pi pi-times-circle';
-      default:
-        return 'pi pi-minus-circle';
-    }
-  });
+  readonly classes = computed(() =>
+    `tag--${this.tone()}${this.onDark() ? ' tag--on-dark' : ''}`,
+  );
 }

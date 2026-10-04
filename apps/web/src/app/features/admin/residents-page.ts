@@ -1,327 +1,282 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ButtonModule } from 'primeng/button';
-import { CheckboxModule } from 'primeng/checkbox';
-import { DialogModule } from 'primeng/dialog';
-import { InputTextModule } from 'primeng/inputtext';
-import { MessageModule } from 'primeng/message';
-import { SelectModule } from 'primeng/select';
-import { TableModule } from 'primeng/table';
-import { TextareaModule } from 'primeng/textarea';
 import { ResidentsFacade } from '../../application/admin.facades';
 import type { Resident } from '../../domain/models';
+import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 
 /**
- * Admin — residents. Search, edit, set eligibility (§17).
+ * Admin — the resident register. Search, edit, set eligibility (§17).
  *
- * Eligibility is the screen's sharp edge: FR-15 requires a reason, it is audit-logged,
- * and it changes who the next draw even considers. So it gets its own dialog with a
- * mandatory reason rather than an inline toggle that can be flipped by accident.
+ * Eligibility is the sharp edge: FR-15 requires a reason, the change is audit-logged,
+ * and it decides who the next draw even considers. So it gets a dialog with a mandatory
+ * reason rather than an inline toggle that can be flipped by a stray click.
  */
 @Component({
   selector: 'app-residents-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    FormsModule,
-    ButtonModule,
-    CheckboxModule,
-    DialogModule,
-    InputTextModule,
-    MessageModule,
-    SelectModule,
-    TableModule,
-    TextareaModule,
-    StatusPill,
-    ViewStateHost,
-  ],
+  imports: [FormsModule, Modal, StatusPill, ViewStateHost],
   template: `
     <header class="head">
-      <h1 class="title">Residentes</h1>
-      <p-button label="Nuevo residente" icon="pi pi-plus" size="small" (onClick)="openCreate()" />
+      <div>
+        <h1 class="head__h">Residents</h1>
+        <p class="head__p">Who may enter the draw, and on what terms.</p>
+      </div>
+      <button class="btn" type="button" (click)="openCreate()">Add resident</button>
     </header>
 
     <div class="filters">
       <input
-        pInputText
-        type="text"
-        placeholder="Filtrar por unidad"
+        class="input"
+        type="search"
+        placeholder="Filter by unit"
         [ngModel]="facade.unit() ?? ''"
         (ngModelChange)="facade.unit.set($event || undefined)"
-        aria-label="Filtrar por unidad"
+        aria-label="Filter by unit"
       />
-      <p-select
-        [options]="eligibilityOptions"
-        optionLabel="label"
-        optionValue="value"
-        placeholder="Elegibilidad"
-        [ngModel]="facade.eligible()"
-        (ngModelChange)="facade.eligible.set($event ?? undefined)"
-        [showClear]="true"
-        ariaLabel="Filtrar por elegibilidad"
-      />
-      <p-button
-        label="Limpiar"
-        severity="secondary"
-        [text]="true"
-        size="small"
-        (onClick)="facade.resetFilters()"
-      />
+      <select
+        class="select"
+        [ngModel]="eligibleFilter()"
+        (ngModelChange)="setEligibleFilter($event)"
+        aria-label="Filter by eligibility"
+      >
+        <option value="">Any eligibility</option>
+        <option value="yes">Eligible</option>
+        <option value="no">Not eligible</option>
+      </select>
+      <button class="btn btn--bare" type="button" (click)="clearFilters()">Clear</button>
     </div>
 
     @if (facade.error(); as e) {
-      <p-message severity="error" styleClass="w-full">
+      <div class="msg msg--bad" role="alert">
         {{ e.message }}
         @if (e.details?.length) {
-          <ul class="details">
+          <ul class="msg__list">
             @for (d of e.details; track d.field) {
               <li>{{ d.field }}: {{ d.issue }}</li>
             }
           </ul>
         }
-      </p-message>
+      </div>
     }
 
     <app-view-state
       [state]="facade.state()"
-      [skeletonCount]="5"
-      emptyTitle="No hay residentes que coincidan"
-      emptyBody="Probá limpiar los filtros, o creá el primer residente del edificio."
-      emptyActionLabel="Nuevo residente"
+      [skeletonCount]="6"
+      emptyTitle="No residents match"
+      emptyBody="Clear the filters, or add the building's first resident to get started."
+      emptyActionLabel="Add resident"
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <p-table
-        [value]="[...facade.residents()]"
-        styleClass="p-datatable-sm"
-        [tableStyle]="{ 'min-width': '52rem' }"
-      >
-        <ng-template #header>
-          <tr>
-            <th scope="col">Nombre</th>
-            <th scope="col">Unidad</th>
-            <th scope="col">Email</th>
-            <th scope="col">Elegibilidad</th>
-            <th scope="col">Accesible</th>
-            <th scope="col">Cognito</th>
-            <th scope="col"></th>
-          </tr>
-        </ng-template>
-
-        <ng-template #body let-r>
-          <tr>
-            <td class="strong">{{ r.fullName }}</td>
-            <td>{{ r.unitNumber }}</td>
-            <td class="muted">{{ r.email }}</td>
-            <td>
-              @if (r.isEligible) {
-                <app-status-pill label="Elegible" tone="ok" />
-              } @else {
-                <app-status-pill label="No elegible" tone="bad" />
-                @if (r.ineligibleReason) {
-                  <small class="reason">{{ r.ineligibleReason }}</small>
-                }
-              }
-            </td>
-            <td>
-              @if (r.needsAccessibleSpot) {
-                <app-status-pill label="Requiere" tone="warn" />
-              } @else {
-                <span class="muted">—</span>
-              }
-            </td>
-            <td>
-              @if (r.externalSubject) {
-                <app-status-pill label="Vinculado" tone="ok" />
-              } @else {
-                <app-status-pill label="Pendiente" tone="wait" />
-              }
-            </td>
-            <td class="actions">
-              <p-button
-                icon="pi pi-shield"
-                severity="secondary"
-                [text]="true"
-                size="small"
-                ariaLabel="Cambiar elegibilidad"
-                (onClick)="openEligibility(r)"
-              />
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <div class="tbl__wrap">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Unit</th>
+              <th scope="col">Email</th>
+              <th scope="col">Eligibility</th>
+              <th scope="col">Accessible bay</th>
+              <th scope="col">Sign-in</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (r of facade.residents(); track r.id) {
+              <tr>
+                <td class="name">{{ r.fullName }}</td>
+                <td class="unit">{{ r.unitNumber }}</td>
+                <td class="dim">{{ r.email }}</td>
+                <td>
+                  @if (r.isEligible) {
+                    <app-status-pill label="Eligible" tone="held" />
+                  } @else {
+                    <app-status-pill label="Not eligible" tone="revoked" />
+                    @if (r.ineligibleReason) {
+                      <span class="reason">{{ r.ineligibleReason }}</span>
+                    }
+                  }
+                </td>
+                <td>
+                  @if (r.needsAccessibleSpot) {
+                    <app-status-pill label="Required" tone="attention" />
+                  } @else {
+                    <span class="dim">No</span>
+                  }
+                </td>
+                <td>
+                  @if (r.externalSubject) {
+                    <app-status-pill label="Linked" tone="held" />
+                  } @else {
+                    <app-status-pill label="Not signed in yet" tone="waiting" />
+                  }
+                </td>
+                <td>
+                  <button class="btn btn--bare" type="button" (click)="openEligibility(r)">
+                    Eligibility
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
 
       @if (facade.nextCursor()) {
         <div class="more">
-          <p-button
-            label="Cargar más"
-            severity="secondary"
-            size="small"
-            [loading]="facade.busy()"
-            (onClick)="facade.nextPage()"
-          />
+          <button
+            class="btn btn--quiet btn--sm"
+            type="button"
+            [disabled]="facade.busy()"
+            (click)="facade.nextPage()"
+          >
+            Load more
+          </button>
         </div>
       }
     </app-view-state>
 
-    <!-- Create -->
-    <p-dialog
-      header="Nuevo residente"
-      [(visible)]="createOpen"
-      [modal]="true"
-      [style]="{ width: '30rem' }"
-      [draggable]="false"
-    >
-      <div class="form">
-        <label for="nr-name">Nombre completo</label>
-        <input pInputText id="nr-name" [(ngModel)]="form.fullName" autocomplete="off" />
-
-        <label for="nr-unit">Unidad</label>
-        <input pInputText id="nr-unit" [(ngModel)]="form.unitNumber" autocomplete="off" />
-
-        <label for="nr-email">Email</label>
-        <input pInputText id="nr-email" type="email" [(ngModel)]="form.email" autocomplete="off" />
-
-        <div class="check">
-          <p-checkbox [(ngModel)]="form.needsAccessibleSpot" [binary]="true" inputId="nr-acc" />
-          <label for="nr-acc">Requiere lugar accesible</label>
-        </div>
-
-        <p class="hint">
-          El usuario de Cognito se crea de forma asincrónica y el residente recibe la
-          invitación por email. La columna "Cognito" pasa a "Vinculado" en el primer ingreso.
-        </p>
+    <app-modal [open]="createOpen()" title="Add resident" (closed)="createOpen.set(false)">
+      <div class="field">
+        <label class="field__label" for="nr-name">Full name</label>
+        <input class="input" id="nr-name" [(ngModel)]="form.fullName" autocomplete="off" />
       </div>
-
-      <ng-template #footer>
-        <p-button label="Cancelar" severity="secondary" [text]="true" (onClick)="createOpen = false" />
-        <p-button
-          label="Crear"
-          [loading]="facade.busy()"
-          [disabled]="!canSubmit()"
-          (onClick)="submitCreate()"
+      <div class="field">
+        <label class="field__label" for="nr-unit">Unit</label>
+        <input class="input" id="nr-unit" [(ngModel)]="form.unitNumber" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="nr-email">Email</label>
+        <input
+          class="input"
+          id="nr-email"
+          type="email"
+          [(ngModel)]="form.email"
+          autocomplete="off"
         />
-      </ng-template>
-    </p-dialog>
+      </div>
+      <label class="check">
+        <input type="checkbox" [(ngModel)]="form.needsAccessibleSpot" />
+        <span>Needs an accessible bay</span>
+      </label>
+      <p class="field__hint">
+        The resident gets an invitation by email. Their sign-in links itself to this
+        record the first time they use it, which is when "Sign-in" turns to "Linked".
+      </p>
 
-    <!-- Eligibility -->
-    <p-dialog
-      [header]="'Elegibilidad · ' + (editing()?.fullName ?? '')"
-      [(visible)]="eligibilityOpen"
-      [modal]="true"
-      [style]="{ width: '30rem' }"
-      [draggable]="false"
+      <div modalFoot>
+        <button class="btn btn--quiet" type="button" (click)="createOpen.set(false)">Cancel</button>
+        <button
+          class="btn"
+          type="button"
+          [disabled]="!canSubmit() || facade.busy()"
+          (click)="submitCreate()"
+        >
+          Add resident
+        </button>
+      </div>
+    </app-modal>
+
+    <app-modal
+      [open]="eligibilityOpen()"
+      [title]="'Eligibility — ' + (editing()?.fullName ?? '')"
+      (closed)="eligibilityOpen.set(false)"
     >
-      <div class="form">
-        <div class="check">
-          <p-checkbox [(ngModel)]="eligibleDraft" [binary]="true" inputId="el-flag" />
-          <label for="el-flag">Es elegible para el sorteo</label>
-        </div>
+      <label class="check">
+        <input type="checkbox" [(ngModel)]="eligibleDraft" />
+        <span>May enter the draw</span>
+      </label>
 
-        @if (!eligibleDraft) {
-          <label for="el-reason">Motivo (obligatorio)</label>
+      @if (!eligibleDraft) {
+        <div class="field">
+          <label class="field__label" for="el-reason">Reason</label>
           <textarea
-            pTextarea
+            class="input"
             id="el-reason"
             rows="3"
             [(ngModel)]="reasonDraft"
-            placeholder="Ej.: expensas impagas"
+            placeholder="For example: unpaid dues"
           ></textarea>
-          <p class="hint">
-            El motivo queda en el registro de auditoría y se le muestra al residente.
-          </p>
-        }
-      </div>
+        </div>
+        <p class="field__hint">
+          The reason is recorded in the audit log and shown to the resident, so write it
+          as you would say it to them.
+        </p>
+      }
 
-      <ng-template #footer>
-        <p-button
-          label="Cancelar"
-          severity="secondary"
-          [text]="true"
-          (onClick)="eligibilityOpen = false"
-        />
-        <p-button
-          label="Guardar"
-          [loading]="facade.busy()"
-          [disabled]="!eligibleDraft && !reasonDraft.trim()"
-          (onClick)="submitEligibility()"
-        />
-      </ng-template>
-    </p-dialog>
+      <div modalFoot>
+        <button class="btn btn--quiet" type="button" (click)="eligibilityOpen.set(false)">
+          Cancel
+        </button>
+        <button
+          class="btn"
+          type="button"
+          [disabled]="(!eligibleDraft && !reasonDraft.trim()) || facade.busy()"
+          (click)="submitEligibility()"
+        >
+          Save
+        </button>
+      </div>
+    </app-modal>
   `,
   styles: [
     `
       :host {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: var(--sp-4);
       }
       .head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 1rem;
-      }
-      .title {
-        margin: 0;
-        font-size: 1.35rem;
-        font-weight: 680;
-      }
-      .filters {
-        display: flex;
-        gap: 0.6rem;
-        align-items: center;
+        gap: var(--sp-5);
         flex-wrap: wrap;
       }
-      .strong {
-        font-weight: 620;
+      .head__h {
+        font-size: var(--t-head);
       }
-      .muted {
-        color: #7a7a7a;
+      .head__p {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
+      }
+
+      .filters {
+        display: flex;
+        gap: var(--sp-3);
+        align-items: center;
+        flex-wrap: wrap;
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: var(--sp-4);
+      }
+
+      .msg__list {
+        margin: var(--sp-2) 0 0;
+        padding-left: var(--sp-4);
+        font-size: var(--t-fine);
+      }
+
+      .name {
+        font-weight: 600;
+      }
+      .unit {
+        font-variation-settings:
+          'wdth' 112,
+          'wght' 620;
+      }
+      .dim {
+        color: var(--steel-faint);
       }
       .reason {
         display: block;
-        color: #7c2d14;
-        margin-top: 0.2rem;
-      }
-      .actions {
-        text-align: right;
+        color: var(--revoked);
+        font-size: var(--t-fine);
+        margin-top: var(--sp-1);
       }
       .more {
-        margin-top: 0.8rem;
-        text-align: center;
-      }
-      .form {
-        display: flex;
-        flex-direction: column;
-        gap: 0.45rem;
-      }
-      .form label {
-        font-size: 0.82rem;
-        font-weight: 600;
-        margin-top: 0.4rem;
-      }
-      .check {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-top: 0.7rem;
-      }
-      .check label {
-        margin: 0;
-        font-weight: 500;
-      }
-      .hint {
-        margin: 0.6rem 0 0;
-        font-size: 0.8rem;
-        color: #6a6a6a;
-        line-height: 1.45;
-      }
-      .details {
-        margin: 0.35rem 0 0;
-        padding-left: 1.1rem;
-        font-size: 0.82rem;
+        margin-top: var(--sp-4);
       }
     `,
   ],
@@ -329,19 +284,28 @@ import { ViewStateHost } from '../../shared/ui/view-state';
 export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
 
-  readonly eligibilityOptions = [
-    { label: 'Elegibles', value: true },
-    { label: 'No elegibles', value: false },
-  ];
+  readonly createOpen = signal(false);
+  readonly eligibilityOpen = signal(false);
+  readonly editing = signal<Resident | null>(null);
 
-  createOpen = false;
-  eligibilityOpen = false;
   eligibleDraft = true;
   reasonDraft = '';
 
-  readonly editing = signal<Resident | null>(null);
-
   form = { fullName: '', unitNumber: '', email: '', needsAccessibleSpot: false };
+
+  /** The native select speaks strings, so the tri-state is mapped at the boundary. */
+  eligibleFilter(): string {
+    const v = this.facade.eligible();
+    return v === undefined ? '' : v ? 'yes' : 'no';
+  }
+
+  setEligibleFilter(v: string): void {
+    this.facade.eligible.set(v === '' ? undefined : v === 'yes');
+  }
+
+  clearFilters(): void {
+    this.facade.resetFilters();
+  }
 
   canSubmit(): boolean {
     return (
@@ -354,7 +318,7 @@ export default class ResidentsPage {
   openCreate(): void {
     this.form = { fullName: '', unitNumber: '', email: '', needsAccessibleSpot: false };
     this.facade.dismissError();
-    this.createOpen = true;
+    this.createOpen.set(true);
   }
 
   async submitCreate(): Promise<void> {
@@ -364,7 +328,7 @@ export default class ResidentsPage {
       unitNumber: this.form.unitNumber.trim(),
       needsAccessibleSpot: this.form.needsAccessibleSpot,
     });
-    if (r) this.createOpen = false;
+    if (r) this.createOpen.set(false);
   }
 
   openEligibility(r: Resident): void {
@@ -372,7 +336,7 @@ export default class ResidentsPage {
     this.eligibleDraft = r.isEligible;
     this.reasonDraft = r.ineligibleReason ?? '';
     this.facade.dismissError();
-    this.eligibilityOpen = true;
+    this.eligibilityOpen.set(true);
   }
 
   async submitEligibility(): Promise<void> {
@@ -383,6 +347,6 @@ export default class ResidentsPage {
       this.eligibleDraft,
       this.eligibleDraft ? null : this.reasonDraft.trim(),
     );
-    if (done) this.eligibilityOpen = false;
+    if (done) this.eligibilityOpen.set(false);
   }
 }

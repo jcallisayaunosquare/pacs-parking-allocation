@@ -1,219 +1,193 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { ConfirmDialogModule } from 'primeng/confirmdialog';
-import { MessageModule } from 'primeng/message';
-import { ConfirmationService } from 'primeng/api';
 import { DashboardFacade } from '../../application/dashboard.facade';
-import { StatusPill } from '../../shared/ui/status-pill';
+import { Bay } from '../../shared/ui/bay';
+import type { PillTone } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { FairnessExplainer } from '../../shared/ui/fairness-explainer';
+import { ConfirmService } from '../../shared/ui/confirm';
 
 /**
- * The resident dashboard — §17's three states in one layout:
- * holds a spot, on the waitlist, registration open.
+ * The resident screen. §17's three situations, one layout, and the bay carrying the
+ * answer so it reads from across the room.
  *
- * One page-level query feeds presentational children; no child fetches on its own.
- * The status card is `aria-live="polite"` so a screen reader announces a changed
- * allocation, and every irreversible action goes through a confirm dialog.
+ * One page-level query feeds everything; no child fetches on its own, which is what
+ * keeps this from becoming six spinners and four race conditions. The bay is an
+ * aria-live region so a screen reader announces an allocation that changed while the
+ * page was open.
  */
 @Component({
   selector: 'app-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    DatePipe,
-    RouterLink,
-    ButtonModule,
-    ConfirmDialogModule,
-    MessageModule,
-    StatusPill,
-    ViewStateHost,
-    FairnessExplainer,
-  ],
-  providers: [ConfirmationService],
+  imports: [DatePipe, RouterLink, Bay, ViewStateHost, FairnessExplainer],
   template: `
-    <p-confirm-dialog />
-
-    <header class="page__head">
-      <div>
-        <h1 class="page__title">Tu estacionamiento</h1>
-        @if (facade.resident(); as r) {
-          <p class="page__sub">{{ r.fullName }} · unidad {{ r.unit }}</p>
-        }
-      </div>
-      <p-button
-        icon="pi pi-refresh"
-        severity="secondary"
-        [text]="true"
-        ariaLabel="Actualizar"
-        [disabled]="facade.busy()"
-        (onClick)="facade.refresh()"
-      />
+    <header class="head">
+      <h1 class="head__h">Your parking</h1>
+      @if (facade.resident(); as r) {
+        <p class="head__who">{{ r.fullName }}, unit {{ r.unit }}</p>
+      }
     </header>
 
     @if (facade.mutationError(); as err) {
-      <p-message severity="error" styleClass="w-full mb-3">
+      <div class="msg msg--bad" role="alert">
         {{ err.message }}
-        @if (err.traceId) {
-          <small class="trace"> ({{ err.traceId }})</small>
-        }
-      </p-message>
+        <button class="btn btn--bare" type="button" (click)="facade.dismissError()">Dismiss</button>
+      </div>
     }
 
     <app-view-state
       [state]="facade.state()"
-      [skeletonCount]="3"
-      emptyTitle="Todavía no tenés actividad"
-      emptyBody="Cuando se abra la inscripción del próximo trimestre vas a poder anotarte desde acá."
+      [skeletonCount]="4"
+      emptyTitle="No parking activity yet"
+      emptyBody="When the building opens registration for the next quarter, you can enter the draw from this page."
       (retry)="facade.refresh()"
     >
-      <!-- Status card: switches on assignment | waitlist | open | closed -->
-      <section class="card status" aria-live="polite" aria-atomic="true">
+      <div class="live" aria-live="polite" aria-atomic="true">
         @switch (facade.situation()) {
           @case ('holds-spot') {
             @if (facade.assignment(); as a) {
-              <div class="status__row">
-                <span class="status__spot">{{ a.spotCode }}</span>
-                <span class="status__meta">
-                  Nivel {{ a.level }} · {{ typeLabel(a.type) }}
-                </span>
-                <app-status-pill label="Activo" tone="ok" />
-              </div>
-              <p class="status__line">
-                Tuyo hasta el {{ a.validUntil | date: 'd MMMM y' }}
-              </p>
-              <div class="status__actions">
-                <p-button
-                  label="Liberar este lugar"
-                  icon="pi pi-sign-out"
-                  severity="danger"
-                  [outlined]="true"
-                  size="small"
-                  [loading]="facade.busy()"
-                  (onClick)="confirmRelease()"
-                />
-              </div>
+              <app-bay
+                variant="held"
+                [code]="a.spotCode"
+                [caption]="'Level ' + a.level + ', ' + bayType(a.type)"
+                [note]="'Yours until ' + (a.validUntil | date: 'd MMMM y')"
+                [label]="'You hold bay ' + a.spotCode"
+                status="Held"
+                statusTone="held"
+              >
+                <button
+                  class="btn btn--on-dark btn--sm"
+                  type="button"
+                  [disabled]="facade.busy()"
+                  (click)="release()"
+                >
+                  Release this spot
+                </button>
+              </app-bay>
             }
           }
 
           @case ('waitlisted') {
             @if (facade.waitlist(); as w) {
-              <div class="status__row">
-                <span class="status__spot">#{{ w.position }}</span>
-                <span class="status__meta">en la lista de espera</span>
-                <app-status-pill label="Esperando" tone="wait" />
-              </div>
-              <p class="status__line">
-                Te avisamos en cuanto se libere un lugar. No hace falta hacer nada.
-              </p>
+              <app-bay
+                variant="waiting"
+                [code]="'Position ' + w.position"
+                caption="You are on the waitlist for this quarter."
+                note="If someone releases a bay, the first person in the queue gets it. You will be told."
+                [label]="'Waitlist position ' + w.position"
+                status="Waiting"
+                statusTone="waiting"
+              />
             }
           }
 
           @case ('registration-open') {
             @if (facade.nextCycle(); as c) {
-              <div class="status__row">
-                <span class="status__spot">{{ c.label }}</span>
-                <span class="status__meta">inscripción abierta</span>
-                <app-status-pill label="Abierta" tone="ok" />
-              </div>
-              <p class="status__line">
-                Cierra el {{ c.registrationClosesAt | date: 'd MMMM' }}
-                @if (daysLeft(c.registrationClosesAt) !== null) {
-                  · faltan {{ daysLeft(c.registrationClosesAt) }}
-                  {{ daysLeft(c.registrationClosesAt) === 1 ? 'día' : 'días' }}
-                }
-              </p>
-              <div class="status__actions">
+              <app-bay
+                variant="open"
+                [code]="c.label"
+                caption="Registration is open."
+                [note]="closingNote(c.registrationClosesAt)"
+                [label]="'Registration open for ' + c.label"
+                [status]="openBayStatus()"
+                [statusTone]="openBayTone()"
+              >
                 @if (facade.registered()) {
-                  <app-status-pill label="Ya estás anotado" tone="ok" />
-                  <p-button
-                    label="Retirarme"
-                    severity="secondary"
-                    [text]="true"
-                    size="small"
-                    [loading]="facade.busy()"
-                    (onClick)="confirmWithdraw()"
-                  />
+                  <button
+                    class="btn btn--bare"
+                    type="button"
+                    [disabled]="facade.busy()"
+                    (click)="withdraw()"
+                  >
+                    Withdraw
+                  </button>
                 } @else if (facade.canRegister()) {
-                  <p-button
-                    label="Entrar al sorteo"
-                    icon="pi pi-ticket"
-                    [loading]="facade.busy()"
-                    (onClick)="facade.register()"
-                  />
+                  <button
+                    class="btn btn--go"
+                    type="button"
+                    [disabled]="facade.busy()"
+                    (click)="facade.register()"
+                  >
+                    Enter the draw
+                  </button>
                 } @else {
-                  <app-status-pill label="No elegible" tone="bad" />
-                  <small class="status__note">
-                    Hablá con la administración para resolverlo.
-                  </small>
+                  <p class="ineligible">
+                    Ask the building administration to resolve this before the draw.
+                  </p>
                 }
-              </div>
+              </app-bay>
             }
           }
 
           @default {
-            <div class="status__row">
-              <span class="status__meta">Sin ciclo abierto en este momento</span>
-              <app-status-pill label="Inactivo" tone="muted" />
-            </div>
-            <p class="status__line">
-              Cuando la administración abra el próximo trimestre vas a verlo acá.
-            </p>
+            <app-bay
+              variant="closed"
+              code="No open cycle"
+              caption="Nothing is being allocated right now."
+              note="The building opens registration once a quarter, before the draw."
+              label="No open cycle"
+              status="Closed"
+              statusTone="idle"
+            />
           }
         }
-      </section>
-
-      @if (facade.nextCycle(); as c) {
-        <section class="card next">
-          <h2 class="card__title">Próximo ciclo · {{ c.label }}</h2>
-          <dl class="next__grid">
-            <div>
-              <dt>Abre</dt>
-              <dd>{{ c.registrationOpensAt | date: 'd MMM' }}</dd>
-            </div>
-            <div>
-              <dt>Cierra</dt>
-              <dd>{{ c.registrationClosesAt | date: 'd MMM' }}</dd>
-            </div>
-            <div>
-              <dt>Vigencia</dt>
-              <dd>{{ c.startsOn | date: 'd MMM' }} – {{ c.endsOn | date: 'd MMM' }}</dd>
-            </div>
-          </dl>
-        </section>
-      }
+      </div>
 
       @if (facade.fairness(); as f) {
         <app-fairness-explainer [fairness]="f" />
       }
 
-      <section class="card recent">
+      @if (facade.nextCycle(); as c) {
+        <section class="cycle">
+          <h2 class="sec__h">Next cycle {{ c.label }}</h2>
+          <ol class="timeline">
+            <li class="timeline__step" [class.timeline__step--done]="past(c.registrationOpensAt)">
+              <span class="timeline__when">{{ c.registrationOpensAt | date: 'd MMM' }}</span>
+              <span class="timeline__what">Registration opens</span>
+            </li>
+            <li class="timeline__step" [class.timeline__step--done]="past(c.registrationClosesAt)">
+              <span class="timeline__when">{{ c.registrationClosesAt | date: 'd MMM' }}</span>
+              <span class="timeline__what">Registration closes</span>
+            </li>
+            <li class="timeline__step" [class.timeline__step--done]="past(c.startsOn)">
+              <span class="timeline__when">{{ c.startsOn | date: 'd MMM' }}</span>
+              <span class="timeline__what">Quarter begins</span>
+            </li>
+          </ol>
+        </section>
+      }
+
+      <section class="recent">
         <div class="recent__head">
-          <h2 class="card__title">Historial reciente</h2>
-          <a routerLink="/history" class="recent__all">Ver todo</a>
+          <h2 class="sec__h">Recent results</h2>
+          <a routerLink="/history">All results</a>
         </div>
+
         @if (recent().length === 0) {
-          <p class="recent__empty">
-            Todavía no participaste en un sorteo. Tu primer resultado va a aparecer acá.
+          <p class="recent__none">
+            You have not been in a draw yet. Your first result will appear here, with the
+            score it was drawn against.
           </p>
         } @else {
-          <ul class="recent__list">
+          <ul class="results">
             @for (h of recent(); track h.cycle + h.recordedAt.toISOString()) {
-              <li class="recent__item">
-                <span class="recent__cycle">{{ h.cycle }}</span>
-                @switch (h.result) {
-                  @case ('ASSIGNED') {
-                    <app-status-pill [label]="'Ganaste ' + h.spotCode" tone="ok" />
+              <li class="results__row">
+                <span class="results__cycle">{{ h.cycle }}</span>
+                <span class="results__what">
+                  @switch (h.result) {
+                    @case ('ASSIGNED') {
+                      Won {{ h.spotCode }}
+                    }
+                    @case ('WAITLISTED') {
+                      Waitlist position {{ h.position }}
+                    }
+                    @default {
+                      Did not take part
+                    }
                   }
-                  @case ('WAITLISTED') {
-                    <app-status-pill [label]="'Lista de espera #' + h.position" tone="wait" />
-                  }
-                  @default {
-                    <app-status-pill label="No participaste" tone="muted" />
-                  }
-                }
-                <span class="recent__score">puntaje {{ h.scoreAtDraw }}</span>
+                </span>
+                <span class="results__score">{{ h.scoreAtDraw }} score at draw</span>
               </li>
             }
           </ul>
@@ -226,165 +200,163 @@ import { FairnessExplainer } from '../../shared/ui/fairness-explainer';
       :host {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: var(--sp-6);
       }
-      .page__head {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 1rem;
+
+      .head__h {
+        font-size: var(--t-head);
       }
-      .page__title {
-        margin: 0;
-        font-size: 1.35rem;
-        font-weight: 680;
+      .head__who {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
       }
-      .page__sub {
-        margin: 0.2rem 0 0;
-        color: #5d5d5d;
-        font-size: 0.88rem;
-      }
-      .card {
-        border: 1px solid var(--p-content-border-color, #dcdcdc);
-        border-radius: 12px;
-        padding: 1.05rem 1.15rem;
-        background: #fff;
-      }
-      .card__title {
-        margin: 0;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        font-weight: 700;
-        color: #6a6a6a;
-      }
-      .status {
-        border-width: 2px;
-        border-color: #c9c3b8;
-      }
-      .status__row {
+
+      .msg {
         display: flex;
         align-items: baseline;
-        gap: 0.75rem;
-        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: var(--sp-4);
       }
-      .status__spot {
-        font-size: 1.7rem;
-        font-weight: 720;
-        letter-spacing: -0.01em;
-        line-height: 1;
+
+      .live {
+        margin-bottom: var(--sp-6);
       }
-      .status__meta {
-        color: #5d5d5d;
-        font-size: 0.9rem;
+
+      .ineligible {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
       }
-      .status__line {
-        margin: 0.6rem 0 0;
-        font-size: 0.95rem;
+
+      .sec__h {
+        font-size: var(--t-lead);
+        margin-bottom: var(--sp-3);
       }
-      .status__actions {
-        margin-top: 0.9rem;
+
+      .cycle,
+      .recent {
+        border-top: 1px solid var(--rule);
+        padding-top: var(--sp-4);
+      }
+
+      /* A genuine sequence, so it reads along a line. */
+      .timeline {
+        list-style: none;
+        margin: 0;
+        padding: 0;
         display: flex;
-        align-items: center;
-        gap: 0.65rem;
         flex-wrap: wrap;
+        gap: var(--sp-5);
       }
-      .status__note {
-        color: #6a6a6a;
-      }
-      .next__grid {
+      .timeline__step {
         display: flex;
-        gap: 2rem;
-        margin: 0.7rem 0 0;
-        flex-wrap: wrap;
+        flex-direction: column;
+        border-top: 3px solid var(--rule);
+        padding-top: var(--sp-2);
+        min-width: 10rem;
       }
-      .next__grid dt {
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #7a7a7a;
+      .timeline__step--done {
+        border-top-color: var(--steel);
       }
-      .next__grid dd {
-        margin: 0.15rem 0 0;
-        font-weight: 600;
+      .timeline__when {
+        font-weight: 650;
       }
+      .timeline__what {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
+      }
+
       .recent__head {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
+        gap: var(--sp-4);
       }
-      .recent__all {
-        font-size: 0.82rem;
+      .recent__none {
+        color: var(--steel-soft);
       }
-      .recent__list {
+
+      .results {
         list-style: none;
-        margin: 0.7rem 0 0;
+        margin: 0;
         padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
       }
-      .recent__item {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        flex-wrap: wrap;
+      .results__row {
+        display: grid;
+        grid-template-columns: 6rem 1fr auto;
+        gap: var(--sp-4);
+        align-items: baseline;
+        padding: var(--sp-3) 0;
+        border-bottom: 1px solid var(--rule-soft);
       }
-      .recent__cycle {
+      .results__cycle {
         font-weight: 650;
-        min-width: 4.5rem;
       }
-      .recent__score {
-        color: #7a7a7a;
-        font-size: 0.8rem;
+      .results__score {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
       }
-      .recent__empty {
-        margin: 0.7rem 0 0;
-        color: #6a6a6a;
-        font-size: 0.9rem;
-      }
-      .trace {
-        opacity: 0.7;
+
+      @media (max-width: 34rem) {
+        .results__row {
+          grid-template-columns: 1fr;
+          gap: var(--sp-1);
+        }
       }
     `,
   ],
 })
 export default class DashboardPage {
   readonly facade = inject(DashboardFacade);
-  private readonly confirm = inject(ConfirmationService);
+  private readonly confirm = inject(ConfirmService);
 
   readonly recent = computed(() => this.facade.value()?.recentHistory ?? []);
 
-  typeLabel(t: string): string {
-    return t === 'ACCESSIBLE' ? 'Accesible' : t === 'EV' ? 'Eléctrico' : 'Estándar';
+  /** The open bay's marker depends on whether the resident is in and eligible. */
+  readonly openBayStatus = computed<string>(() => {
+    if (this.facade.registered()) return 'You are entered';
+    return this.facade.canRegister() ? 'Open' : 'Not eligible';
+  });
+
+  readonly openBayTone = computed<PillTone>(() => {
+    if (this.facade.registered()) return 'held';
+    return this.facade.canRegister() ? 'attention' : 'revoked';
+  });
+
+  bayType(t: string): string {
+    return t === 'ACCESSIBLE' ? 'accessible bay' : t === 'EV' ? 'EV bay' : 'standard bay';
   }
 
-  /** Null rather than a negative number once the date has passed. */
-  daysLeft(at: Date): number | null {
-    const ms = at.getTime() - Date.now();
-    return ms <= 0 ? null : Math.ceil(ms / 86_400_000);
+  past(at: Date): boolean {
+    return at.getTime() <= Date.now();
   }
 
-  confirmRelease(): void {
-    this.confirm.confirm({
-      header: '¿Liberar tu lugar?',
-      message:
-        'El lugar pasa a la primera persona de la lista de espera y no podés recuperarlo ' +
-        'hasta el próximo sorteo. Tu puntaje de equidad no cambia.',
-      acceptLabel: 'Sí, liberarlo',
-      rejectLabel: 'Cancelar',
-      acceptButtonStyleClass: 'p-button-danger',
-      accept: () => void this.facade.releaseSpot(),
+  closingNote(closesAt: Date): string {
+    const days = Math.ceil((closesAt.getTime() - Date.now()) / 86_400_000);
+    if (days <= 0) return 'Registration has closed. The draw runs next.';
+    if (days === 1) return 'Registration closes tomorrow.';
+    return `Registration closes in ${days} days.`;
+  }
+
+  async release(): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: 'Release your bay?',
+      body:
+        'The bay goes to the first person on the waitlist and you cannot take it back ' +
+        'until the next draw. Your score is not affected.',
+      confirmLabel: 'Release it',
+      cancelLabel: 'Keep it',
+      danger: true,
     });
+    if (ok) await this.facade.releaseSpot();
   }
 
-  confirmWithdraw(): void {
-    this.confirm.confirm({
-      header: '¿Retirarte del sorteo?',
-      message: 'Podés volver a anotarte mientras la inscripción siga abierta.',
-      acceptLabel: 'Sí, retirarme',
-      rejectLabel: 'Cancelar',
-      accept: () => void this.facade.withdraw(),
+  async withdraw(): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: 'Withdraw from the draw?',
+      body: 'You can enter again while registration is still open.',
+      confirmLabel: 'Withdraw',
+      cancelLabel: 'Stay in',
     });
+    if (ok) await this.facade.withdraw();
   }
 }

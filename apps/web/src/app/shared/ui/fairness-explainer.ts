@@ -1,107 +1,135 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import type { Fairness } from '../../domain/models';
 
 /**
- * The number and the sentence, together.
+ * The number and the sentence that makes it mean something.
  *
- * §17's design rule, and the reason this component exists at all: "fairness score: 3"
- * means nothing to a resident; "you have missed 3 quarters, so your name goes in the
- * hat 4 times" means everything. The sentence comes from the API alongside the value so
- * the two can never drift apart — the frontend does not compose it and must not.
+ * §17's rule: "fairness score: 3" tells a resident nothing; "you have missed 3
+ * quarters, so your name goes in the hat 4 times" tells them everything. The sentence
+ * comes from the API next to the value, so the two cannot drift apart — this component
+ * never composes it.
+ *
+ * Drawn as a row of entries rather than a progress bar, because the quantity really is
+ * countable: each mark is one slip of paper with your name on it.
  */
 @Component({
   selector: 'app-fairness-explainer',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <section class="fair" aria-labelledby="fairness-heading">
-      <header class="fair__head">
-        <h3 class="fair__title" id="fairness-heading">Tu puntaje de equidad</h3>
-        <div class="fair__numbers">
-          <span class="fair__score">{{ fairness().score }}</span>
-          <span class="fair__arrow" aria-hidden="true">→</span>
-          <span class="fair__weight">
-            <span class="fair__weight-value">{{ fairness().drawWeight }}</span>
-            <span class="fair__weight-unit">{{
-              fairness().drawWeight === 1 ? 'entrada' : 'entradas'
-            }}</span>
-          </span>
-        </div>
-      </header>
+    <section class="fair" aria-labelledby="fair-h">
+      <h2 class="fair__h" id="fair-h">Your odds in the next draw</h2>
+
+      <div class="fair__count">
+        <span class="fair__weight stencil">{{ fairness().drawWeight }}</span>
+        <span class="fair__unit">{{ fairness().drawWeight === 1 ? 'entry' : 'entries' }}</span>
+      </div>
+
+      <div class="fair__marks" aria-hidden="true">
+        @for (m of marks(); track m) {
+          <span class="fair__mark"></span>
+        }
+        @if (overflow() > 0) {
+          <span class="fair__more">+{{ overflow() }}</span>
+        }
+      </div>
 
       <p class="fair__sentence">{{ fairness().explanation }}</p>
 
-      @if (fairness().totalWins > 0) {
-        <p class="fair__meta">
-          Ganaste {{ fairness().totalWins }}
-          {{ fairness().totalWins === 1 ? 'vez' : 'veces' }} en total.
-        </p>
-      }
+      <dl class="fair__meta">
+        <div>
+          <dt>Missed cycles</dt>
+          <dd>{{ fairness().consecutiveMisses }}</dd>
+        </div>
+        <div>
+          <dt>Times you have won</dt>
+          <dd>{{ fairness().totalWins }}</dd>
+        </div>
+      </dl>
     </section>
   `,
   styles: [
     `
       .fair {
-        border: 1px solid var(--p-content-border-color, #dcdcdc);
-        border-radius: 12px;
-        padding: 1rem 1.15rem;
-        background: #fbfaf8;
+        border-top: 2px solid var(--steel);
+        padding-top: var(--sp-4);
       }
-      .fair__head {
+
+      .fair__h {
+        font-size: var(--t-lead);
+        margin-bottom: var(--sp-3);
+      }
+
+      .fair__count {
         display: flex;
         align-items: baseline;
-        justify-content: space-between;
-        gap: 1rem;
-        flex-wrap: wrap;
+        gap: var(--sp-2);
       }
-      .fair__title {
-        margin: 0;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        font-weight: 700;
-        color: #6a6a6a;
-      }
-      .fair__numbers {
-        display: flex;
-        align-items: baseline;
-        gap: 0.5rem;
-      }
-      .fair__score {
-        font-size: 1.6rem;
-        font-weight: 700;
-        line-height: 1;
-      }
-      .fair__arrow {
-        color: #9a9a9a;
-      }
+
       .fair__weight {
-        display: flex;
-        align-items: baseline;
-        gap: 0.3rem;
+        font-size: 2.75rem;
+        color: var(--steel);
       }
-      .fair__weight-value {
-        font-size: 1.6rem;
-        font-weight: 700;
-        line-height: 1;
-        color: #2c6b4a;
+
+      .fair__unit {
+        font-size: var(--t-body);
+        color: var(--steel-soft);
       }
-      .fair__weight-unit {
-        font-size: 0.82rem;
-        color: #5d5d5d;
+
+      /* One mark per slip of paper in the hat. Countable, so it is counted. */
+      .fair__marks {
+        display: flex
+;
+        align-items: flex-end;
+        gap: 4px;
+        height: 1.5rem;
+        margin-top: var(--sp-2);
       }
+
+      .fair__mark {
+        width: 7px;
+        height: 100%;
+        background: var(--bay-line);
+        border-bottom: 2px solid var(--bay-line-deep);
+      }
+
+      .fair__more {
+        font-size: var(--t-fine);
+        color: var(--steel-soft);
+        margin-left: var(--sp-1);
+      }
+
       .fair__sentence {
-        margin: 0.7rem 0 0;
-        line-height: 1.55;
-        font-size: 0.95rem;
+        margin-top: var(--sp-3);
+        font-size: var(--t-body);
+        max-width: 60ch;
       }
+
       .fair__meta {
-        margin: 0.45rem 0 0;
-        font-size: 0.82rem;
-        color: #6a6a6a;
+        display: flex;
+        gap: var(--sp-6);
+        margin: var(--sp-4) 0 0;
+      }
+
+      .fair__meta dt {
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+
+      .fair__meta dd {
+        margin: 2px 0 0;
+        font-size: var(--t-lead);
+        font-weight: 600;
       }
     `,
   ],
 })
 export class FairnessExplainer {
   readonly fairness = input.required<Fairness>();
+
+  /** Capped so a very unlucky resident does not produce a hundred marks. */
+  readonly marks = computed(() =>
+    Array.from({ length: Math.min(this.fairness().drawWeight, 24) }, (_, i) => i),
+  );
+
+  readonly overflow = computed(() => Math.max(0, this.fairness().drawWeight - 24));
 }

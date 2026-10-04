@@ -1,83 +1,69 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import { ButtonModule } from 'primeng/button';
-import { SkeletonModule } from 'primeng/skeleton';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import type { ViewState } from '../../domain/models';
 
 /**
  * One component for the five states §17 requires of every screen, so no page has to
- * remember all five and none of them drifts.
+ * remember all five and none of them drifts apart from the others.
  *
- *   loading    skeletons shaped like the content, never a centred spinner that shifts
- *              the layout when it resolves
- *   empty      says what will appear here and when
- *   error      names what failed and what to do, with a copyable trace id
+ *   loading    bars shaped like the content, so nothing jumps when it resolves
+ *   empty      says what will appear here and what to do about it
+ *   error      names what failed and offers the trace id support will ask for
  *   forbidden  a product state, not a crash
- *   ready      projects the content; when `stale` it dims rather than flashing empty
+ *   ready      projects the content, dimmed while revalidating rather than flashing
  *
- * The ready content is projected, so the page keeps owning its own markup.
+ * No boxes: these states are set off by a rule and whitespace, so a screen does not
+ * become a grid of identical panels.
  */
 @Component({
   selector: 'app-view-state',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, SkeletonModule],
   template: `
     @switch (state().kind) {
       @case ('loading') {
-        <div class="skeletons" [attr.aria-busy]="true" aria-live="polite">
-          @for (row of skeletonRows(); track row) {
-            <p-skeleton height="3.25rem" styleClass="mb-2" />
+        <div class="bars" aria-busy="true" aria-live="polite">
+          @for (row of rows(); track row) {
+            <span class="bars__row" [style.width.%]="80 - row * 9"></span>
           }
-          <span class="sr-only">Cargando…</span>
+          <span class="sr-only">Loading</span>
         </div>
       }
 
       @case ('empty') {
-        <div class="state state--empty">
-          <i class="pi pi-inbox state__icon" aria-hidden="true"></i>
-          <h3 class="state__title">{{ emptyTitle() }}</h3>
-          <p class="state__body">{{ emptyBody() }}</p>
+        <div class="note">
+          <h3 class="note__h">{{ emptyTitle() }}</h3>
+          <p class="note__p">{{ emptyBody() }}</p>
           @if (emptyActionLabel()) {
-            <p-button
-              [label]="emptyActionLabel()!"
-              severity="secondary"
-              size="small"
-              (onClick)="action.emit()"
-            />
+            <button class="btn btn--quiet btn--sm" type="button" (click)="action.emit()">
+              {{ emptyActionLabel() }}
+            </button>
           }
         </div>
       }
 
       @case ('forbidden') {
-        <div class="state state--forbidden" role="alert">
-          <i class="pi pi-lock state__icon" aria-hidden="true"></i>
-          <h3 class="state__title">Esta sección es solo para administradores</h3>
-          <p class="state__body">
-            Tu cuenta no tiene ese permiso. Si creés que debería, hablá con la administración
-            del edificio.
+        <div class="note note--stop" role="alert">
+          <h3 class="note__h">This page is for building administrators</h3>
+          <p class="note__p">
+            Your account does not have that permission. If it should, ask the building
+            administration to grant it.
           </p>
         </div>
       }
 
       @case ('error') {
-        <div class="state state--error" role="alert">
-          <i class="pi pi-exclamation-triangle state__icon" aria-hidden="true"></i>
-          <h3 class="state__title">{{ errorTitle() }}</h3>
-          <p class="state__body">{{ errorMessage() }}</p>
-          @if (traceId()) {
-            <p class="state__trace">
-              Código de seguimiento:
-              <code>{{ traceId() }}</code>
-              <p-button
-                icon="pi pi-copy"
-                severity="secondary"
-                [text]="true"
-                size="small"
-                ariaLabel="Copiar código de seguimiento"
-                (onClick)="copyTrace()"
-              />
-            </p>
-          }
-          <p-button label="Reintentar" icon="pi pi-refresh" size="small" (onClick)="retry.emit()" />
+        <div class="note note--stop" role="alert">
+          <h3 class="note__h">{{ errorTitle() }}</h3>
+          <p class="note__p">{{ errorMessage() }}</p>
+          <div class="note__row">
+            <button class="btn btn--sm" type="button" (click)="retry.emit()">Try again</button>
+            @if (traceId()) {
+              <button class="trace" type="button" (click)="copyTrace()">
+                <span class="trace__label">Reference</span>
+                <code>{{ traceId() }}</code>
+                <span class="trace__hint">{{ copied() ? 'copied' : 'copy' }}</span>
+              </button>
+            }
+          </div>
         </div>
       }
 
@@ -90,82 +76,90 @@ import type { ViewState } from '../../domain/models';
   `,
   styles: [
     `
-      .state {
+      .bars {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 0.6rem;
-        padding: 2.5rem 1.25rem;
-        text-align: center;
-        border: 1px dashed var(--p-content-border-color, #d7d7d7);
-        border-radius: 12px;
-        background: var(--p-content-background, #fff);
+        gap: var(--sp-3);
+        padding: var(--sp-2) 0;
       }
-      .state__icon {
-        font-size: 1.75rem;
-        opacity: 0.55;
+      .bars__row {
+        height: 1.15rem;
+        min-width: 6rem;
+        background: var(--concrete-deep);
       }
-      .state__title {
-        margin: 0;
-        font-size: 1.02rem;
-        font-weight: 650;
+
+      .note {
+        border-left: 3px solid var(--rule);
+        padding: var(--sp-1) 0 var(--sp-1) var(--sp-4);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--sp-2);
       }
-      .state__body {
-        margin: 0;
-        max-width: 46ch;
-        color: var(--p-text-muted-color, #5d5d5d);
-        font-size: 0.9rem;
-        line-height: 1.5;
+      .note--stop {
+        border-left-color: var(--revoked);
       }
-      .state__trace {
-        margin: 0;
-        font-size: 0.8rem;
+      .note__h {
+        font-size: var(--t-lead);
+      }
+      .note__p {
+        color: var(--steel-soft);
+        max-width: 56ch;
+      }
+      .note__row {
         display: flex;
         align-items: center;
-        gap: 0.35rem;
+        gap: var(--sp-3);
+        flex-wrap: wrap;
+        margin-top: var(--sp-1);
       }
-      .state__trace code {
-        background: #f1f1f1;
-        padding: 0.1rem 0.35rem;
+
+      .trace {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--sp-2);
+        background: var(--concrete-deep);
+        border: 1px solid var(--rule);
         border-radius: 4px;
+        padding: 0.3rem 0.5rem;
+        cursor: pointer;
+        color: var(--steel-soft);
+        font-size: var(--t-fine);
+      }
+      .trace:hover {
+        border-color: var(--steel-faint);
+      }
+      .trace code {
+        color: var(--steel);
         user-select: all;
       }
-      .state--error {
-        border-style: solid;
-        border-color: #dba694;
+      .trace__hint {
+        color: var(--steel-faint);
       }
-      /* Revalidating: keep the old value, dimmed. Never a flash of empty content. */
+
+      /* Revalidating: keep the previous value, dimmed. Never a flash of empty. */
       .stale {
-        opacity: 0.55;
+        opacity: 0.5;
         transition: opacity 120ms ease-out;
-      }
-      .skeletons {
-        display: flex;
-        flex-direction: column;
-        gap: 0.6rem;
-      }
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
       }
     `,
   ],
 })
 export class ViewStateHost {
   readonly state = input.required<ViewState>();
-  readonly emptyTitle = input('Todavía no hay nada acá');
-  readonly emptyBody = input('Cuando haya información para mostrar, va a aparecer en esta sección.');
+  readonly emptyTitle = input('Nothing here yet');
+  readonly emptyBody = input('This section fills in once there is something to show.');
   readonly emptyActionLabel = input<string | null>(null);
   readonly skeletonCount = input(3);
 
   readonly retry = output<void>();
   readonly action = output<void>();
 
-  readonly skeletonRows = computed(() => Array.from({ length: this.skeletonCount() }, (_, i) => i));
+  /** A signal, not a field: a plain property would never re-render the label. */
+  private readonly copiedAt = signal(0);
+
+  readonly rows = computed(() => Array.from({ length: this.skeletonCount() }, (_, i) => i));
+
   readonly isStale = computed(() => {
     const s = this.state();
     return s.kind === 'ready' && s.stale;
@@ -174,7 +168,7 @@ export class ViewStateHost {
   readonly errorTitle = computed(() => {
     const s = this.state();
     if (s.kind !== 'error') return '';
-    return s.error.status === 0 ? 'Sin conexión con el servidor' : 'No se pudo cargar';
+    return s.error.status === 0 ? 'Cannot reach the server' : 'That did not load';
   });
 
   readonly errorMessage = computed(() => {
@@ -187,8 +181,12 @@ export class ViewStateHost {
     return s.kind === 'error' ? s.error.traceId : null;
   });
 
+  readonly copied = computed(() => Date.now() - this.copiedAt() < 2000);
+
   copyTrace(): void {
     const id = this.traceId();
-    if (id) void navigator.clipboard?.writeText(id);
+    if (!id) return;
+    void navigator.clipboard?.writeText(id);
+    this.copiedAt.set(Date.now());
   }
 }
