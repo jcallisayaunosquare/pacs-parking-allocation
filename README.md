@@ -74,6 +74,14 @@ code/
 │     │  ├─ fairness/           M-4 — scores, history, metrics
 │     │  └─ identity/           M-6 — JWT claims → Principal, RBAC
 │     └─ main/                  composition roots — the only place that calls `new`
+├─ apps/web/                    the Angular frontend
+│  └─ src/app/
+│     ├─ core/                 OIDC config, auth store, guards, interceptors, errors
+│     ├─ domain/               models + repository contracts as abstract classes
+│     ├─ data/                 DTOs, mappers, HttpClient implementations
+│     ├─ application/          signal facades with stale-while-revalidate
+│     ├─ features/             lazy standalone pages (PrimeNG lives only here)
+│     └─ shared/ui/            status pill, five-state host, fairness explainer
 └─ packages/contracts/          OpenAPI 3.1 — source for client types and mock servers
 ```
 
@@ -268,6 +276,54 @@ aws ec2 revoke-security-group-ingress --group-id sg-0b745610ae460e557 \
 aws rds modify-db-instance --db-instance-identifier hotel-db \
     --no-publicly-accessible --apply-immediately --profile hotel --region us-east-2
 ```
+
+## The frontend
+
+```bash
+cd apps/web
+pnpm start     # http://localhost:4200, against the deployed dev API
+pnpm build     # production bundle into dist/web
+pnpm test      # 11 boundary tests
+```
+
+| | |
+|---|---|
+| Angular | **22.2** — zoneless, standalone, signals, no zone.js |
+| PrimeNG | **22.1** with the Aura preset and `@primeuix/themes` 3 |
+| Auth | `angular-auth-oidc-client` 22 · authorization code + PKCE · tokens in memory |
+| Node | Angular 22 needs `^22.22.3 \|\| ^24.15.0 \|\| >=26` |
+
+Six screens, lazy-loaded, so a resident never downloads the admin bundle:
+`/` dashboard · `/history` · `/admin/residents` · `/admin/spots` ·
+`/admin/cycles` · `/admin/metrics`.
+
+The rings mirror the backend's. `domain/` is plain TypeScript with no Angular import
+beyond types; `data/` is the only place that knows `HttpClient` exists; facades expose
+signals and own refetch, so pages stay presentational; PrimeNG appears only under
+`features/` and `shared/ui/`. The bindings live in one place, `app.config.ts`, which is
+what makes a fake repository a one-line swap.
+
+Two details worth knowing before changing it:
+
+**PrimeNG 22 dropped the camelCase selectors.** `<p-confirmDialog>` is now
+`<p-confirm-dialog>`, `<p-progressSpinner>` → `<p-progress-spinner>`,
+`<p-toggleSwitch>` → `<p-toggle-switch>`. The modules kept their names, so the failure
+is `NG8001: not a known element` with an import that looks correct.
+
+**The initial bundle is 805 kB raw / 177 kB transferred.** Angular's default 500 kB
+warning is on raw size and Angular + PrimeNG + OIDC do not fit in it; the budget is set
+to 850 kB with the error at 1 MB. The number that matters is the 177 kB that crosses the
+wire.
+
+### Still missing on the frontend
+
+- Transloco is installed but not wired. §17 requires Spanish and English; the copy is
+  currently Spanish literals, which is the gap
+- §17 asks for the fairness explanation as a message key plus parameters so it can be
+  translated. The API returns finished prose, so the sentence cannot be localised
+  without changing the contract — the one real design debt here
+- No CloudFront/S3 deployment yet, so `environment.production.ts` still points its
+  redirect URLs at localhost
 
 ## Not built yet
 

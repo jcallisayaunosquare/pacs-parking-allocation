@@ -59,6 +59,29 @@ async function main(): Promise<void> {
     .where('id', '=', cycle.id)
     .execute();
 
+  // Expectations are derived, never hard-coded: the smoke suites add spots and
+  // residents as they run, so a fixed "10 assigned" goes stale the first time
+  // anything else touches the database.
+  const entrantCount = (
+    await db
+      .selectFrom('raffle_registration')
+      .select('id')
+      .where('cycle_id', '=', cycle.id)
+      .where('withdrawn', '=', false)
+      .execute()
+  ).length;
+
+  const spotCount = (
+    await db.selectFrom('parking_spot').select('id').where('is_active', '=', true).execute()
+  ).length;
+
+  const expectedAssigned = Math.min(entrantCount, spotCount);
+  const expectedWaitlisted = entrantCount - expectedAssigned;
+  console.log(
+    `\n  ${entrantCount} entrants, ${spotCount} active spots ` +
+      `-> expecting ${expectedAssigned} assigned, ${expectedWaitlisted} waitlisted\n`,
+  );
+
   const repo = new KyselyAllocationRepository(db);
   const executeRun = new ExecuteRun(
     repo,
@@ -83,9 +106,26 @@ async function main(): Promise<void> {
   const r = first.value;
   console.log('\n  ', JSON.stringify(r, null, 2).replace(/\n/g, '\n   '), '\n');
 
-  results.push(check('every spot filled', r.assigned === 10, `assigned=${r.assigned}`));
-  results.push(check('remainder waitlisted', r.waitlisted === 14, `waitlisted=${r.waitlisted}`));
-  results.push(check('NFR-01: under 2 s', elapsed < 2000, `${elapsed} ms`));
+  results.push(
+    check('every spot filled', r.assigned === expectedAssigned, `assigned=${r.assigned} of ${spotCount}`),
+  );
+  results.push(
+    check('remainder waitlisted', r.waitlisted === expectedWaitlisted, `waitlisted=${r.waitlisted}`),
+  );
+  /**
+   * NFR-01 is about the run, not about the network between this machine and us-east-2.
+   * Measuring the round trip put the check at ~1.99 s against a 2 s limit while the
+   * draw itself took milliseconds, so it would have flaked on the next slow link. It
+   * now asserts on the server-side duration and reports the round trip for context.
+   */
+  const serverMs = r.finishedAt ? Date.parse(r.finishedAt) - Date.parse(r.startedAt) : -1;
+  results.push(
+    check(
+      'NFR-01: the run itself completes inside 2 s',
+      serverMs >= 0 && serverMs < 2000,
+      `${serverMs} ms server-side · ${elapsed} ms including the round trip from here`,
+    ),
+  );
 
   // -------------------------------------------------------- database truth
   const assignments = await db
@@ -105,15 +145,28 @@ async function main(): Promise<void> {
     .execute();
   const outbox = await db.selectFrom('event_outbox').selectAll().execute();
 
-  results.push(check('10 assignment rows', assignments.length === 10));
   results.push(
-    check('no resident assigned twice', new Set(assignments.map((a) => a.resident_id)).size === 10),
+    check('one assignment row per filled spot', assignments.length === expectedAssigned),
   );
-  results.push(check('no spot assigned twice', new Set(assignments.map((a) => a.spot_id)).size === 10));
-  results.push(check('24 history rows, one per participant', history.length === 24));
   results.push(
     check(
-      'waitlist positions are 1..14 with no gaps',
+      'no resident assigned twice',
+      new Set(assignments.map((a) => a.resident_id)).size === expectedAssigned,
+    ),
+  );
+  results.push(
+    check('no spot assigned twice', new Set(assignments.map((a) => a.spot_id)).size === expectedAssigned),
+  );
+  results.push(
+    check(
+      'one history row per participant',
+      history.length === entrantCount,
+      `${history.length} rows`,
+    ),
+  );
+  results.push(
+    check(
+      'waitlist positions are contiguous from 1',
       waitlist
         .map((w) => w.position)
         .sort((a, b) => a - b)
@@ -154,7 +207,11 @@ async function main(): Promise<void> {
     .where('sa.cycle_id', '=', cycle.id)
     .execute();
   results.push(
-    check('every winner score reset to 0', winnerScores.every((w) => Number(w.score) === 0)),
+    check(
+      'every winner score reset to 0',
+      winnerScores.length === expectedAssigned && winnerScores.every((w) => Number(w.score) === 0),
+      `${winnerScores.length} of ${expectedAssigned}`,
+    ),
   );
 
   // ------------------------------------------------------- idempotent replay
