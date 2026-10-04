@@ -1,0 +1,11 @@
+# Normalise line endings so a Windows checkout and a Linux CI runner produce the same
+# diffs — and so the Lambda bundle is byte-identical wherever it is built.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+pnpm-lock.yaml -diff linguist-generated

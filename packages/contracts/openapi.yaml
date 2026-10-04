@@ -1,0 +1,801 @@
+openapi: 3.1.0
+info:
+  title: PACS — Parking Allocation Context System
+  version: 0.1.0
+  description: |
+    The endpoint inventory of analisis.html §16. This file is the single source for the
+    client's generated types and for the mock server the frontend develops against, so
+    drift between this contract and the implementation fails CI rather than a demo.
+
+    Every route except `GET /health` requires a bearer token issued by the Cognito user
+    pool. `{id}` path parameters are UUIDs — never sequential integers, so records
+    cannot be enumerated.
+
+servers:
+  - url: https://{apiId}.execute-api.us-east-2.amazonaws.com
+    description: Deployed HTTP API
+    variables:
+      apiId:
+        default: replace-me
+  - url: http://localhost:3000
+    description: Local runner
+
+security:
+  - cognito: []
+
+tags:
+  - name: health
+  - name: self
+    description: Routes scoped to the caller's own record
+  - name: residents
+  - name: spots
+  - name: cycles
+  - name: runs
+  - name: reports
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness and readiness
+      security: []
+      responses:
+        '200':
+          description: The service is up. No data is disclosed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, timestamp]
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string }
+                  timestamp: { type: string, format: date-time }
+
+  /me:
+    get:
+      tags: [self]
+      summary: Principal profile, derived from the token and never from a query parameter
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/dashboard:
+    get:
+      tags: [self]
+      summary: UC-09 — aggregated status for the signed-in resident
+      description: Cached for 5 minutes; invalidated by allocation and release events.
+      responses:
+        '200':
+          description: Dashboard
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/history:
+    get:
+      tags: [self]
+      summary: UC-10 — the caller's own allocation history, newest first
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: History page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/HistoryEntry' }
+                  nextCursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/assignment/release:
+    post:
+      tags: [self]
+      summary: UC-11 — give up the current spot; the waitlist head is promoted
+      responses:
+        '200':
+          description: Released
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [promotedResidentId]
+                properties:
+                  promotedResidentId:
+                    type: [string, 'null']
+                    format: uuid
+                    description: The resident who took the spot, if the waitlist was not empty.
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /cycles/{id}/registrations:
+    post:
+      tags: [self]
+      summary: UC-08 — enter the raffle. Idempotent.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registered: { type: boolean, const: true }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /cycles/{id}/registrations/me:
+    delete:
+      tags: [self]
+      summary: Withdraw, only while registration is open
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: Withdrawn }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /residents:
+    get:
+      tags: [residents]
+      summary: List residents (admin)
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: unit
+          in: query
+          schema: { type: string }
+        - name: eligible
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Resident page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Resident' }
+                  nextCursor: { type: [string, 'null'] }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [residents]
+      summary: FR-10 — create a resident and provision their identity-provider user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, fullName, unitNumber]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                fullName: { type: string, minLength: 1, maxLength: 200 }
+                unitNumber: { type: string, minLength: 1, maxLength: 40 }
+                needsAccessibleSpot: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resident' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /residents/{id}:
+    get:
+      tags: [residents]
+      summary: Resident detail (admin)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Resident
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resident' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [residents]
+      summary: Edit profile
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                fullName: { type: string, minLength: 1, maxLength: 200 }
+                unitNumber: { type: string, minLength: 1, maxLength: 40 }
+                needsAccessibleSpot: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resident' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [residents]
+      summary: Soft delete. History is preserved.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: Deactivated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /residents/{id}/eligibility:
+    patch:
+      tags: [residents]
+      summary: FR-15 — set eligibility. Requires a reason; audit-logged.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isEligible]
+              properties:
+                isEligible: { type: boolean }
+                reason:
+                  type: [string, 'null']
+                  maxLength: 500
+                  description: Required when isEligible is false.
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resident' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /spots:
+    get:
+      tags: [spots]
+      summary: FR-16 — parking inventory
+      parameters:
+        - name: activeOnly
+          in: query
+          schema: { type: boolean }
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/SpotType' }
+      responses:
+        '200':
+          description: Spots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ParkingSpot' }
+    post:
+      tags: [spots]
+      summary: Add a spot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spotCode, level]
+              properties:
+                spotCode: { type: string, minLength: 1, maxLength: 40, example: B2-14 }
+                level: { type: string, minLength: 1, maxLength: 20, example: B2 }
+                type: { $ref: '#/components/schemas/SpotType' }
+                notes: { type: [string, 'null'], maxLength: 2000 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ParkingSpot' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /spots/{id}:
+    patch:
+      tags: [spots]
+      summary: Edit or deactivate. Refuses while the spot is assigned.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                level: { type: string, minLength: 1, maxLength: 20 }
+                type: { $ref: '#/components/schemas/SpotType' }
+                notes: { type: [string, 'null'], maxLength: 2000 }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ParkingSpot' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /cycles:
+    get:
+      tags: [cycles]
+      summary: UC-04 — list cycles
+      responses:
+        '200':
+          description: Cycles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Cycle' }
+    post:
+      tags: [cycles]
+      summary: Create a cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsOn, endsOn, registrationOpensAt, registrationClosesAt]
+              properties:
+                label:
+                  type: string
+                  pattern: '^\d{4}-Q[1-4]$'
+                  description: Derived from startsOn when omitted.
+                startsOn: { type: string, format: date }
+                endsOn: { type: string, format: date }
+                registrationOpensAt: { type: string, format: date-time }
+                registrationClosesAt: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cycle' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /cycles/{id}/open-registration:
+    post:
+      tags: [cycles]
+      summary: Open registration (DRAFT → REGISTRATION_OPEN)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Transitioned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cycle' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /cycles/{id}/close-registration:
+    post:
+      tags: [cycles]
+      summary: Manual close. Normally the scheduler's job.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Transitioned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cycle' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /cycles/{id}/runs:
+    post:
+      tags: [runs]
+      summary: UC-05 — execute the allocation run
+      description: |
+        Rate limited. `Idempotency-Key` is required: a replayed key returns the original
+        run result rather than drawing again.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, maxLength: 200 }
+          example: cycle-2026Q1-auto
+      responses:
+        '200':
+          description: Run finished
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunResult' }
+        '409':
+          description: A run is already executing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: RAFFLE_IN_PROGRESS
+                message: An allocation run is already executing for this cycle.
+                traceId: 7b4e1f82-2c5a-4a1e-9c63-0f1d2e3a4b5c
+                timestamp: '2026-03-26T02:00:00Z'
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /runs/{id}:
+    get:
+      tags: [runs]
+      summary: Run detail and statistics. Includes the seed, for audit.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /runs/{id}/assignments:
+    get:
+      tags: [runs]
+      summary: The full result set of a run
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Assignments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [residentId, fullName, spotCode]
+                      properties:
+                        residentId: { type: string, format: uuid }
+                        fullName: { type: string }
+                        spotCode: { type: string }
+
+  /metrics/fairness:
+    get:
+      tags: [reports]
+      summary: FR-22 — fairness dashboard. Cached 10 minutes.
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FairnessMetrics' }
+
+  /reports/quarterly/{cycleId}:
+    get:
+      tags: [reports]
+      summary: UC-07 — quarterly export
+      parameters:
+        - name: cycleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReportRow' }
+            text/csv:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    cognito:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token from the Cognito user pool, obtained with authorization code + PKCE.
+        API Gateway's native JWT authorizer verifies signature, issuer, audience and
+        expiry before the function runs.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      description: Hard ceiling of 100 on every list endpoint.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from the previous page's nextCursor.
+      schema: { type: string }
+
+  responses:
+    ValidationFailed:
+      description: Schema violation; details lists the offending fields.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthenticated:
+      description: Missing, malformed or expired token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Role insufficient, or not the owner of the record.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Also returned instead of 403 where existence itself is sensitive.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: Well-formed but not executable.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, traceId, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - VALIDATION_FAILED
+            - UNAUTHENTICATED
+            - FORBIDDEN
+            - NOT_ELIGIBLE
+            - NOT_FOUND
+            - RAFFLE_IN_PROGRESS
+            - REGISTRATION_CLOSED
+            - SPOT_IN_USE
+            - ALREADY_REGISTERED
+            - INVALID_CYCLE_STATE
+            - NO_SPOTS_AVAILABLE
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            required: [field, issue]
+            properties:
+              field: { type: string }
+              issue: { type: string }
+        traceId:
+          type: string
+          description: Matches the log correlation id. The only way in for a 500.
+        timestamp: { type: string, format: date-time }
+
+    SpotType:
+      type: string
+      enum: [STANDARD, ACCESSIBLE, EV]
+
+    CycleState:
+      type: string
+      enum: [DRAFT, REGISTRATION_OPEN, REGISTRATION_CLOSED, ACTIVE, CLOSED]
+
+    AssignmentState:
+      type: string
+      enum: [ACTIVE, RELEASED, REVOKED, EXPIRED]
+
+    DrawOutcome:
+      type: string
+      enum: [ASSIGNED, WAITLISTED, SKIPPED]
+
+    Resident:
+      type: object
+      required: [id, email, fullName, unitNumber, isEligible, needsAccessibleSpot]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        unitNumber: { type: string }
+        isEligible: { type: boolean }
+        ineligibleReason: { type: [string, 'null'] }
+        needsAccessibleSpot: { type: boolean }
+        externalSubject: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        deactivatedAt: { type: [string, 'null'], format: date-time }
+
+    ParkingSpot:
+      type: object
+      required: [id, spotCode, level, type, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        spotCode: { type: string }
+        level: { type: string }
+        type: { $ref: '#/components/schemas/SpotType' }
+        isActive: { type: boolean }
+        notes: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+
+    Cycle:
+      type: object
+      required: [id, label, startsOn, endsOn, state]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, example: 2026-Q1 }
+        startsOn: { type: string, format: date-time }
+        endsOn: { type: string, format: date-time }
+        state: { $ref: '#/components/schemas/CycleState' }
+        registrationOpensAt: { type: string, format: date-time }
+        registrationClosesAt: { type: string, format: date-time }
+
+    Me:
+      type: object
+      required: [subject, roles]
+      properties:
+        subject: { type: string }
+        email: { type: [string, 'null'] }
+        roles:
+          type: array
+          items: { type: string, enum: [ADMIN, RESIDENT] }
+        resident:
+          oneOf:
+            - $ref: '#/components/schemas/Resident'
+            - type: 'null'
+
+    HistoryEntry:
+      type: object
+      required: [cycle, result, scoreAtDraw, recordedAt]
+      properties:
+        cycle: { type: string, example: 2025-Q4 }
+        result: { $ref: '#/components/schemas/DrawOutcome' }
+        spotCode: { type: [string, 'null'] }
+        position: { type: [integer, 'null'] }
+        scoreAtDraw:
+          type: number
+          description: Snapshot taken at draw time; never recalculated.
+        recordedAt: { type: string, format: date-time }
+
+    Dashboard:
+      type: object
+      required: [resident, assignment, waitlist, fairness, nextCycle, recentHistory]
+      properties:
+        resident:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            fullName: { type: string }
+            unit: { type: string }
+            isEligible: { type: boolean }
+        assignment:
+          oneOf:
+            - type: object
+              required: [spotCode, level, type, validFrom, validUntil, state]
+              properties:
+                spotCode: { type: string }
+                level: { type: string }
+                type: { $ref: '#/components/schemas/SpotType' }
+                validFrom: { type: string, format: date-time }
+                validUntil: { type: string, format: date-time }
+                state: { $ref: '#/components/schemas/AssignmentState' }
+            - type: 'null'
+        waitlist:
+          oneOf:
+            - type: object
+              required: [position]
+              properties:
+                position: { type: integer, minimum: 1 }
+            - type: 'null'
+        fairness:
+          type: object
+          required: [score, consecutiveMisses, totalWins, drawWeight, explanation]
+          properties:
+            score: { type: number }
+            consecutiveMisses: { type: integer }
+            totalWins: { type: integer }
+            drawWeight:
+              type: number
+              description: score + 1. How many times the resident's name is in the hat.
+            explanation:
+              type: string
+              description: One sentence a resident can read, generated from the same rule.
+        nextCycle:
+          oneOf:
+            - $ref: '#/components/schemas/Cycle'
+            - type: 'null'
+        recentHistory:
+          type: array
+          items: { $ref: '#/components/schemas/HistoryEntry' }
+
+    RunResult:
+      type: object
+      required: [runId, state, algorithmVersion, randomSeed, entrants, spots, assigned, waitlisted]
+      properties:
+        runId: { type: string, format: uuid }
+        state: { type: string, enum: [COMPLETED, COMPLETED_EMPTY] }
+        algorithmVersion: { type: string, example: weighted-lottery-v1 }
+        randomSeed:
+          type: integer
+          description: Stored so the draw can be replayed and explained.
+        entrants: { type: integer }
+        spots: { type: integer }
+        assigned: { type: integer }
+        waitlisted: { type: integer }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+
+    RunDetail:
+      allOf:
+        - $ref: '#/components/schemas/RunResult'
+        - type: object
+          properties:
+            cycleId: { type: string, format: uuid }
+            state:
+              type: string
+              enum: [RUNNING, COMPLETED, COMPLETED_EMPTY, FAILED]
+            errorDetail: { type: [string, 'null'] }
+
+    FairnessMetrics:
+      type: object
+      required: [residents, averageScore, maxScore, neverWon, distribution]
+      properties:
+        residents: { type: integer }
+        averageScore: { type: number }
+        maxScore: { type: number }
+        neverWon: { type: integer }
+        distribution:
+          type: array
+          items:
+            type: object
+            required: [score, residents]
+            properties:
+              score: { type: integer }
+              residents: { type: integer }
+
+    ReportRow:
+      type: object
+      required: [residentId, fullName, unitNumber, result, scoreAtDraw]
+      properties:
+        residentId: { type: string, format: uuid }
+        fullName: { type: string }
+        unitNumber: { type: string }
+        result: { $ref: '#/components/schemas/DrawOutcome' }
+        spotCode: { type: [string, 'null'] }
+        position: { type: [integer, 'null'] }
+        scoreAtDraw: { type: number }

@@ -1,0 +1,14 @@
+{
+  "name": "@pacs/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenAPI 3.1 contract — the single source for API types and mock servers (§16)",
+  "main": "openapi.yaml",
+  "scripts": {
+    "types": "openapi-typescript openapi.yaml -o src/generated/api.d.ts",
+    "lint": "redocly lint openapi.yaml"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.4.4"
+  }
+}

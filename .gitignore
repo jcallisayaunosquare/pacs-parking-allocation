@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+.angular/
+.esbuild/
+*.tsbuildinfo
+
+# serverless
+.serverless/
+.serverless_plugins/
+
+# secrets and local config — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+secrets/
+
+# test output
+coverage/
+.vitest/
+test-results/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

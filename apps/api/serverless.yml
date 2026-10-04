@@ -1,0 +1,355 @@
+﻿service: pacs-api
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  runtime: nodejs24.x
+  architecture: arm64
+  # us-east-2 is the only region the account's SCP allows. §10 of analisis.html still
+  # says us-east-1; the document is the thing that needs updating, not this file.
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 10
+  logRetentionInDays: 30
+  tracing:
+    lambda: true
+  environment:
+    NODE_OPTIONS: '--enable-source-maps'
+    POWERTOOLS_SERVICE_NAME: pacs
+    POWERTOOLS_LOG_LEVEL: INFO
+    DB_HOST: ${self:custom.db.host}
+    DB_PORT: ${self:custom.db.port}
+    DB_USER: ${self:custom.db.user}
+    DB_NAME: ${self:custom.db.name}
+    # No DB_PASSWORD on purpose. The function mints a short-lived IAM auth token per
+    # connection (§10), so no database credential exists in the function config, in
+    # SSM, or in git — and an in-VPC function needs no route to Secrets Manager.
+    CACHE_TABLE: !Ref CacheTable
+    EVENTS_TABLE: !Ref EventsTable
+    COGNITO_USER_POOL_ID: !Ref UserPool
+  httpApi:
+    cors:
+      allowedOrigins:
+        - http://localhost:4200
+        - ${self:custom.webOrigin.${self:provider.stage}, 'http://localhost:4200'}
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+        - Idempotency-Key
+      allowedMethods:
+        - GET
+        - POST
+        - PATCH
+        - DELETE
+        - OPTIONS
+      maxAge: 3600
+    authorizers:
+      cognito:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+        audience:
+          - !Ref UserPoolClient
+  iam:
+    role:
+      statements:
+        # Scoped to the exact tables and pool this service uses — no wildcards (§10).
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+          Resource:
+            - !GetAtt CacheTable.Arn
+            - !Sub '${CacheTable.Arn}/index/*'
+        - Effect: Allow
+          Action:
+            - cognito-idp:AdminCreateUser
+            - cognito-idp:AdminAddUserToGroup
+            - cognito-idp:AdminDisableUser
+          Resource: !GetAtt UserPool.Arn
+        # The event table: written by the API (eager relay) and by integrations
+        # (the subject mapping), read by the API when it links a subject.
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            # DeleteItem is needed to consume a subject link exactly once; without it
+            # the link lingers until its TTL and the delete fails silently.
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+          Resource:
+            - !GetAtt EventsTable.Arn
+            - !Sub '${EventsTable.Arn}/index/*'
+        # IAM database authentication, scoped to one database user on one instance.
+        - Effect: Allow
+          Action: rds-db:connect
+          Resource: !Sub 'arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${self:custom.db.resourceId}/${self:custom.db.user}'
+
+custom:
+  webOrigin:
+    dev: http://localhost:4200
+  # The existing hotel-db instance. Kept in one place so a move to a dedicated
+  # instance is a single edit.
+  db:
+    host: hotel-db.c94uguqg6e4o.us-east-2.rds.amazonaws.com
+    port: '5432'
+    # A dedicated IAM-authenticated role, not the master user. Granted app_user, which
+    # cannot UPDATE or DELETE allocation_history — the audit trail stays append-only
+    # even if this credential is compromised (§11, BR-05).
+    user: pacs_app
+    name: pacs_dev
+    resourceId: db-PTNYAQKYKPEN4ERSZZKQIUISMQ
+  vpc:
+    securityGroupIds:
+      - sg-0b745610ae460e557
+    subnetIds:
+      - subnet-074cfaf86f9c6ac2e
+      - subnet-0e4e6f399e1acdf12
+      - subnet-0a003bbfbed471a68
+
+build:
+  esbuild:
+    bundle: true
+    minify: true
+    sourcemap: true
+    target: node24
+    external:
+      - '@aws-sdk/*'
+
+package:
+  individually: true
+
+functions:
+  api:
+    handler: src/main/api.handler
+    description: PACS HTTP API — lambdalith (ADR-014)
+    # No reservedConcurrency: this account's Lambda limit is 10 concurrent executions
+    # (the new-account default) and AWS requires 10 to stay unreserved, so nothing can
+    # be reserved at all. The account limit bounds the connection pool just as well —
+    # at most 10 containers × 2 connections = 20, inside a t4g.micro's budget (§10).
+    # Raise the Lambda concurrency quota, then restore the per-function reservations.
+    vpc: ${self:custom.vpc}
+    events:
+      - httpApi:
+          path: /health
+          method: GET
+      - httpApi:
+          path: /{proxy+}
+          method: '*'
+          authorizer:
+            name: cognito
+
+  runRaffle:
+    handler: src/main/run-raffle.handler
+    description: Quarterly allocation run (UC-05)
+    timeout: 60
+    # Correctness does not depend on reserving 1 here: the partial unique index is the
+    # real lock (§12, guard 1), and it holds across containers and deployments.
+    vpc: ${self:custom.vpc}
+    events:
+      # The real draw: 06:00 on the first day of each quarter.
+      - schedule:
+          name: pacs-${self:provider.stage}-quarterly-run
+          rate: cron(0 6 1 1,4,7,10 ? *)
+          enabled: true
+      # Pre-warm five minutes earlier so NFR-01 is measured on a warm container (§10).
+      - schedule:
+          name: pacs-${self:provider.stage}-prewarm
+          rate: cron(55 5 1 1,4,7,10 ? *)
+          enabled: true
+          input:
+            warmup: true
+
+  # The one function outside the VPC (§10 Lambda inventory, ADR-016). An in-VPC
+  # function has no route to Cognito or SES; this one does, and it is fed by the
+  # DynamoDB stream rather than by a network call from inside the VPC.
+  integrations:
+    handler: src/main/integrations.handler
+    description: Stream consumer — Cognito provisioning and notifications (M-5)
+    timeout: 30
+    events:
+      - stream:
+          type: dynamodb
+          arn: !GetAtt EventsTable.StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+          # One bad event must not block the shard forever.
+          maximumRetryAttempts: 3
+          functionResponseType: ReportBatchItemFailures
+
+  sweeper:
+    handler: src/main/sweeper.handler
+    description: Outbox relay, assignment expiry, stale run recovery
+    timeout: 60
+    vpc: ${self:custom.vpc}
+    events:
+      - schedule:
+          name: pacs-${self:provider.stage}-sweep
+          rate: rate(5 minutes)
+          enabled: true
+
+resources:
+  Resources:
+    # ------------------------------------------------------------------ cache
+    CacheTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: pacs-cache-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: pk
+            AttributeType: S
+          - AttributeName: prefix
+            AttributeType: S
+        KeySchema:
+          - AttributeName: pk
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: prefix-index
+            KeySchema:
+              - AttributeName: prefix
+                KeyType: HASH
+            Projection:
+              ProjectionType: KEYS_ONLY
+        TimeToLiveSpecification:
+          AttributeName: expiresAt
+          Enabled: true
+
+    # The event bus of §10: the outbox is relayed here, and the stream fans it out to
+    # `integrations` outside the VPC. It also carries the subject mappings that
+    # integrations writes back, since that function cannot reach the database itself.
+    EventsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: pacs-events-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: pk
+            AttributeType: S
+        KeySchema:
+          - AttributeName: pk
+            KeyType: HASH
+        StreamSpecification:
+          StreamViewType: NEW_IMAGE
+        TimeToLiveSpecification:
+          AttributeName: expiresAt
+          Enabled: true
+
+    # DynamoDB through a free gateway endpoint — this is what removes the NAT
+    # gateway, the most common surprise on a "free" AWS bill (ADR-016).
+    DynamoDbEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcId: vpc-09eae635faf1365ee
+        ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+        VpcEndpointType: Gateway
+        RouteTableIds:
+          - rtb-090c848e1b269f5c4
+
+    # --------------------------------------------------------------- identity
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: pacs-${self:provider.stage}
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        MfaConfiguration: OPTIONAL
+        EnabledMfas:
+          - SOFTWARE_TOKEN_MFA
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 12
+            RequireLowercase: true
+            RequireUppercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+        Schema:
+          - Name: resident_id
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+            StringAttributeConstraints:
+              MinLength: '0'
+              MaxLength: '64'
+        AdminCreateUserConfig:
+          AllowAdminCreateUserOnly: false
+
+    UserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: pacs-web-${self:provider.stage}
+        UserPoolId: !Ref UserPool
+        # Public SPA client: no secret, authorization code + PKCE only (§10).
+        GenerateSecret: false
+        AllowedOAuthFlowsUserPoolClient: true
+        AllowedOAuthFlows:
+          - code
+        AllowedOAuthScopes:
+          - openid
+          - email
+          - profile
+        SupportedIdentityProviders:
+          - COGNITO
+        CallbackURLs:
+          - http://localhost:4200
+          - http://localhost:4200/callback
+        LogoutURLs:
+          - http://localhost:4200
+        # Short access tokens with refresh rotation (§10 cloud security practices).
+        AccessTokenValidity: 15
+        IdTokenValidity: 15
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: minutes
+          IdToken: minutes
+          RefreshToken: days
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+          # Admin-API-only flow, used by the integration tests to mint a token
+          # without a browser. The SPA still uses authorization code + PKCE (§10).
+          - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        PreventUserExistenceErrors: ENABLED
+
+    UserPoolDomain:
+      Type: AWS::Cognito::UserPoolDomain
+      Properties:
+        Domain: pacs-${self:provider.stage}-${aws:accountId}
+        UserPoolId: !Ref UserPool
+
+    AdminGroup:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: ADMIN
+        Description: Building administrators (§18 RBAC)
+        Precedence: 1
+        UserPoolId: !Ref UserPool
+
+    ResidentGroup:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: RESIDENT
+        Description: Residents
+        Precedence: 10
+        UserPoolId: !Ref UserPool
+
+  Outputs:
+    ApiBaseUrl:
+      Description: HTTP API base URL for the frontend
+      Value: !GetAtt HttpApi.ApiEndpoint
+    UserPoolId:
+      Value: !Ref UserPool
+    UserPoolClientId:
+      Value: !Ref UserPoolClient
+    CognitoIssuer:
+      Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+    CognitoHostedUi:
+      Value: !Sub 'https://pacs-${self:provider.stage}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com'
+    CacheTableName:
+      Value: !Ref CacheTable

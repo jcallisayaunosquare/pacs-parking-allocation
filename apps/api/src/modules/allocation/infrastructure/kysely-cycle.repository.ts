@@ -1,0 +1,261 @@
+import type { Kysely } from 'kysely';
+import type { Database } from '../../../shared/db/schema';
+import type { CycleState } from '../domain/types';
+import type {
+  AssignmentRepository,
+  CycleRecord,
+  CycleRepository,
+  RegistrationRepository,
+} from '../application/ports';
+
+const toCycle = (r: {
+  id: string;
+  label: string;
+  starts_on: Date;
+  ends_on: Date;
+  state: CycleState;
+  registration_opens_at: Date;
+  registration_closes_at: Date;
+}): CycleRecord => ({
+  id: r.id,
+  label: r.label,
+  startsOn: new Date(r.starts_on),
+  endsOn: new Date(r.ends_on),
+  state: r.state,
+  registrationOpensAt: new Date(r.registration_opens_at),
+  registrationClosesAt: new Date(r.registration_closes_at),
+});
+
+export class KyselyCycleRepository implements CycleRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: Omit<CycleRecord, 'id' | 'state'>): Promise<CycleRecord> {
+    const r = await this.db
+      .insertInto('allocation_cycle')
+      .values({
+        label: input.label,
+        starts_on: input.startsOn,
+        ends_on: input.endsOn,
+        registration_opens_at: input.registrationOpensAt,
+        registration_closes_at: input.registrationClosesAt,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return toCycle(r as never);
+  }
+
+  async list(): Promise<readonly CycleRecord[]> {
+    const rows = await this.db
+      .selectFrom('allocation_cycle')
+      .selectAll()
+      .orderBy('starts_on', 'desc')
+      .execute();
+    return rows.map((r) => toCycle(r as never));
+  }
+
+  async transition(cycleId: string, to: CycleState): Promise<CycleRecord | null> {
+    const r = await this.db
+      .updateTable('allocation_cycle')
+      .set({ state: to })
+      .where('id', '=', cycleId)
+      .returningAll()
+      .executeTakeFirst();
+    return r ? toCycle(r as never) : null;
+  }
+
+  async findByState(state: CycleState): Promise<readonly CycleRecord[]> {
+    const rows = await this.db
+      .selectFrom('allocation_cycle')
+      .selectAll()
+      .where('state', '=', state)
+      .execute();
+    return rows.map((r) => toCycle(r as never));
+  }
+
+  async findUpcoming(now: Date): Promise<CycleRecord | null> {
+    const r = await this.db
+      .selectFrom('allocation_cycle')
+      .selectAll()
+      .where('registration_closes_at', '>', now)
+      .where('state', 'in', ['DRAFT', 'REGISTRATION_OPEN'])
+      .orderBy('registration_opens_at')
+      .executeTakeFirst();
+    return r ? toCycle(r as never) : null;
+  }
+}
+
+export class KyselyRegistrationRepository implements RegistrationRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  /** Idempotent: a second POST un-withdraws rather than erroring (§16). */
+  async register(cycleId: string, residentId: string): Promise<{ created: boolean }> {
+    const r = await this.db
+      .insertInto('raffle_registration')
+      .values({ cycle_id: cycleId, resident_id: residentId, withdrawn: false })
+      .onConflict((oc) =>
+        oc.constraint('uq_registration_per_cycle').doUpdateSet({ withdrawn: false }),
+      )
+      .returning('id')
+      .executeTakeFirst();
+    return { created: r !== undefined };
+  }
+
+  async withdraw(cycleId: string, residentId: string): Promise<boolean> {
+    const r = await this.db
+      .updateTable('raffle_registration')
+      .set({ withdrawn: true })
+      .where('cycle_id', '=', cycleId)
+      .where('resident_id', '=', residentId)
+      .where('withdrawn', '=', false)
+      .executeTakeFirst();
+    return Number(r.numUpdatedRows ?? 0) > 0;
+  }
+
+  async isRegistered(cycleId: string, residentId: string): Promise<boolean> {
+    const r = await this.db
+      .selectFrom('raffle_registration')
+      .select('id')
+      .where('cycle_id', '=', cycleId)
+      .where('resident_id', '=', residentId)
+      .where('withdrawn', '=', false)
+      .executeTakeFirst();
+    return r !== undefined;
+  }
+}
+
+export class KyselyAssignmentRepository implements AssignmentRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async findActiveForResident(residentId: string) {
+    const r = await this.db
+      .selectFrom('spot_assignment as sa')
+      .innerJoin('parking_spot as ps', 'ps.id', 'sa.spot_id')
+      .select([
+        'sa.id as id',
+        'sa.cycle_id as cycleId',
+        'sa.spot_id as spotId',
+        'ps.spot_code as spotCode',
+        'ps.level as level',
+        'ps.type as type',
+        'sa.state as state',
+        'sa.valid_from as validFrom',
+        'sa.valid_until as validUntil',
+      ])
+      .where('sa.resident_id', '=', residentId)
+      .where('sa.state', '=', 'ACTIVE')
+      .executeTakeFirst();
+
+    return r
+      ? {
+          ...r,
+          validFrom: new Date(r.validFrom),
+          validUntil: new Date(r.validUntil),
+        }
+      : null;
+  }
+
+  async listForRun(runId: string) {
+    const rows = await this.db
+      .selectFrom('spot_assignment as sa')
+      .innerJoin('parking_spot as ps', 'ps.id', 'sa.spot_id')
+      .select(['sa.resident_id as residentId', 'sa.spot_id as spotId', 'ps.spot_code as spotCode'])
+      .where('sa.run_id', '=', runId)
+      .orderBy('ps.spot_code')
+      .execute();
+    return rows;
+  }
+
+  /**
+   * Release and promote in one transaction: the released spot goes to the waitlist head,
+   * so there is no window in which the bay is unassigned but the waitlist is unchanged.
+   */
+  async release(assignmentId: string, at: Date): Promise<{ promotedResidentId: string | null }> {
+    return this.db.transaction().execute(async (trx) => {
+      const released = await trx
+        .updateTable('spot_assignment')
+        .set({ state: 'RELEASED', released_at: at })
+        .where('id', '=', assignmentId)
+        .where('state', '=', 'ACTIVE')
+        .returningAll()
+        .executeTakeFirst();
+
+      if (!released) return { promotedResidentId: null };
+
+      const head = await trx
+        .selectFrom('waitlist_entry')
+        .selectAll()
+        .where('cycle_id', '=', released.cycle_id)
+        .where('state', '=', 'WAITING')
+        .orderBy('position')
+        .executeTakeFirst();
+
+      if (!head) return { promotedResidentId: null };
+
+      await trx
+        .updateTable('waitlist_entry')
+        .set({ state: 'PROMOTED' })
+        .where('id', '=', head.id)
+        .execute();
+
+      await trx
+        .insertInto('spot_assignment')
+        .values({
+          cycle_id: released.cycle_id,
+          run_id: released.run_id,
+          resident_id: head.resident_id,
+          spot_id: released.spot_id,
+          state: 'ACTIVE',
+          valid_from: at,
+          valid_until: released.valid_until,
+        })
+        .execute();
+
+      await trx
+        .insertInto('event_outbox')
+        .values([
+          {
+            event_type: 'AssignmentReleased',
+            aggregate_type: 'SpotAssignment',
+            aggregate_id: released.id,
+            payload: JSON.stringify({
+              residentId: released.resident_id,
+              spotId: released.spot_id,
+            }),
+          },
+          {
+            event_type: 'WaitlistPromoted',
+            aggregate_type: 'WaitlistEntry',
+            aggregate_id: head.id,
+            payload: JSON.stringify({
+              residentId: head.resident_id,
+              spotId: released.spot_id,
+            }),
+          },
+        ])
+        .execute();
+
+      return { promotedResidentId: head.resident_id };
+    });
+  }
+
+  /** UC-14 — expire assignments whose cycle has ended, and close those cycles. */
+  async expireDue(now: Date): Promise<number> {
+    return this.db.transaction().execute(async (trx) => {
+      const res = await trx
+        .updateTable('spot_assignment')
+        .set({ state: 'EXPIRED' })
+        .where('state', '=', 'ACTIVE')
+        .where('valid_until', '<', now)
+        .executeTakeFirst();
+
+      await trx
+        .updateTable('allocation_cycle')
+        .set({ state: 'CLOSED' })
+        .where('state', '=', 'ACTIVE')
+        .where('ends_on', '<', now)
+        .execute();
+
+      return Number(res.numUpdatedRows ?? 0);
+    });
+  }
+}

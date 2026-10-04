@@ -1,0 +1,80 @@
+/**
+ * Global styles. Deliberately thin: layout and typography live with their components,
+ * and PrimeNG's Aura preset supplies the component tokens.
+ *
+ * The @layer order matters — it is what lets a component style override a PrimeNG one
+ * without !important, and it has to match the `cssLayer` option in app.config.ts.
+ */
+@layer base, primeng;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --pacs-ink: #1d1d1d;
+    --pacs-muted: #5d5d5d;
+    --pacs-rule: #e2e0dc;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family:
+      'Inter',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--pacs-ink);
+    background: #f7f6f4;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a {
+    color: #1d5438;
+  }
+
+  /* Visible focus everywhere (NFR-13, WCAG 2.1 AA). Never remove this. */
+  :focus-visible {
+    outline: 2px solid #2c6b4a;
+    outline-offset: 2px;
+  }
+
+  code {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+    font-size: 0.9em;
+  }
+
+  /* Small utilities the templates lean on, so each component does not redeclare them. */
+  .w-full {
+    width: 100%;
+  }
+  .mb-2 {
+    margin-bottom: 0.5rem;
+  }
+  .mb-3 {
+    margin-bottom: 0.75rem;
+  }
+  .mt-2 {
+    margin-top: 0.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

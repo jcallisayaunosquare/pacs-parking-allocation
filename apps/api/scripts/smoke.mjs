@@ -1,0 +1,308 @@
+/**
+ * Post-deploy smoke test against the deployed API (§23).
+ *
+ * Exercises the real HTTP surface with a real Cognito token: authentication, RBAC,
+ * validation, the cycle state machine, the run endpoint and its idempotency. Creates a
+ * throwaway admin user in the dev pool, generates its password locally and never prints
+ * it, and tidies up the user afterwards.
+ *
+ *   node scripts/smoke.mjs
+ *
+ * Env: AWS_PROFILE (default hotel), AWS_REGION (default us-east-2), STAGE (default dev).
+ */
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  AdminAddUserToGroupCommand,
+  AdminCreateUserCommand,
+  AdminDeleteUserCommand,
+  AdminInitiateAuthCommand,
+  AdminSetUserPasswordCommand,
+  CognitoIdentityProviderClient,
+} from '@aws-sdk/client-cognito-identity-provider';
+import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
+
+const REGION = process.env.AWS_REGION ?? 'us-east-2';
+const STAGE = process.env.STAGE ?? 'dev';
+const STACK = `pacs-api-${STAGE}`;
+
+const results = [];
+const check = (label, pass, extra = '') => {
+  results.push({ label, pass });
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${extra ? '  — ' + extra : ''}`);
+};
+
+async function outputs() {
+  const cfn = new CloudFormationClient({ region: REGION });
+  const out = await cfn.send(new DescribeStacksCommand({ StackName: STACK }));
+  const map = {};
+  for (const o of out.Stacks?.[0]?.Outputs ?? []) map[o.OutputKey] = o.OutputValue;
+  return map;
+}
+
+async function main() {
+  const o = await outputs();
+  const base = o.ApiBaseUrl;
+  const userPoolId = o.UserPoolId;
+  const clientId = o.UserPoolClientId;
+  if (!base || !userPoolId || !clientId) throw new Error('Stack outputs are incomplete.');
+  console.log(`API  ${base}\npool ${userPoolId}\n`);
+
+  const cognito = new CognitoIdentityProviderClient({ region: REGION });
+  const email = `pacs-smoke-${Date.now()}@example.test`;
+  // Generated here, used in memory, never logged.
+  const password = `Aa1!${randomBytes(18).toString('base64url')}`;
+
+  let token;
+  try {
+    await cognito.send(
+      new AdminCreateUserCommand({
+        UserPoolId: userPoolId,
+        Username: email,
+        MessageAction: 'SUPPRESS',
+        UserAttributes: [
+          { Name: 'email', Value: email },
+          { Name: 'email_verified', Value: 'true' },
+        ],
+      }),
+    );
+    await cognito.send(
+      new AdminSetUserPasswordCommand({
+        UserPoolId: userPoolId,
+        Username: email,
+        Password: password,
+        Permanent: true,
+      }),
+    );
+    await cognito.send(
+      new AdminAddUserToGroupCommand({
+        UserPoolId: userPoolId,
+        Username: email,
+        GroupName: 'ADMIN',
+      }),
+    );
+    const auth = await cognito.send(
+      new AdminInitiateAuthCommand({
+        UserPoolId: userPoolId,
+        ClientId: clientId,
+        AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
+        AuthParameters: { USERNAME: email, PASSWORD: password },
+      }),
+    );
+    token = auth.AuthenticationResult?.AccessToken;
+    check('mint a Cognito access token for an ADMIN user', Boolean(token));
+    if (!token) return finish(cognito, userPoolId, email);
+  } catch (e) {
+    check('mint a Cognito access token for an ADMIN user', false, e.message);
+    return finish(cognito, userPoolId, email);
+  }
+
+  const call = async (method, path, { body, headers = {}, raw = false } = {}) => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+        ...headers,
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const text = await res.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : undefined;
+    } catch {
+      json = undefined;
+    }
+    return { status: res.status, json, text, contentType: res.headers.get('content-type'), raw };
+  };
+
+  // ------------------------------------------------------------------- auth
+  const anon = await fetch(`${base}/health`);
+  check('GET /health is public', anon.status === 200);
+
+  const noToken = await fetch(`${base}/me`);
+  check('GET /me without a token is 401', noToken.status === 401);
+
+  const badToken = await fetch(`${base}/residents`, {
+    headers: { authorization: 'Bearer not-a-jwt' },
+  });
+  check('a malformed token is 401', badToken.status === 401);
+
+  const me = await call('GET', '/me');
+  check('GET /me returns the principal', me.status === 200 && me.json?.roles?.includes('ADMIN'),
+    `roles=${JSON.stringify(me.json?.roles)}`);
+
+  // -------------------------------------------------------------- residents
+  const created = await call('POST', '/residents', {
+    body: {
+      email: `smoke-resident-${Date.now()}@example.test`,
+      fullName: 'Smoke Resident',
+      unitNumber: '999',
+      needsAccessibleSpot: false,
+    },
+  });
+  check('POST /residents creates a resident', created.status === 201 && Boolean(created.json?.id),
+    `status=${created.status}`);
+  const residentId = created.json?.id;
+
+  const dupe = await call('POST', '/residents', {
+    body: { email: created.json?.email, fullName: 'Dupe', unitNumber: '998' },
+  });
+  check('a duplicate email is rejected with 400', dupe.status === 400 &&
+    dupe.json?.error === 'VALIDATION_FAILED');
+
+  const badBody = await call('POST', '/residents', { body: { email: 'not-an-email' } });
+  check('an invalid body is 400 with field details', badBody.status === 400 &&
+    Array.isArray(badBody.json?.details));
+
+  const list = await call('GET', '/residents?limit=5');
+  check('GET /residents is a cursor page capped at the limit',
+    list.status === 200 && Array.isArray(list.json?.items) && list.json.items.length <= 5);
+
+  const overLimit = await call('GET', '/residents?limit=5000');
+  check('a limit above the ceiling of 100 is 400', overLimit.status === 400);
+
+  const badUuid = await call('GET', '/residents/not-a-uuid');
+  check('a malformed id is rejected before it reaches a query', badUuid.status === 400 &&
+    badUuid.json?.details?.[0]?.field === 'id');
+
+  if (residentId) {
+    const noReason = await call('PATCH', `/residents/${residentId}/eligibility`, {
+      body: { isEligible: false },
+    });
+    check('marking ineligible without a reason is 400 (FR-15)', noReason.status === 400);
+
+    const withReason = await call('PATCH', `/residents/${residentId}/eligibility`, {
+      body: { isEligible: false, reason: 'Unpaid dues' },
+    });
+    check('marking ineligible with a reason succeeds',
+      withReason.status === 200 && withReason.json?.isEligible === false);
+  }
+
+  // ------------------------------------------------------------------ spots
+  const spotCode = `SMK-${Math.floor(Math.random() * 9000 + 1000)}`;
+  const spot = await call('POST', '/spots', { body: { spotCode, level: 'B9', type: 'EV' } });
+  check('POST /spots creates a spot', spot.status === 201 && spot.json?.spotCode === spotCode);
+
+  const badType = await call('POST', '/spots', {
+    body: { spotCode: `${spotCode}X`, level: 'B9', type: 'HELICOPTER' },
+  });
+  check('an unknown spot type is 400', badType.status === 400);
+
+  const spots = await call('GET', '/spots?activeOnly=true');
+  check('GET /spots lists the inventory', spots.status === 200 && spots.json?.items?.length > 0,
+    `${spots.json?.items?.length} spots`);
+
+  // ----------------------------------------------------------------- cycles
+  const q = Math.floor(Math.random() * 9000 + 1000);
+  const cycle = await call('POST', '/cycles', {
+    body: {
+      label: `2${String(q).slice(0, 3)}-Q1`,
+      startsOn: '2027-01-01',
+      endsOn: '2027-03-31',
+      registrationOpensAt: '2026-12-01T00:00:00Z',
+      registrationClosesAt: '2026-12-25T00:00:00Z',
+    },
+  });
+  check('POST /cycles creates a cycle in DRAFT',
+    cycle.status === 201 && cycle.json?.state === 'DRAFT', `status=${cycle.status}`);
+  const cycleId = cycle.json?.id;
+
+  const badDates = await call('POST', '/cycles', {
+    body: {
+      startsOn: '2027-03-31',
+      endsOn: '2027-01-01',
+      registrationOpensAt: '2026-12-01T00:00:00Z',
+      registrationClosesAt: '2026-12-25T00:00:00Z',
+    },
+  });
+  check('a cycle that ends before it starts is 400', badDates.status === 400);
+
+  if (cycleId) {
+    const runTooEarly = await call('POST', `/cycles/${cycleId}/runs`, {
+      headers: { 'idempotency-key': randomUUID() },
+    });
+    check('a run from DRAFT is 422 INVALID_CYCLE_STATE',
+      runTooEarly.status === 422 && runTooEarly.json?.error === 'INVALID_CYCLE_STATE',
+      `status=${runTooEarly.status}`);
+
+    const open = await call('POST', `/cycles/${cycleId}/open-registration`);
+    check('DRAFT → REGISTRATION_OPEN', open.status === 200 && open.json?.state === 'REGISTRATION_OPEN');
+
+    const reopen = await call('POST', `/cycles/${cycleId}/open-registration`);
+    check('an illegal repeat transition is 422', reopen.status === 422);
+
+    const close = await call('POST', `/cycles/${cycleId}/close-registration`);
+    check('REGISTRATION_OPEN → REGISTRATION_CLOSED',
+      close.status === 200 && close.json?.state === 'REGISTRATION_CLOSED');
+
+    const noKey = await call('POST', `/cycles/${cycleId}/runs`);
+    check('a run without Idempotency-Key is 400', noKey.status === 400 &&
+      noKey.json?.details?.[0]?.field === 'Idempotency-Key');
+
+    const key = randomUUID();
+    const run = await call('POST', `/cycles/${cycleId}/runs`, {
+      headers: { 'idempotency-key': key },
+    });
+    // Nobody registered for this brand-new cycle, so the §12 empty path is the
+    // expected outcome — and it must not touch anyone's fairness score.
+    check('a run with no entrants ends COMPLETED_EMPTY',
+      run.status === 200 && run.json?.state === 'COMPLETED_EMPTY',
+      `state=${run.json?.state}`);
+
+    const replay = await call('POST', `/cycles/${cycleId}/runs`, {
+      headers: { 'idempotency-key': key },
+    });
+    check('replaying the idempotency key returns the same run',
+      replay.status === 200 && replay.json?.runId === run.json?.runId);
+
+    if (run.json?.runId) {
+      const detail = await call('GET', `/runs/${run.json.runId}`);
+      check('GET /runs/{id} exposes the seed for audit',
+        detail.status === 200 && typeof detail.json?.randomSeed === 'number');
+    }
+
+    const report = await call('GET', `/reports/quarterly/${cycleId}?format=csv`);
+    check('the quarterly report serves CSV',
+      report.status === 200 && (report.contentType ?? '').includes('text/csv'));
+  }
+
+  // --------------------------------------------------------------- metrics
+  const metrics = await call('GET', '/metrics/fairness');
+  check('GET /metrics/fairness returns the distribution',
+    metrics.status === 200 && typeof metrics.json?.residents === 'number',
+    `residents=${metrics.json?.residents}, avg=${metrics.json?.averageScore}`);
+
+  const cached = await call('GET', '/metrics/fairness');
+  check('the cached second read agrees with the first',
+    cached.status === 200 && cached.json?.residents === metrics.json?.residents);
+
+  // ----------------------------------------------------------- error shape
+  const missing = await call('GET', `/runs/${randomUUID()}`);
+  check('a 404 carries the standard error shape with a traceId',
+    missing.status === 404 && missing.json?.error === 'NOT_FOUND' && Boolean(missing.json?.traceId));
+
+  const notARoute = await call('GET', '/no/such/route');
+  check('an unknown route is 404, not a stack trace', notARoute.status === 404);
+
+  await finish(cognito, userPoolId, email);
+}
+
+async function finish(cognito, userPoolId, email) {
+  await cognito
+    .send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }))
+    .catch(() => undefined);
+
+  const failed = results.filter((r) => !r.pass);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  if (failed.length > 0) {
+    console.log('failed:');
+    for (const f of failed) console.log(`  - ${f.label}`);
+  }
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+main().catch((e) => {
+  console.error(e instanceof Error ? e.stack : String(e));
+  process.exit(1);
+});
