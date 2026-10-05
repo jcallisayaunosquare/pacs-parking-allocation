@@ -1,3 +1,5 @@
+@use '@angular/material' as mat;
+
 /**
  * PACS design system.
  *
@@ -9,8 +11,11 @@
  * Painted things have square corners, because paint does. Objects you press have a
  * small radius, because objects do. That distinction is the only use of radius here.
  *
- * There is no component library behind this. The controls are native elements with
- * classes, which is why they can look like this instead of like a vendor's theme.
+ * The components are Angular Material (MIT), but the palette is not Material's. M3
+ * emits its design decisions as CSS custom properties — `--mat-sys-*` — and every
+ * component reads them at runtime, so the whole library is re-pointed at the tokens
+ * below by reassigning those variables. That is the supported customization path and
+ * it beats fighting component styles one `::ng-deep` at a time.
  */
 
 /* ============================================================== foundations */
@@ -70,6 +75,175 @@
   --sp-6: 2rem;
   --sp-7: 3rem;
   --sp-8: 4.5rem;
+}
+
+/* ============================================== angular material, re-pointed */
+
+/**
+ * The base theme has to be emitted before the overrides below can mean anything: this
+ * is what defines every `--mat-sys-*` variable in the first place. The palettes picked
+ * here barely matter, because the colour variables are all reassigned underneath — what
+ * this include really buys is the component structure, the density scale and the
+ * typography wiring.
+ */
+html {
+  @include mat.theme(
+    (
+      color: (
+        primary: mat.$azure-palette,
+        tertiary: mat.$yellow-palette,
+      ),
+      typography: (
+        plain-family: 'Archivo, ui-sans-serif, system-ui, sans-serif',
+        brand-family: 'Archivo, ui-sans-serif, system-ui, sans-serif',
+      ),
+      density: 0,
+    )
+  );
+}
+
+/**
+ * Material's decisions, re-pointed at the parking structure.
+ *
+ * Steel is the primary, because it is what the solid pressable things are made of here.
+ * The bay line is the tertiary: Material reserves tertiary for the accent that marks
+ * something out, which is exactly the job the painted line already does, and keeping it
+ * off primary stops every button in the app turning yellow.
+ *
+ * Concrete is the surface. Material layers its surfaces by elevation, and concrete does
+ * not — a slab is a slab — so the container steps stay close together and separation is
+ * carried by the outline instead.
+ */
+:root {
+  --mat-sys-primary: var(--steel);
+  --mat-sys-on-primary: var(--stencil);
+  --mat-sys-primary-container: var(--concrete-deep);
+  --mat-sys-on-primary-container: var(--steel);
+
+  --mat-sys-secondary: var(--steel-soft);
+  --mat-sys-on-secondary: var(--stencil);
+  --mat-sys-secondary-container: var(--concrete-deep);
+  --mat-sys-on-secondary-container: var(--steel);
+
+  --mat-sys-tertiary: var(--bay-line-deep);
+  --mat-sys-on-tertiary: #2b2004;
+  --mat-sys-tertiary-container: var(--bay-line);
+  --mat-sys-on-tertiary-container: #2b2004;
+
+  --mat-sys-error: var(--revoked);
+  --mat-sys-on-error: var(--white);
+  --mat-sys-error-container: var(--revoked-wash);
+  --mat-sys-on-error-container: var(--revoked);
+
+  --mat-sys-background: var(--concrete);
+  --mat-sys-on-background: var(--steel);
+  --mat-sys-surface: var(--concrete);
+  --mat-sys-on-surface: var(--steel);
+  --mat-sys-surface-variant: var(--concrete-deep);
+  --mat-sys-on-surface-variant: var(--steel-soft);
+  --mat-sys-surface-dim: var(--concrete-deep);
+  --mat-sys-surface-bright: var(--slab);
+  --mat-sys-surface-container-lowest: var(--white);
+  --mat-sys-surface-container-low: var(--slab);
+  --mat-sys-surface-container: var(--concrete);
+  --mat-sys-surface-container-high: var(--concrete);
+  --mat-sys-surface-container-highest: var(--concrete-deep);
+
+  --mat-sys-outline: var(--rule);
+  --mat-sys-outline-variant: var(--rule-soft);
+
+  --mat-sys-inverse-surface: var(--steel);
+  --mat-sys-inverse-on-surface: var(--stencil);
+  --mat-sys-inverse-primary: var(--bay-line);
+
+  /*
+   * Paint has square corners. Material's defaults round from 4px up to 28px for the
+   * larger surfaces; everything here collapses to the two radii the system already
+   * had — 3px for things you press, 4px for the one floating surface.
+   */
+  --mat-sys-corner-none: 0;
+  --mat-sys-corner-extra-small: 3px;
+  --mat-sys-corner-small: 3px;
+  --mat-sys-corner-medium: 4px;
+  --mat-sys-corner-large: 4px;
+  --mat-sys-corner-extra-large: 4px;
+}
+
+/**
+ * Buttons derive their radius from `corner-full`, which is what makes a Material button
+ * a pill. That token is left alone — a fully round corner is right for the things that
+ * are meant to be round — and the five button appearances are pointed at the 3mm radius
+ * the rest of the system uses for things you press.
+ */
+html {
+  @include mat.button-overrides(
+    (
+      filled-container-shape: 3px,
+      outlined-container-shape: 3px,
+      protected-container-shape: 3px,
+      text-container-shape: 3px,
+      tonal-container-shape: 3px,
+    )
+  );
+}
+
+/**
+ * Two button treatments the M3 roles do not cover, because they are about where the
+ * button sits rather than what it does.
+ *
+ * `.go` is the one yellow button in the product: a filled button takes its colour from
+ * the primary, which is steel, and steel disappears on the steel panel these sit on.
+ * `.on-steel` is the same problem for the quieter buttons — Material's text and outline
+ * colours are mixed for a light surface and go invisible on a dark one.
+ *
+ * Both are set through the button's own tokens rather than by overriding its internals,
+ * so they survive a Material upgrade the way the rest of the theming does.
+ */
+.go {
+  --mat-button-filled-container-color: var(--bay-line);
+  --mat-button-filled-label-text-color: #2b2004;
+  --mat-button-filled-state-layer-color: #2b2004;
+}
+
+.on-steel {
+  --mat-button-text-label-text-color: var(--stencil);
+  --mat-button-text-state-layer-color: var(--stencil);
+  --mat-button-outlined-label-text-color: var(--stencil);
+  --mat-button-outlined-outline-color: #6d7a88;
+  --mat-button-outlined-state-layer-color: var(--stencil);
+}
+
+/**
+ * The dialog defaults to `surface`, which here is the same concrete the page is made of
+ * — the panel then reads as a lighter rectangle of the same material rather than as a
+ * thing on top. The slab is the one surface above ground level, so it is what floats.
+ */
+html {
+  @include mat.dialog-overrides(
+    (
+      container-color: var(--slab),
+    )
+  );
+}
+
+/**
+ * The outlined field is transparent by design, which on concrete reads as "not a field".
+ * White is what says a thing can be typed into here, so the wrapper gets the paper and
+ * the outline stays Material's.
+ */
+.mat-mdc-form-field-appearance-outline .mat-mdc-text-field-wrapper {
+  background: var(--white);
+  border-radius: 3px;
+}
+
+/**
+ * An outlined field's label sits above the top of its outline, in the notch. At the top
+ * of a scrolling dialog body there is nothing above it, so the label is clipped by the
+ * body's own overflow. The room has to come from the container.
+ */
+.mat-mdc-dialog-content > .mat-mdc-form-field:first-child,
+.mat-mdc-dialog-content > *:first-child > .mat-mdc-form-field:first-child {
+  margin-top: var(--sp-2);
 }
 
 * {
@@ -161,295 +335,85 @@ code {
   }
 }
 
-/* =================================================================== buttons */
+/* ========================================================== material tables */
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  min-height: 2.5rem;
-  padding: 0 var(--sp-4);
-  border: 1.5px solid var(--steel);
-  border-radius: 3px;
-  background: var(--steel);
-  color: var(--stencil);
-  font: inherit;
-  font-size: var(--t-small);
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background-color 90ms ease-out,
-    color 90ms ease-out;
-}
-
-.btn:hover:not(:disabled) {
-  background: #1a2533;
-  border-color: #1a2533;
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+/**
+ * Material's table, dressed as the rest of the system.
+ *
+ * The defaults are a Material card: a filled surface, a 56px header, a hairline under
+ * every row. Here a table is printed on concrete — the header is a painted rule, the
+ * rows are separated by the lightest line that still separates, and nothing has a
+ * shadow. Only the surface treatment changes; the structure Material provides, and the
+ * sort and paging behaviour attached to it, is left alone.
+ */
+/**
+ * Row height comes from a token, not from a rule, so a rule here cannot win: Material's
+ * component styles are injected after this stylesheet. A fixed 52px row is also wrong
+ * for this content — an ineligible resident carries a reason under the pill, and on a
+ * phone every row becomes a stack of labelled lines. Both overflow a fixed height, and
+ * the rows then print on top of each other.
+ */
+html {
+  @include mat.table-overrides(
+    (
+      row-item-container-height: auto,
+      header-container-height: auto,
+    )
+  );
 }
 
-/* The primary action on a page: the bay line underneath it, so the eye finds it. */
-.btn--go {
-  background: var(--bay-line);
-  border-color: var(--bay-line-deep);
-  color: #2b2004;
-}
-.btn--go:hover:not(:disabled) {
-  background: #d9ab28;
-  border-color: var(--bay-line-deep);
-}
-
-.btn--quiet {
-  background: transparent;
-  color: var(--steel);
-}
-.btn--quiet:hover:not(:disabled) {
-  background: var(--concrete-deep);
-  color: var(--steel);
-}
-
-.btn--bare {
-  background: transparent;
-  border-color: transparent;
-  color: var(--steel-soft);
-  padding: 0 var(--sp-2);
-  min-height: 2rem;
-  text-decoration: underline;
-  text-decoration-color: var(--rule);
-  text-underline-offset: 3px;
-}
-.btn--bare:hover:not(:disabled) {
-  background: transparent;
-  color: var(--steel);
-  text-decoration-color: var(--bay-line-deep);
-}
-
-.btn--danger {
-  background: transparent;
-  border-color: var(--revoked);
-  color: var(--revoked);
-}
-.btn--danger:hover:not(:disabled) {
-  background: var(--revoked);
-  color: var(--white);
-}
-
-/* On the steel bay, where the normal palette disappears. */
-.btn--on-dark {
-  background: transparent;
-  border-color: #6d7a88;
-  color: var(--stencil);
-}
-.btn--on-dark:hover:not(:disabled) {
-  background: #32404f;
-  border-color: #8c98a5;
-}
-
-.btn--sm {
-  min-height: 2.1rem;
-  font-size: var(--t-fine);
-  padding: 0 var(--sp-3);
-}
-
-/* ==================================================================== fields */
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-
-.field__label {
-  font-size: var(--t-fine);
-  font-weight: 600;
-  color: var(--steel-soft);
-}
-
-.field__hint {
-  font-size: var(--t-fine);
-  color: var(--steel-faint);
-}
-
-.input,
-.select {
-  min-height: 2.5rem;
-  padding: 0 var(--sp-3);
-  border: 1.5px solid var(--rule);
-  border-radius: 3px;
-  background: var(--white);
-  color: var(--steel);
-  font: inherit;
-  font-size: var(--t-small);
-}
-
-textarea.input {
-  padding: var(--sp-2) var(--sp-3);
-  min-height: 5rem;
-  resize: vertical;
-}
-
-.input:hover,
-.select:hover {
-  border-color: var(--steel-faint);
-}
-
-.input:focus-visible,
-.select:focus-visible {
-  border-color: var(--steel);
-  outline: 2px solid var(--bay-line);
-  outline-offset: 0;
-}
-
-.input::placeholder {
-  color: var(--steel-faint);
-}
-
-.select {
-  /* Native select, restyled. No vendor dropdown, no portal, no focus bugs. */
-  appearance: none;
-  padding-right: var(--sp-6);
-  background-image: linear-gradient(45deg, transparent 50%, var(--steel-soft) 50%),
-    linear-gradient(135deg, var(--steel-soft) 50%, transparent 50%);
-  background-position:
-    calc(100% - 17px) calc(50% + 2px),
-    calc(100% - 12px) calc(50% + 2px);
-  background-size:
-    5px 5px,
-    5px 5px;
-  background-repeat: no-repeat;
-}
-
-/* A checkbox drawn as a painted mark rather than a rounded chip. */
-.check {
-  display: inline-flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  cursor: pointer;
-  font-size: var(--t-small);
-}
-
-.check input[type='checkbox'] {
-  appearance: none;
-  flex: 0 0 auto;
-  width: 1.15rem;
-  height: 1.15rem;
-  margin: 0.17rem 0 0;
-  border: 1.5px solid var(--steel-faint);
-  border-radius: 2px;
-  background: var(--white);
-  cursor: pointer;
-}
-
-.check input[type='checkbox']:checked {
-  background: var(--steel);
-  border-color: var(--steel);
-  /* The tick, drawn rather than loaded as an icon font. */
-  background-image: linear-gradient(
-      -45deg,
-      transparent 45%,
-      var(--bay-line) 45%,
-      var(--bay-line) 58%,
-      transparent 58%
-    ),
-    linear-gradient(45deg, transparent 58%, var(--bay-line) 58%, var(--bay-line) 71%, transparent 71%);
-  background-size: 100% 100%;
-}
-
-.check input[type='checkbox']:focus-visible {
-  outline: 2px solid var(--bay-line);
-  outline-offset: 2px;
-}
-
-/* ==================================================================== tables */
-
-.tbl {
+.mat-mdc-table {
   width: 100%;
-  border-collapse: collapse;
+  background: transparent;
   font-size: var(--t-small);
 }
 
-.tbl th {
-  text-align: left;
-  font-weight: 600;
-  font-size: var(--t-fine);
-  color: var(--steel-soft);
+.mat-mdc-header-row {
+  background: transparent;
+}
+
+.mat-mdc-header-cell {
   padding: 0 var(--sp-3) var(--sp-2);
   border-bottom: 2px solid var(--steel);
+  font-size: var(--t-fine);
+  font-weight: 600;
+  color: var(--steel-soft);
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
-.tbl td {
+.mat-mdc-cell {
   padding: var(--sp-3);
   border-bottom: 1px solid var(--rule-soft);
+  color: var(--steel);
   vertical-align: baseline;
+  letter-spacing: 0;
 }
 
-.tbl tbody tr:hover td {
+.mat-mdc-row:hover .mat-mdc-cell {
   background: var(--slab);
 }
 
-.tbl th:first-child,
-.tbl td:first-child {
+.mat-mdc-header-cell:first-of-type,
+.mat-mdc-cell:first-of-type {
   padding-left: 0;
 }
 
-.tbl th:last-child,
-.tbl td:last-child {
+.mat-mdc-header-cell:last-of-type,
+.mat-mdc-cell:last-of-type {
   padding-right: 0;
   text-align: right;
 }
 
-.tbl__wrap {
-  overflow-x: auto;
+/* The sort arrow is Material's; it only needs to stop being grey on grey. */
+.mat-sort-header-arrow {
+  color: var(--steel);
 }
 
-/* A sortable heading is a button, so it is reachable and announced as one. */
-.tbl__sort {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  background: none;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  font-weight: 600;
-  font-size: var(--t-fine);
+.mat-mdc-paginator {
+  background: transparent;
   color: var(--steel-soft);
-  cursor: pointer;
-}
-
-.tbl__sort:hover {
-  color: var(--steel);
-}
-
-.tbl__sort[aria-sort='ascending'],
-.tbl__sort[aria-sort='descending'] {
-  color: var(--steel);
-}
-
-/* The arrow is drawn, not an icon font, and stays out of the accessible name. */
-.tbl__arrow {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  opacity: 0.35;
-}
-
-.tbl__arrow--asc {
-  border-bottom: 5px solid currentColor;
-  opacity: 1;
-}
-
-.tbl__arrow--desc {
-  border-top: 5px solid currentColor;
-  opacity: 1;
+  font-size: var(--t-fine);
 }
 
 /**
@@ -459,30 +423,33 @@ textarea.input {
  * a bay is in service — behind a gesture nobody makes. Each row becomes a block and
  * each cell carries its own heading, taken from the `data-label` the template sets, so
  * the information survives at phone width instead of being scrolled out of reach.
+ *
+ * Material does not do this: `mat-table` scrolls sideways like any other table, and the
+ * stacking is the same CSS it would take without the library.
  */
 @media (max-width: 52rem) {
-  .tbl,
-  .tbl tbody,
-  .tbl tr,
-  .tbl td {
+  .mat-mdc-table,
+  .mat-mdc-table tbody,
+  .mat-mdc-row,
+  .mat-mdc-cell {
     display: block;
     width: 100%;
   }
 
-  .tbl thead {
+  .mat-mdc-table thead {
     display: none;
   }
 
-  .tbl tr {
+  .mat-mdc-row {
     border-bottom: 2px solid var(--rule);
     padding: var(--sp-3) 0;
   }
 
-  .tbl tbody tr:hover td {
+  .mat-mdc-row:hover .mat-mdc-cell {
     background: transparent;
   }
 
-  .tbl td {
+  .mat-mdc-cell {
     border: 0;
     padding: var(--sp-1) 0;
     display: grid;
@@ -498,7 +465,7 @@ textarea.input {
     overflow-wrap: anywhere;
   }
 
-  .tbl td::before {
+  .mat-mdc-cell::before {
     content: attr(data-label);
     font-size: var(--t-fine);
     font-weight: 600;
@@ -506,50 +473,10 @@ textarea.input {
   }
 
   /* A cell with no label is an actions cell: let it run full width. */
-  .tbl td:not([data-label]) {
+  .mat-mdc-cell:not([data-label]) {
     display: block;
     padding-top: var(--sp-2);
   }
-}
-
-/* ==================================================================== dialog */
-
-dialog.modal {
-  border: 0;
-  border-radius: 4px;
-  padding: 0;
-  background: var(--concrete);
-  color: var(--steel);
-  max-width: min(32rem, calc(100vw - 2rem));
-  width: 100%;
-  box-shadow: 0 24px 60px rgb(36 48 65 / 28%);
-}
-
-dialog.modal::backdrop {
-  background: rgb(36 48 65 / 48%);
-}
-
-.modal__head {
-  padding: var(--sp-4) var(--sp-5) 0;
-}
-
-.modal__title {
-  font-size: var(--t-lead);
-}
-
-.modal__body {
-  padding: var(--sp-4) var(--sp-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-}
-
-.modal__foot {
-  padding: var(--sp-3) var(--sp-5) var(--sp-4);
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--sp-3);
-  border-top: 1px solid var(--rule);
 }
 
 /* ================================================================== messages */

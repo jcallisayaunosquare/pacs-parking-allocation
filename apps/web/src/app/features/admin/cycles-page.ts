@@ -1,12 +1,14 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
+import { MatDialog } from '@angular/material/dialog';
+import { MatTableModule } from '@angular/material/table';
 import { CyclesFacade } from '../../application/admin.facades';
 import type { Cycle, RunAssignment } from '../../domain/models';
 import { ConfirmService } from '../../shared/ui/confirm';
-import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
+import { NewCycleDialog } from './cycles-dialogs';
 
 /**
  * Admin — cycles and draws (UC-04, UC-05, §17).
@@ -24,14 +26,14 @@ import { ViewStateHost } from '../../shared/ui/view-state';
 @Component({
   selector: 'app-cycles-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, Modal, StatusPill, ViewStateHost],
+  imports: [DatePipe, MatButtonModule, MatTableModule, StatusPill, ViewStateHost],
   template: `
     <header class="head">
       <div>
         <h1 class="head__h">Cycles and draws</h1>
         <p class="head__p">One cycle per quarter: open registration, close it, run the draw.</p>
       </div>
-      <button class="btn" type="button" (click)="openCreate()">New cycle</button>
+      <button matButton="filled" type="button" (click)="openCreate()">New cycle</button>
     </header>
 
     @if (facade.error(); as e) {
@@ -47,12 +49,7 @@ import { ViewStateHost } from '../../shared/ui/view-state';
             Registration is closed. Running the draw assigns the bays, builds the
             waitlist and updates everyone's score. It cannot be undone.
           </p>
-          <button
-            class="btn btn--go"
-            type="button"
-            [disabled]="facade.busy()"
-            (click)="runDraw(c)"
-          >
+          <button matButton="filled" class="go" type="button" [disabled]="facade.busy()" (click)="runDraw(c)">
             Run the draw
           </button>
         </div>
@@ -97,33 +94,27 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           makes this draw checkable rather than merely trusted.
         </p>
 
-        <button
-          class="btn btn--quiet btn--sm"
-          type="button"
-          (click)="loadAssignments(run.runId)"
-        >
+        <button matButton="outlined" type="button" (click)="loadAssignments(run.runId)">
           Show who got what
         </button>
 
         @if (assignments().length > 0) {
-          <div class="tbl__wrap">
-            <table class="tbl">
-              <thead>
-                <tr>
-                  <th scope="col">Resident</th>
-                  <th scope="col">Bay</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (a of assignments(); track a.residentId) {
-                  <tr>
-                    <td data-label="Resident">{{ a.fullName }}</td>
-                    <td class="code stencil" data-label="Bay">{{ a.spotCode }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
+          <table mat-table [dataSource]="assignments()">
+            <ng-container matColumnDef="resident">
+              <th mat-header-cell *matHeaderCellDef>Resident</th>
+              <td mat-cell *matCellDef="let a" data-label="Resident">{{ a.fullName }}</td>
+            </ng-container>
+
+            <ng-container matColumnDef="bay">
+              <th mat-header-cell *matHeaderCellDef>Bay</th>
+              <td mat-cell *matCellDef="let a" data-label="Bay" class="code stencil">
+                {{ a.spotCode }}
+              </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="assignmentColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: assignmentColumns"></tr>
+          </table>
         }
       </section>
     }
@@ -138,117 +129,88 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       (retry)="facade.refresh()"
     >
       <h2 class="sec__h">All cycles</h2>
-      <div class="tbl__wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th scope="col">Cycle</th>
-              <th scope="col">Status</th>
-              <th scope="col">Quarter</th>
-              <th scope="col">Registration</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (c of facade.allCycles(); track c.id) {
-              <tr>
-                <td class="code stencil" data-label="Cycle">{{ c.label }}</td>
-                <td data-label="Status">
-                  @switch (c.state) {
-                    @case ('DRAFT') {
-                      <app-status-pill label="Draft" tone="idle" />
-                    }
-                    @case ('REGISTRATION_OPEN') {
-                      <app-status-pill label="Registration open" tone="held" />
-                    }
-                    @case ('REGISTRATION_CLOSED') {
-                      <app-status-pill label="Ready to draw" tone="attention" />
-                    }
-                    @case ('ACTIVE') {
-                      <app-status-pill label="In effect" tone="held" />
-                    }
-                    @default {
-                      <app-status-pill label="Closed" tone="idle" />
-                    }
-                  }
-                </td>
-                <td data-label="Quarter">
-                  {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
-                </td>
-                <td class="dim" data-label="Registration">
-                  {{ c.registrationOpensAt | date: 'd MMM' }} to
-                  {{ c.registrationClosesAt | date: 'd MMM' }}
-                </td>
-                <td>
-                  @switch (c.state) {
-                    @case ('DRAFT') {
-                      <button
-                        class="btn btn--bare"
-                        type="button"
-                        [disabled]="facade.busy()"
-                        (click)="facade.openRegistration(c.id)"
-                      >
-                        Open registration
-                      </button>
-                    }
-                    @case ('REGISTRATION_OPEN') {
-                      <button
-                        class="btn btn--bare"
-                        type="button"
-                        [disabled]="facade.busy()"
-                        (click)="facade.closeRegistration(c.id)"
-                      >
-                        Close registration
-                      </button>
-                    }
-                    @default {
-                      <span class="dim">—</span>
-                    }
-                  }
-                </td>
-              </tr>
+      <table mat-table [dataSource]="facade.allCycles()">
+        <ng-container matColumnDef="label">
+          <th mat-header-cell *matHeaderCellDef>Cycle</th>
+          <td mat-cell *matCellDef="let c" data-label="Cycle" class="code stencil">
+            {{ c.label }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="status">
+          <th mat-header-cell *matHeaderCellDef>Status</th>
+          <td mat-cell *matCellDef="let c" data-label="Status">
+            @switch (c.state) {
+              @case ('DRAFT') {
+                <app-status-pill label="Draft" tone="idle" />
+              }
+              @case ('REGISTRATION_OPEN') {
+                <app-status-pill label="Registration open" tone="held" />
+              }
+              @case ('REGISTRATION_CLOSED') {
+                <app-status-pill label="Ready to draw" tone="attention" />
+              }
+              @case ('ACTIVE') {
+                <app-status-pill label="In effect" tone="held" />
+              }
+              @default {
+                <app-status-pill label="Closed" tone="idle" />
+              }
             }
-          </tbody>
-        </table>
-      </div>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="quarter">
+          <th mat-header-cell *matHeaderCellDef>Quarter</th>
+          <td mat-cell *matCellDef="let c" data-label="Quarter">
+            {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="registration">
+          <th mat-header-cell *matHeaderCellDef>Registration</th>
+          <td mat-cell *matCellDef="let c" data-label="Registration" class="dim">
+            {{ c.registrationOpensAt | date: 'd MMM' }} to
+            {{ c.registrationClosesAt | date: 'd MMM' }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+          <td mat-cell *matCellDef="let c">
+            @switch (c.state) {
+              @case ('DRAFT') {
+                <button
+                  matButton
+                  type="button"
+                  [disabled]="facade.busy()"
+                  (click)="facade.openRegistration(c.id)"
+                >
+                  Open registration
+                </button>
+              }
+              @case ('REGISTRATION_OPEN') {
+                <button
+                  matButton
+                  type="button"
+                  [disabled]="facade.busy()"
+                  (click)="facade.closeRegistration(c.id)"
+                >
+                  Close registration
+                </button>
+              }
+              @default {
+                <span class="dim">—</span>
+              }
+            }
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="columns"></tr>
+        <tr mat-row *matRowDef="let row; columns: columns"></tr>
+      </table>
     </app-view-state>
 
-    <app-modal [open]="createOpen()" title="New cycle" (closed)="createOpen.set(false)">
-      <div class="dates">
-        <div class="field">
-          <label class="field__label" for="nc-start">Quarter begins</label>
-          <input class="input" id="nc-start" type="date" [(ngModel)]="form.startsOn" />
-        </div>
-        <div class="field">
-          <label class="field__label" for="nc-end">Quarter ends</label>
-          <input class="input" id="nc-end" type="date" [(ngModel)]="form.endsOn" />
-        </div>
-        <div class="field">
-          <label class="field__label" for="nc-open">Registration opens</label>
-          <input class="input" id="nc-open" type="date" [(ngModel)]="form.opensAt" />
-        </div>
-        <div class="field">
-          <label class="field__label" for="nc-close">Registration closes</label>
-          <input class="input" id="nc-close" type="date" [(ngModel)]="form.closesAt" />
-        </div>
-      </div>
-      <p class="field__hint">
-        The label, such as 2026-Q2, comes from the start date, so two administrators
-        cannot spell it differently.
-      </p>
-
-      <div modalFoot>
-        <button class="btn btn--quiet" type="button" (click)="createOpen.set(false)">Cancel</button>
-        <button
-          class="btn"
-          type="button"
-          [disabled]="!canSubmit() || facade.busy()"
-          (click)="submitCreate()"
-        >
-          Create cycle
-        </button>
-      </div>
-    </app-modal>
   `,
   styles: [
     `
@@ -360,10 +322,8 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         color: var(--steel-faint);
       }
 
-      .dates {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: var(--sp-3);
+      table {
+        width: 100%;
       }
 
       @media (max-width: 40rem) {
@@ -376,46 +336,21 @@ import { ViewStateHost } from '../../shared/ui/view-state';
           gap: var(--sp-5);
         }
       }
-      @media (max-width: 26rem) {
-        .dates {
-          grid-template-columns: 1fr;
-        }
-      }
     `,
   ],
 })
 export default class CyclesPage {
   readonly facade = inject(CyclesFacade);
   private readonly confirm = inject(ConfirmService);
+  private readonly dialog = inject(MatDialog);
 
   readonly assignments = signal<RunAssignment[]>([]);
-  readonly createOpen = signal(false);
 
-  /** Native date inputs speak `yyyy-MM-dd` strings, which is also what the API wants. */
-  form = { startsOn: '', endsOn: '', opensAt: '', closesAt: '' };
-
-  canSubmit(): boolean {
-    const f = this.form;
-    return Boolean(f.startsOn && f.endsOn && f.opensAt && f.closesAt);
-  }
+  readonly columns = ['label', 'status', 'quarter', 'registration', 'actions'];
+  readonly assignmentColumns = ['resident', 'bay'];
 
   openCreate(): void {
-    this.form = { startsOn: '', endsOn: '', opensAt: '', closesAt: '' };
-    this.facade.dismissError();
-    this.createOpen.set(true);
-  }
-
-  async submitCreate(): Promise<void> {
-    const f = this.form;
-    if (!this.canSubmit()) return;
-    const r = await this.facade.create({
-      startsOn: f.startsOn,
-      endsOn: f.endsOn,
-      // The window is a timestamp in the contract; midnight UTC on the chosen day.
-      registrationOpensAt: new Date(`${f.opensAt}T00:00:00Z`).toISOString(),
-      registrationClosesAt: new Date(`${f.closesAt}T23:59:59Z`).toISOString(),
-    });
-    if (r) this.createOpen.set(false);
+    this.dialog.open(NewCycleDialog, { width: '34rem', maxWidth: 'calc(100vw - 2rem)' });
   }
 
   async runDraw(c: Cycle): Promise<void> {

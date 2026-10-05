@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { MatButtonModule } from '@angular/material/button';
 import { DashboardFacade } from '../../application/dashboard.facade';
 import { Bay } from '../../shared/ui/bay';
 import type { Cycle } from '../../domain/models';
@@ -21,7 +22,7 @@ import { ConfirmService } from '../../shared/ui/confirm';
 @Component({
   selector: 'app-dashboard-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, RouterLink, Bay, ViewStateHost, FairnessExplainer],
+  imports: [DatePipe, RouterLink, MatButtonModule, Bay, ViewStateHost, FairnessExplainer],
   template: `
     <header class="head">
       <h1 class="head__h">Your parking</h1>
@@ -33,7 +34,7 @@ import { ConfirmService } from '../../shared/ui/confirm';
     @if (facade.mutationError(); as err) {
       <div class="msg msg--bad" role="alert">
         {{ err.message }}
-        <button class="btn btn--bare" type="button" (click)="facade.dismissError()">Dismiss</button>
+        <button matButton type="button" (click)="facade.dismissError()">Dismiss</button>
       </div>
     }
 
@@ -58,7 +59,8 @@ import { ConfirmService } from '../../shared/ui/confirm';
                 statusTone="held"
               >
                 <button
-                  class="btn btn--on-dark btn--sm"
+                  matButton="outlined"
+                  class="on-steel"
                   type="button"
                   [disabled]="facade.busy()"
                   (click)="release()"
@@ -96,7 +98,8 @@ import { ConfirmService } from '../../shared/ui/confirm';
               >
                 @if (facade.registered()) {
                   <button
-                    class="btn btn--bare"
+                    matButton
+                    class="on-steel"
                     type="button"
                     [disabled]="facade.busy()"
                     (click)="withdraw()"
@@ -105,7 +108,8 @@ import { ConfirmService } from '../../shared/ui/confirm';
                   </button>
                 } @else if (facade.canRegister()) {
                   <button
-                    class="btn btn--go"
+                    matButton="filled"
+                    class="go"
                     type="button"
                     [disabled]="facade.busy()"
                     (click)="facade.register()"

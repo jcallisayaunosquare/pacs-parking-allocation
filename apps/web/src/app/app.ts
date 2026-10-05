@@ -1,7 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthStore } from './core/auth/auth.store';
-import { ConfirmHost } from './shared/ui/confirm';
 
 /**
  * The shell: auth context, navigation, toasts, outlet (§17, Figure 17.2).
@@ -14,10 +13,9 @@ import { ConfirmHost } from './shared/ui/confirm';
 @Component({
   selector: 'app-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmHost],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     <a class="skip" href="#main">Skip to content</a>
-    <app-confirm-host />
 
     @if (auth.authenticated()) {
       <header class="bar">

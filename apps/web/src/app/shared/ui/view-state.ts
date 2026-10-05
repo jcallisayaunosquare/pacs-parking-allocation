@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
 import type { ViewState } from '../../domain/models';
 
 /**
@@ -17,6 +18,7 @@ import type { ViewState } from '../../domain/models';
 @Component({
   selector: 'app-view-state',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [MatButtonModule],
   template: `
     @switch (state().kind) {
       @case ('loading') {
@@ -33,7 +35,7 @@ import type { ViewState } from '../../domain/models';
           <h3 class="note__h">{{ emptyTitle() }}</h3>
           <p class="note__p">{{ emptyBody() }}</p>
           @if (emptyActionLabel()) {
-            <button class="btn btn--quiet btn--sm" type="button" (click)="action.emit()">
+            <button matButton="outlined" type="button" (click)="action.emit()">
               {{ emptyActionLabel() }}
             </button>
           }
@@ -55,7 +57,7 @@ import type { ViewState } from '../../domain/models';
           <h3 class="note__h">{{ errorTitle() }}</h3>
           <p class="note__p">{{ errorMessage() }}</p>
           <div class="note__row">
-            <button class="btn btn--sm" type="button" (click)="retry.emit()">Try again</button>
+            <button matButton="filled" type="button" (click)="retry.emit()">Try again</button>
             @if (traceId()) {
               <button class="trace" type="button" (click)="copyTrace()">
                 <span class="trace__label">Reference</span>

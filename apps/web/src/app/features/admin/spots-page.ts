@@ -1,10 +1,16 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
+import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatDialog } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatSelectModule } from '@angular/material/select';
+import { MatTableModule } from '@angular/material/table';
 import { SpotsFacade } from '../../application/admin.facades';
 import type { ParkingSpot, SpotType } from '../../domain/models';
-import { Modal } from '../../shared/ui/modal';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
+import { AddBayDialog } from './spots-dialogs';
 
 /**
  * Admin — the bay inventory (FR-16, §17).
@@ -17,14 +23,23 @@ import { ViewStateHost } from '../../shared/ui/view-state';
 @Component({
   selector: 'app-spots-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, Modal, StatusPill, ViewStateHost],
+  imports: [
+    FormsModule,
+    MatButtonModule,
+    MatCheckboxModule,
+    MatFormFieldModule,
+    MatSelectModule,
+    MatTableModule,
+    StatusPill,
+    ViewStateHost,
+  ],
   template: `
     <header class="head">
       <div>
         <h1 class="head__h">Bays</h1>
         <p class="head__p">What the draw has to hand out.</p>
       </div>
-      <button class="btn" type="button" (click)="openCreate()">Add bay</button>
+      <button matButton="filled" type="button" (click)="openCreate()">Add bay</button>
     </header>
 
     @if (facade.counts(); as c) {
@@ -49,25 +64,25 @@ import { ViewStateHost } from '../../shared/ui/view-state';
     }
 
     <div class="filters">
-      <select
-        class="select"
-        [ngModel]="facade.type() ?? ''"
-        (ngModelChange)="facade.type.set($event || undefined)"
-        aria-label="Filter by type"
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Type</mat-label>
+        <mat-select
+          [ngModel]="facade.type() ?? ''"
+          (ngModelChange)="facade.type.set($event || undefined)"
+        >
+          <mat-option value="">Any type</mat-option>
+          @for (o of typeOptions; track o.value) {
+            <mat-option [value]="o.value">{{ o.label }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-checkbox
+        [ngModel]="facade.activeOnly()"
+        (ngModelChange)="facade.activeOnly.set($event)"
       >
-        <option value="">Any type</option>
-        @for (o of typeOptions; track o.value) {
-          <option [value]="o.value">{{ o.label }}</option>
-        }
-      </select>
-      <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="facade.activeOnly()"
-          (ngModelChange)="facade.activeOnly.set($event)"
-        />
-        <span>In service only</span>
-      </label>
+        In service only
+      </mat-checkbox>
     </div>
 
     @if (facade.error(); as e) {
@@ -83,98 +98,65 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <div class="tbl__wrap">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th scope="col">Bay</th>
-              <th scope="col">Level</th>
-              <th scope="col">Type</th>
-              <th scope="col">Status</th>
-              <th scope="col">Notes</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (s of facade.spots(); track s.id) {
-              <tr [class.row--out]="!s.isActive">
-                <td class="code stencil" data-label="Bay">{{ s.spotCode }}</td>
-                <td data-label="Level">{{ s.level }}</td>
-                <td data-label="Type">
-                  @switch (s.type) {
-                    @case ('ACCESSIBLE') {
-                      <app-status-pill label="Accessible" tone="attention" />
-                    }
-                    @case ('EV') {
-                      <app-status-pill label="EV" tone="waiting" />
-                    }
-                    @default {
-                      <span class="dim">Standard</span>
-                    }
-                  }
-                </td>
-                <td data-label="Status">
-                  @if (s.isActive) {
-                    <app-status-pill label="In service" tone="held" />
-                  } @else {
-                    <app-status-pill label="Out of service" tone="revoked" />
-                  }
-                </td>
-                <td class="dim" data-label="Notes">{{ s.notes || '—' }}</td>
-                <td>
-                  <button
-                    class="btn btn--bare"
-                    type="button"
-                    [disabled]="facade.busy()"
-                    (click)="toggle(s)"
-                  >
-                    {{ s.isActive ? 'Take out of service' : 'Put back in service' }}
-                  </button>
-                </td>
-              </tr>
+      <table mat-table [dataSource]="facade.spots()">
+        <ng-container matColumnDef="code">
+          <th mat-header-cell *matHeaderCellDef>Bay</th>
+          <td mat-cell *matCellDef="let s" data-label="Bay" class="code stencil">
+            {{ s.spotCode }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="level">
+          <th mat-header-cell *matHeaderCellDef>Level</th>
+          <td mat-cell *matCellDef="let s" data-label="Level">{{ s.level }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="type">
+          <th mat-header-cell *matHeaderCellDef>Type</th>
+          <td mat-cell *matCellDef="let s" data-label="Type">
+            @switch (s.type) {
+              @case ('ACCESSIBLE') {
+                <app-status-pill label="Accessible" tone="attention" />
+              }
+              @case ('EV') {
+                <app-status-pill label="EV" tone="waiting" />
+              }
+              @default {
+                <span class="dim">Standard</span>
+              }
             }
-          </tbody>
-        </table>
-      </div>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="status">
+          <th mat-header-cell *matHeaderCellDef>Status</th>
+          <td mat-cell *matCellDef="let s" data-label="Status">
+            @if (s.isActive) {
+              <app-status-pill label="In service" tone="held" />
+            } @else {
+              <app-status-pill label="Out of service" tone="revoked" />
+            }
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="notes">
+          <th mat-header-cell *matHeaderCellDef>Notes</th>
+          <td mat-cell *matCellDef="let s" data-label="Notes" class="dim">{{ s.notes || '—' }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+          <td mat-cell *matCellDef="let s">
+            <button matButton type="button" [disabled]="facade.busy()" (click)="toggle(s)">
+              {{ s.isActive ? 'Take out of service' : 'Put back in service' }}
+            </button>
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="columns"></tr>
+        <tr mat-row *matRowDef="let row; columns: columns" [class.row--out]="!row.isActive"></tr>
+      </table>
     </app-view-state>
-
-    <app-modal [open]="createOpen()" title="Add bay" (closed)="createOpen.set(false)">
-      <div class="field">
-        <label class="field__label" for="ns-code">Bay code</label>
-        <input class="input" id="ns-code" [(ngModel)]="form.spotCode" placeholder="B2-14" />
-      </div>
-      <div class="field">
-        <label class="field__label" for="ns-level">Level</label>
-        <input class="input" id="ns-level" [(ngModel)]="form.level" placeholder="B2" />
-      </div>
-      <div class="field">
-        <label class="field__label" for="ns-type">Type</label>
-        <select class="select" id="ns-type" [(ngModel)]="form.type">
-          @for (o of typeOptions; track o.value) {
-            <option [value]="o.value">{{ o.label }}</option>
-          }
-        </select>
-      </div>
-      <div class="field">
-        <label class="field__label" for="ns-notes">Notes</label>
-        <input class="input" id="ns-notes" [(ngModel)]="form.notes" placeholder="Optional" />
-      </div>
-      <p class="field__hint">
-        Bay codes are what residents read on the floor, so use the code painted there.
-      </p>
-
-      <div modalFoot>
-        <button class="btn btn--quiet" type="button" (click)="createOpen.set(false)">Cancel</button>
-        <button
-          class="btn"
-          type="button"
-          [disabled]="!form.spotCode.trim() || !form.level.trim() || facade.busy()"
-          (click)="submitCreate()"
-        >
-          Add bay
-        </button>
-      </div>
-    </app-modal>
   `,
   styles: [
     `
@@ -226,20 +208,13 @@ import { ViewStateHost } from '../../shared/ui/view-state';
         border-bottom: 1px solid var(--rule);
         padding-bottom: var(--sp-4);
       }
-
-      @media (max-width: 40rem) {
-        .head {
-          flex-direction: column;
-          align-items: stretch;
-        }
-        .tally {
-          gap: var(--sp-5);
-        }
-        .filters .select {
-          width: 100%;
-        }
+      .filters mat-form-field {
+        width: 13rem;
       }
 
+      table {
+        width: 100%;
+      }
       .code {
         font-size: 1.05rem;
       }
@@ -250,11 +225,27 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       .dim {
         color: var(--steel-faint);
       }
+
+      @media (max-width: 40rem) {
+        .head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .tally {
+          gap: var(--sp-5);
+        }
+        .filters mat-form-field {
+          width: 100%;
+        }
+      }
     `,
   ],
 })
 export default class SpotsPage {
   readonly facade = inject(SpotsFacade);
+  private readonly dialog = inject(MatDialog);
+
+  readonly columns = ['code', 'level', 'type', 'status', 'notes', 'actions'];
 
   readonly typeOptions: { label: string; value: SpotType }[] = [
     { label: 'Standard', value: 'STANDARD' },
@@ -262,29 +253,8 @@ export default class SpotsPage {
     { label: 'EV', value: 'EV' },
   ];
 
-  readonly createOpen = signal(false);
-
-  form: { spotCode: string; level: string; type: SpotType; notes: string } = {
-    spotCode: '',
-    level: '',
-    type: 'STANDARD',
-    notes: '',
-  };
-
   openCreate(): void {
-    this.form = { spotCode: '', level: '', type: 'STANDARD', notes: '' };
-    this.facade.dismissError();
-    this.createOpen.set(true);
-  }
-
-  async submitCreate(): Promise<void> {
-    const r = await this.facade.create({
-      spotCode: this.form.spotCode.trim().toUpperCase(),
-      level: this.form.level.trim(),
-      type: this.form.type,
-      notes: this.form.notes.trim() || null,
-    });
-    if (r) this.createOpen.set(false);
+    this.dialog.open(AddBayDialog, { width: '32rem', maxWidth: 'calc(100vw - 2rem)' });
   }
 
   toggle(s: ParkingSpot): void {

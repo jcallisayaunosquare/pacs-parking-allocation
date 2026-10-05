@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { MatButtonModule } from '@angular/material/button';
 import { AuthStore } from '../../core/auth/auth.store';
 
 /**
@@ -10,6 +11,7 @@ import { AuthStore } from '../../core/auth/auth.store';
 @Component({
   selector: 'app-login-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [MatButtonModule],
   template: `
     <div class="gate">
       <p class="gate__mark stencil">PACS</p>
@@ -17,7 +19,7 @@ import { AuthStore } from '../../core/auth/auth.store';
       <p class="gate__p">
         A quarterly draw for the building's parking bays. Sign in to see where you stand.
       </p>
-      <button class="btn btn--go" type="button" (click)="auth.login()">Sign in</button>
+      <button matButton="filled" class="go" type="button" (click)="auth.login()">Sign in</button>
       <p class="gate__fine">
         Accounts are created by the building administration. If you do not have one, ask
         them to add you.
@@ -143,7 +145,7 @@ export class CallbackPage implements OnInit {
 @Component({
   selector: 'app-pending-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [MatButtonModule, RouterLink],
   template: `
     <!--
       Two states, deliberately told apart. They used to share this page, so a failed
@@ -164,7 +166,7 @@ export class CallbackPage implements OnInit {
           </p>
         }
         <div class="pend__row">
-          <button class="btn" type="button" (click)="recheck()">Try again</button>
+          <button matButton="filled" type="button" (click)="recheck()">Try again</button>
           <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
         </div>
       </div>
@@ -181,9 +183,9 @@ export class CallbackPage implements OnInit {
           you.
         </p>
         <div class="pend__row">
-          <button class="btn btn--quiet" type="button" (click)="recheck()">Check again</button>
+          <button matButton="outlined" type="button" (click)="recheck()">Check again</button>
           @if (auth.isAdmin()) {
-            <a class="btn btn--bare" routerLink="/admin/residents">Go to administration</a>
+            <a matButton routerLink="/admin/residents">Go to administration</a>
           }
           <button class="pend__out" type="button" (click)="auth.logout()">Sign out</button>
         </div>
@@ -252,7 +254,7 @@ export class PendingPage {
 @Component({
   selector: 'app-forbidden-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [MatButtonModule, RouterLink],
   template: `
     <div class="stop" role="alert">
       <h1 class="stop__h">This page is for building administrators</h1>
@@ -260,7 +262,7 @@ export class PendingPage {
         Your account does not have that permission. If it should, ask the building
         administration to grant it.
       </p>
-      <a class="btn btn--quiet" [routerLink]="auth.isAdmin() ? '/admin/residents' : '/'">
+      <a matButton="outlined" [routerLink]="auth.isAdmin() ? '/admin/residents' : '/'">
         {{ auth.isAdmin() ? 'Go to residents' : 'Back to my parking' }}
       </a>
     </div>

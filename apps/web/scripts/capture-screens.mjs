@@ -156,11 +156,20 @@ async function main() {
     await page.locator('#er-name').fill('Screenshot Admin Edited');
     await page.getByRole('button', { name: /save changes/i }).click();
     await page.waitForTimeout(1800);
-    const edited = await page.locator('.tbl td[data-label="Name"]').first().textContent();
+    const edited = await page.locator('td[data-label="Name"]').first().textContent();
     if (edited?.trim() !== 'Screenshot Admin Edited') {
       problems.push(`edit did not reach the list — row still reads "${edited?.trim()}"`);
     }
     await shot('03e-after-edit');
+
+    // Put the name back, so the remaining screenshots are not photographs of a test
+    // artefact — the header shows this resident's name on every page.
+    await page.getByRole('button', { name: 'Edit' }).first().click();
+    await page.waitForTimeout(500);
+    await page.locator('#er-name').fill('Screenshot Admin');
+    await page.getByRole('button', { name: /save changes/i }).click();
+    await page.waitForTimeout(1500);
+
     await page.getByRole('button', { name: /^Clear$/ }).click();
     await page.waitForTimeout(1200);
 
@@ -199,12 +208,22 @@ async function main() {
       // The page as a whole can fit while a single cell still cuts its value off — a long
       // email did exactly that. Measure each cell against the box it was given.
       const clipped = await page.evaluate(() =>
-        [...document.querySelectorAll('.tbl td')]
+        [...document.querySelectorAll('td[data-label]')]
           .filter((td) => td.scrollWidth > td.clientWidth + 1)
           .map((td) => `${td.dataset.label ?? 'actions'}: ${td.textContent.trim().slice(0, 40)}`)
           .slice(0, 3),
       );
       for (const c of clipped) problems.push(`cell clipped at 390px on ${path} — ${c}`);
+
+      // A row shorter than what is inside it prints over the row beneath. The width
+      // checks above cannot see that, because nothing moves sideways when it happens.
+      const squashed = await page.evaluate(() =>
+        [...document.querySelectorAll('tr')]
+          .filter((tr) => tr.scrollHeight > tr.clientHeight + 1)
+          .map((tr) => tr.textContent.trim().slice(0, 40))
+          .slice(0, 3),
+      );
+      for (const r of squashed) problems.push(`row content overflows its height on ${path} — ${r}`);
     }
   } catch (e) {
     problems.push(`FLOW: ${e instanceof Error ? e.message : String(e)}`);

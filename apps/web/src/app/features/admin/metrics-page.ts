@@ -1,5 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatSelectModule } from '@angular/material/select';
 import { CyclesFacade, MetricsFacade } from '../../application/admin.facades';
 import { ViewStateHost } from '../../shared/ui/view-state';
 
@@ -15,16 +18,14 @@ import { ViewStateHost } from '../../shared/ui/view-state';
 @Component({
   selector: 'app-metrics-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, ViewStateHost],
+  imports: [FormsModule, MatButtonModule, MatFormFieldModule, MatSelectModule, ViewStateHost],
   template: `
     <header class="head">
       <div>
         <h1 class="head__h">Fairness</h1>
         <p class="head__p">Whether the draw is spreading bays the way it is supposed to.</p>
       </div>
-      <button class="btn btn--quiet btn--sm" type="button" (click)="facade.refresh()">
-        Refresh
-      </button>
+      <button matButton="outlined" type="button" (click)="facade.refresh()">Refresh</button>
     </header>
 
     <app-view-state
@@ -78,7 +79,9 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                 </span>
                 <span class="dist__count">
                   {{ d.residents }}
-                  <span class="dist__weight">{{ d.score + 1 }} entries each</span>
+                  <span class="dist__weight">
+                    {{ d.score + 1 }} {{ d.score === 0 ? 'entry' : 'entries' }} each
+                  </span>
                 </span>
               </li>
             }
@@ -91,19 +94,19 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       <h2 class="sec__h">Quarterly report</h2>
       <p class="dist__p">One row per person who took part in a cycle, as CSV (UC-07).</p>
       <div class="export__row">
-        <select
-          class="select"
-          [ngModel]="selectedCycle()"
-          (ngModelChange)="selectedCycle.set($event || null)"
-          aria-label="Cycle to export"
-        >
-          <option [ngValue]="null">Choose a cycle</option>
-          @for (o of cycleOptions(); track o.value) {
-            <option [ngValue]="o.value">{{ o.label }}</option>
-          }
-        </select>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Cycle to export</mat-label>
+          <mat-select
+            [ngModel]="selectedCycle()"
+            (ngModelChange)="selectedCycle.set($event || null)"
+          >
+            @for (o of cycleOptions(); track o.value) {
+              <mat-option [value]="o.value">{{ o.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
         <button
-          class="btn btn--quiet btn--sm"
+          matButton="outlined"
           type="button"
           [disabled]="!selectedCycle()"
           (click)="download()"

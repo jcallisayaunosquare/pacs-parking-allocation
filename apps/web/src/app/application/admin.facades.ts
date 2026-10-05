@@ -105,6 +105,13 @@ export class ResidentsFacade {
     this.firstPage();
   }
 
+  /** The same restart, for a caller that already knows both halves — MatSort does. */
+  setSort(field: ResidentSortField, dir: SortDirection): void {
+    this.sort.set(field);
+    this.dir.set(dir);
+    this.firstPage();
+  }
+
   firstPage(): void {
     this.cursor.set(undefined);
     this.trail.set([]);

@@ -1,5 +1,12 @@
-import { ChangeDetectionStrategy, Component, Injectable, computed, inject, signal } from '@angular/core';
-import { Modal } from './modal';
+import { ChangeDetectionStrategy, Component, Injectable, inject } from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
+import {
+  MAT_DIALOG_DATA,
+  MatDialog,
+  MatDialogModule,
+  type MatDialogRef,
+} from '@angular/material/dialog';
+import { firstValueFrom } from 'rxjs';
 
 export interface ConfirmRequest {
   readonly title: string;
@@ -9,63 +16,61 @@ export interface ConfirmRequest {
   readonly danger?: boolean;
 }
 
+@Component({
+  selector: 'app-confirm-dialog',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [MatButtonModule, MatDialogModule],
+  template: `
+    <h2 mat-dialog-title>{{ data.title }}</h2>
+    <mat-dialog-content>
+      <p>{{ data.body }}</p>
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button matButton [mat-dialog-close]="false">{{ data.cancelLabel ?? 'Cancel' }}</button>
+      <button
+        matButton="filled"
+        [class.act--danger]="data.danger"
+        [mat-dialog-close]="true"
+        cdkFocusInitial
+      >
+        {{ data.confirmLabel }}
+      </button>
+    </mat-dialog-actions>
+  `,
+})
+export class ConfirmDialog {
+  readonly data = inject<ConfirmRequest>(MAT_DIALOG_DATA);
+}
+
 /**
  * Confirmation for the irreversible actions (§17: every one of them goes through a
- * dialog). One host component at the shell, one service to ask.
+ * dialog).
  *
  * The promise resolves true or false rather than taking callbacks, so a caller reads
- * as a sentence: `if (await confirm.ask(...)) { ... }`.
+ * as a sentence: `if (await confirm.ask(...)) { ... }`. That shape survived the move to
+ * MatDialog — the callers did not change — while the host component this used to need
+ * at the shell went away, because MatDialog brings its own overlay.
  */
 @Injectable({ providedIn: 'root' })
 export class ConfirmService {
-  private readonly _request = signal<ConfirmRequest | null>(null);
-  private resolver: ((ok: boolean) => void) | null = null;
+  private readonly dialog = inject(MatDialog);
+  private openRef: MatDialogRef<ConfirmDialog, boolean> | null = null;
 
-  readonly request = this._request.asReadonly();
-
-  ask(request: ConfirmRequest): Promise<boolean> {
+  async ask(request: ConfirmRequest): Promise<boolean> {
     // A second ask while one is open cancels the first rather than stacking dialogs.
-    this.resolver?.(false);
-    this._request.set(request);
-    return new Promise<boolean>((resolve) => {
-      this.resolver = resolve;
+    this.openRef?.close(false);
+
+    const ref = this.dialog.open<ConfirmDialog, ConfirmRequest, boolean>(ConfirmDialog, {
+      data: request,
+      width: '30rem',
+      maxWidth: 'calc(100vw - 2rem)',
+      // Esc and the backdrop both mean "no", which is the safe answer for every caller.
+      restoreFocus: true,
     });
+    this.openRef = ref;
+
+    const ok = await firstValueFrom(ref.afterClosed());
+    if (this.openRef === ref) this.openRef = null;
+    return ok === true;
   }
-
-  settle(ok: boolean): void {
-    this._request.set(null);
-    const r = this.resolver;
-    this.resolver = null;
-    r?.(ok);
-  }
-}
-
-@Component({
-  selector: 'app-confirm-host',
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Modal],
-  template: `
-    @if (service.request(); as r) {
-      <app-modal [open]="true" [title]="r.title" (closed)="service.settle(false)">
-        <p>{{ r.body }}</p>
-
-        <div modalFoot>
-          <button class="btn btn--quiet" type="button" (click)="service.settle(false)">
-            {{ r.cancelLabel ?? 'Cancel' }}
-          </button>
-          <button
-            class="btn"
-            [class.btn--danger]="r.danger"
-            type="button"
-            (click)="service.settle(true)"
-          >
-            {{ r.confirmLabel }}
-          </button>
-        </div>
-      </app-modal>
-    }
-  `,
-})
-export class ConfirmHost {
-  readonly service = inject(ConfirmService);
 }
