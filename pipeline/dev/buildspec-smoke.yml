@@ -1,0 +1,37 @@
+version: 0.2
+
+# Stage 3: ask the deployed system whether it works.
+#
+# This is the only check in the whole pipeline that can speak for the running
+# environment. The unit tests prove the rules, Playwright proves the screens against a
+# stub, and neither of them can say a word about Cognito, about Postgres, or about
+# whether a frame put in an S3 bucket comes back out as a recognised plate. These two
+# suites exercise exactly that, over real HTTP with a real token.
+#
+# They leave a little behind, and it is worth knowing: smoke.mjs creates a cycle, a bay
+# and a resident, and without DATABASE_URL it cannot remove them afterwards. Running it
+# on every deploy accumulates them in the dev register - it has already put periods
+# with names like 2235-Q1 in front of an administrator. Giving this project a
+# DATABASE_URL, so the suite can tidy up after itself, is the fix.
+
+env:
+  variables:
+    PNPM_VERSION: '9.15.9'
+    STAGE: dev
+    AWS_REGION: us-east-2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+    commands:
+      - corepack enable
+      - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+  build:
+    commands:
+      - cd apps/api
+      - echo "The API surface - auth, RBAC, paging, the cycle state machine, the draw"
+      - node scripts/smoke.mjs
+      - echo "Plate recognition, end to end through S3, Rekognition, DynamoDB and Postgres"
+      - node scripts/smoke-plates.mjs

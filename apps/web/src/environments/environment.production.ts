@@ -13,10 +13,12 @@ export const environment = {
   auth: {
     authority: 'https://cognito-idp.us-east-2.amazonaws.com/us-east-2_NsdZ4M0mj',
     clientId: '2tu4q5vefr1g98u90u8dspmife',
-    // TODO replace with the CloudFront domain once the web bucket is deployed, and add
-    // the same URLs to the Cognito client's CallbackURLs / LogoutURLs.
-    redirectUrl: 'https://localhost/callback',
-    postLogoutRedirectUri: 'https://localhost',
+    // The CloudFront domain from pipeline/dev/web-hosting.yml (its SiteUrl output).
+    // These two strings must match the Cognito client's CallbackURLs and LogoutURLs
+    // character for character, which is why both are generated from one value in
+    // serverless.yml - custom.webOrigin.
+    redirectUrl: 'https://d2gamvhpvfk16e.cloudfront.net/callback',
+    postLogoutRedirectUri: 'https://d2gamvhpvfk16e.cloudfront.net',
     hostedUiDomain: 'https://pacs-dev-309887812390.auth.us-east-2.amazoncognito.com',
   },
   defaultLanguage: 'es',

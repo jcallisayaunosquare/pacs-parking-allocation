@@ -144,8 +144,15 @@ provider:
         # already covered by the statements above. Nothing further is needed for them.
 
 custom:
+  # Where the frontend is served from, per stage.
+  #
+  # It is a CloudFront domain rather than the bucket's: the bucket is private and
+  # reachable only through the distribution, and Cognito refuses an http:// callback,
+  # so there is no version of this that works without TLS in front. The hosting stack
+  # (pipeline/dev/web-hosting.yml) owns the distribution and prints this value as its
+  # SiteUrl output.
   webOrigin:
-    dev: http://localhost:4200
+    dev: https://d2gamvhpvfk16e.cloudfront.net
   # ---------------------------------------------------------------- plates (M-7)
   captures:
     bucket: pacs-captures-${self:provider.stage}
@@ -559,10 +566,17 @@ resources:
           - profile
         SupportedIdentityProviders:
           - COGNITO
+        # Both the deployed site and the development server, and every URL exactly as
+        # the client will send it. Cognito matches these strings literally - a trailing
+        # slash or a missing /callback is the whole of the redirect_mismatch error, and
+        # it is the most common way a correct deployment still cannot be signed in to.
         CallbackURLs:
+          - ${self:custom.webOrigin.${self:provider.stage}, 'http://localhost:4200'}
+          - ${self:custom.webOrigin.${self:provider.stage}, 'http://localhost:4200'}/callback
           - http://localhost:4200
           - http://localhost:4200/callback
         LogoutURLs:
+          - ${self:custom.webOrigin.${self:provider.stage}, 'http://localhost:4200'}
           - http://localhost:4200
         # Short access tokens with refresh rotation (§10 cloud security practices).
         AccessTokenValidity: 15

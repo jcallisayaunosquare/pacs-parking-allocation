@@ -1,0 +1,54 @@
+version: 0.2
+
+# Stage 1 of the pipeline: prove the commit, then build what will ship.
+#
+# The unit tests run again here even though GitHub Actions already ran them on the pull
+# request, and that repetition is deliberate. Branch protection can be bypassed by an
+# administrator, and on this project the administrator is also the only engineer. A
+# pipeline that trusts a check it did not run is a pipeline that will one day deploy
+# something that does not compile. A minute of CodeBuild buys that away.
+#
+# What is NOT repeated: the Playwright suite. It needs two servers and a browser, takes
+# a minute and a half, and its whole purpose is to block a merge. After the merge it
+# blocks nothing.
+
+env:
+  variables:
+    # Corepack reads this; it must match the packageManager field in package.json.
+    PNPM_VERSION: '9.15.9'
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+    commands:
+      - corepack enable
+      - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+  pre_build:
+    commands:
+      # --frozen-lockfile: a build that is allowed to resolve a different dependency
+      # tree than the one that was reviewed is not building the reviewed commit.
+      - pnpm install --frozen-lockfile
+      - pnpm -r typecheck
+      - pnpm --filter @pacs/api test
+
+  build:
+    commands:
+      - pnpm --filter @pacs/web build --configuration production
+
+artifacts:
+  # The whole tree, not just dist.
+  #
+  # The deploy stage runs `serverless deploy`, which packages the backend from source
+  # and needs node_modules, serverless.yml and the api sources. Carrying them forward
+  # means the deployed artefact is built from the same checkout that passed the tests
+  # above, rather than from a second install that could resolve differently.
+  files:
+    - '**/*'
+  name: pacs-build
+
+cache:
+  paths:
+    - 'node_modules/**/*'
+    - 'apps/*/node_modules/**/*'

@@ -1,0 +1,309 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  PACS development - the delivery pipeline. Source from GitHub, build and test, deploy
+  the backend and the frontend, then ask the deployed system whether it works.
+
+# Why CodePipeline and not GitHub Actions for this half.
+#
+# Not preference. This account sits under an organisation whose service control policy
+# denies every iam action on identity providers, including reading one. Keyless OIDC
+# federation from a GitHub runner into this account is therefore impossible, and the
+# alternative - an IAM user whose access keys live in a public repository's secrets -
+# is a long-lived credential nobody should have to rotate. CodePipeline runs inside the
+# account on a service role and needs no federation at all.
+#
+# Pull request checks stay on GitHub Actions (.github/workflows/ci.yml), because they
+# need no AWS access and because only a check reported on the pull request itself can
+# stop a merge. CodePipeline starts after the merge; by then there is nothing to stop.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: development
+  GitHubOwner:
+    Type: String
+    Default: jcallisayaunosquare
+  GitHubRepo:
+    Type: String
+    Default: pacs-parking-allocation
+  Branch:
+    Type: String
+    Default: development
+    Description: >-
+      The branch the pipeline takes as its source. A V2 pipeline can be started against
+      another commit with --source-revisions, which is how a loose branch gets tried on
+      development without a pull request.
+  WebBucketName:
+    Type: String
+    Description: From the web-hosting stack's WebBucketName output.
+  DistributionId:
+    Type: String
+    Description: From the web-hosting stack's DistributionId output.
+
+Resources:
+  # ------------------------------------------------------------------- source access
+  #
+  # Created PENDING. A human has to finish it in the console, by installing the AWS
+  # Connector app on the GitHub account and choosing which repositories it may read.
+  # That handshake cannot be automated, by design: it is the moment somebody with
+  # authority over the GitHub account grants AWS access to it.
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: !Sub 'pacs-github-${EnvironmentName}'
+      ProviderType: GitHub
+
+  # Artifacts move between stages through this bucket: the checkout the tests passed on
+  # is the same tree the deploy stage uses, rather than a second install that could
+  # resolve a different dependency graph.
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'pacs-pipeline-artifacts-${EnvironmentName}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          # Build artefacts are evidence for about as long as anybody looks at a failed
+          # run. Keeping them longer is paying to store node_modules.
+          - Id: expire-artifacts
+            Status: Enabled
+            ExpirationInDays: 14
+          - Id: abort-incomplete
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  # ------------------------------------------------------------------------- the role
+  #
+  # One role for all three builds, and the breadth of it is a trade-off worth stating
+  # rather than burying.
+  #
+  # `serverless deploy` drives a CloudFormation stack that owns Lambda functions, an
+  # HTTP API, DynamoDB tables, S3 buckets, log groups, event source mappings and the
+  # execution roles those functions assume. Enumerating every action the framework may
+  # emit is a policy nobody can keep correct, and getting it wrong surfaces as a deploy
+  # that dies half-applied. PowerUserAccess covers the services while withholding IAM -
+  # the part that could escalate - and the inline policy hands back exactly the IAM this
+  # project needs, confined to role names it owns.
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'pacs-pipeline-build-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: iam-for-serverless
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/pacs-api-*'
+              # The smoke suite mints a throwaway administrator in the dev pool and
+              # deletes it afterwards. PowerUser does not include Cognito's admin API.
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminAddUserToGroup
+                  - cognito-idp:AdminInitiateAuth
+                Resource: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+              # It must never be able to rewrite its own trust or its own permissions.
+              - Effect: Deny
+                Action: iam:*
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/pacs-pipeline-*'
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'pacs-pipeline-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codepipeline.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: orchestration
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # The pipeline itself only moves artefacts and starts builds. Everything
+              # that touches the application is done by the build role above.
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketVersioning]
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource:
+                  - !GetAtt BuildProject.Arn
+                  - !GetAtt DeployProject.Arn
+                  - !GetAtt SmokeProject.Arn
+              - Effect: Allow
+                Action: [codestar-connections:UseConnection, codeconnections:UseConnection]
+                Resource: !Ref GitHubConnection
+
+  # ---------------------------------------------------------------------- the builds
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'pacs-build-${EnvironmentName}'
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: { Type: CODEPIPELINE }
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: pipeline/dev/buildspec-build.yml
+      Environment:
+        # ARM is cheaper per minute than x86 and the work here is node, which does not
+        # care. The free tier covers arm1.small as well.
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+      Cache:
+        Type: LOCAL
+        Modes: [LOCAL_CUSTOM_CACHE, LOCAL_SOURCE_CACHE]
+      TimeoutInMinutes: 20
+
+  DeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'pacs-deploy-${EnvironmentName}'
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: { Type: CODEPIPELINE }
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: pipeline/dev/buildspec-deploy.yml
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        EnvironmentVariables:
+          - { Name: WEB_BUCKET, Value: !Ref WebBucketName }
+          - { Name: CLOUDFRONT_DISTRIBUTION_ID, Value: !Ref DistributionId }
+      TimeoutInMinutes: 30
+
+  SmokeProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'pacs-smoke-${EnvironmentName}'
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: { Type: CODEPIPELINE }
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: pipeline/dev/buildspec-smoke.yml
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+      TimeoutInMinutes: 20
+
+  # --------------------------------------------------------------------- the pipeline
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub 'pacs-${EnvironmentName}'
+      # V2 so an execution can be started against a chosen commit, which is what lets a
+      # branch be tried on development without opening a pull request.
+      PipelineType: V2
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              OutputArtifacts: [{ Name: source }]
+              Configuration:
+                ConnectionArn: !Ref GitHubConnection
+                FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
+                BranchName: !Ref Branch
+                # Manual starts only. A merge into development lands the code on the
+                # branch and nothing else happens until somebody releases it - which is
+                # what was asked for, and which also means a merge can never surprise
+                # the environment somebody is demonstrating on.
+                DetectChanges: false
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: TestAndBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts: [{ Name: source }]
+              OutputArtifacts: [{ Name: built }]
+              Configuration: { ProjectName: !Ref BuildProject }
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: BackendAndFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts: [{ Name: built }]
+              Configuration: { ProjectName: !Ref DeployProject }
+              RunOrder: 1
+
+        - Name: Verify
+          Actions:
+            - Name: Smoke
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts: [{ Name: built }]
+              Configuration: { ProjectName: !Ref SmokeProject }
+              RunOrder: 1
+
+Outputs:
+  ConnectionArn:
+    Description: >-
+      Finish this in the console before the first run: Developer Tools, Settings,
+      Connections, then Update pending connection. Until that is done the source stage
+      fails with a connection error.
+    Value: !Ref GitHubConnection
+  PipelineName:
+    Value: !Ref Pipeline
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket

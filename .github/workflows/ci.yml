@@ -1,0 +1,138 @@
+# Checks that gate a merge into `development`.
+#
+# Everything here runs on the pull request itself, on every push to its branch, and
+# reports back as a status check. That is the half CodePipeline cannot do: it starts
+# after a merge, so it can tell you the build is broken but not stop it landing.
+#
+# Nothing in this file touches AWS. It needs no credentials, no OIDC role and no
+# network beyond the registry, which is what makes it safe to run on a pull request
+# from a fork of a public repository.
+name: CI
+
+on:
+  pull_request:
+    branches: [development, master]
+  push:
+    branches: [development, master]
+
+# A second push to the same branch makes the first run pointless, so it is cancelled
+# rather than left burning a runner to report on a commit nobody will merge.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned to what the repository already builds with; `engines` asks for >= 22.
+  NODE_VERSION: '24'
+  PNPM_VERSION: '9.15.9'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r lint
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+
+  test-api:
+    name: Unit tests · API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pacs/api test
+
+  test-web:
+    name: Unit tests · Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pacs/web test
+
+  # The production bundle, built once and kept. The deploy workflow does not rebuild it:
+  # what ships has to be the artefact the checks passed on, not a second build of the
+  # same commit that nobody tested.
+  build:
+    name: Build
+    needs: [lint, typecheck, test-api, test-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pacs/web build --configuration production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist/web
+          retention-days: 7
+
+  e2e:
+    name: End to end
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Only the one browser the suite declares, and its system libraries.
+      - run: pnpm --filter @pacs/web exec playwright install --with-deps chromium
+
+      # Playwright starts both halves of the offline loop itself: the in-memory API on
+      # 4300 and the app on 4200. No AWS, no database, no cost.
+      - run: pnpm --filter @pacs/web e2e
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7

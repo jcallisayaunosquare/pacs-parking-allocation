@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  PACS development - where the frontend is served from. One stack, deployed by hand
+  once; putting files into it afterwards is the pipeline's job.
+
+# Why this is CloudFormation and not Serverless Framework, which the backend uses:
+# this stack is part of what *deploys* the application, so it must exist before any
+# pipeline runs and must not be torn down by a failed deploy of the thing it serves.
+# Keeping it separate also keeps the blast radius of `serverless remove` away from the
+# bucket holding the site.
+#
+# There is no GitHub OIDC provider here, and that is not an oversight. This account
+# sits under an organisation whose service control policy denies every iam action on
+# identity providers - creating one, and even reading one. Keyless federation from
+# GitHub Actions is therefore impossible here, which is why deployment runs inside AWS
+# on CodePipeline (see pipeline.yml) rather than from a runner.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: development
+
+Resources:
+  # ----------------------------------------------------------------- the site bucket
+  #
+  # Private. Not an S3 website bucket: that mode is HTTP only and needs the objects to
+  # be publicly readable, and Cognito will not accept an http:// callback URL. The
+  # bucket is reachable only through CloudFront, by origin access control.
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'pacs-web-${EnvironmentName}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          # Versioning is on so a bad deploy can be rolled back by restoring the
+          # previous objects - there is no automatic rollback in the pipeline, and this
+          # is what makes a manual one possible. Old versions are not worth a month.
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: abort-incomplete
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'pacs-web-${EnvironmentName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Only this distribution, by ARN. A bare cloudfront.amazonaws.com principal
+          # would let anybody's distribution read the bucket.
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  # ------------------------------------------------------------------- the front door
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'PACS ${EnvironmentName}'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100 # North America and Europe; this is a dev environment
+        Origins:
+          - Id: web-bucket
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: web-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          # CachingOptimized, the AWS managed policy. Its id is fixed and global.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+        # The single rule an Angular application cannot be served without.
+        #
+        # Routing happens in the browser, so /admin/residents is not an object in the
+        # bucket. S3 answers 403 for a key that does not exist in a private bucket (not
+        # 404 - it will not admit what is absent), CloudFront would pass that on, and
+        # every deep link and every page refresh would break. Both are rewritten to the
+        # application shell with a 200, and the router takes it from there.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'pacs-web-${EnvironmentName}-headers'
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions: { Override: true }
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+Outputs:
+  WebBucketName:
+    Description: The bucket the pipeline syncs the built frontend into.
+    Value: !Ref WebBucket
+    Export:
+      Name: !Sub 'pacs-web-bucket-${EnvironmentName}'
+  DistributionId:
+    Description: The distribution the pipeline invalidates after a sync.
+    Value: !Ref Distribution
+    Export:
+      Name: !Sub 'pacs-web-distribution-${EnvironmentName}'
+  SiteUrl:
+    Description: >-
+      The application's address. It must also be registered on the Cognito app client
+      as a callback and a logout URL, and written into environment.production.ts, or
+      sign-in fails with redirect_mismatch.
+    Value: !Sub 'https://${Distribution.DomainName}'

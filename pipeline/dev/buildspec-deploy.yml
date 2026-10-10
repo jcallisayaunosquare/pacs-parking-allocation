@@ -1,0 +1,57 @@
+version: 0.2
+
+# Stage 2: put it on the development environment.
+#
+# Backend and frontend in one build, in that order. The frontend talks to the API, so
+# a frontend that went up first would, for the length of the deploy, be a new client
+# calling an old server - which is the one ordering that can break a user mid-session.
+#
+# Database migrations are NOT here. RDS sits in private subnets and this account has no
+# NAT gateway, so nothing outside the VPC can reach it; CodeBuild would have to run
+# inside the VPC, which then needs endpoints for S3, CloudWatch and Secrets Manager,
+# each billed by the hour. The intended answer is a migration Lambda inside the VPC
+# that this stage invokes. Until it exists, migrations are applied by hand before the
+# deploy that needs them, and that is a known gap rather than a decision.
+
+env:
+  variables:
+    PNPM_VERSION: '9.15.9'
+    STAGE: dev
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+    commands:
+      - corepack enable
+      - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+  build:
+    commands:
+      - echo "Deploying the backend stack"
+      - cd apps/api
+      - npx --no-install serverless deploy --stage "${STAGE}"
+      - cd "${CODEBUILD_SRC_DIR}"
+
+      # Hashed assets first, index.html last, each with the cache life it deserves.
+      #
+      # If index.html went up first it would, for a few seconds, point browsers at
+      # chunks that are not there yet. And if index.html were cached like the chunks, a
+      # returning visitor would keep loading the old one and never see the deploy at
+      # all: the file that names every other file is the one that must never be cached.
+      - echo "Uploading the hashed assets"
+      - |
+        aws s3 sync apps/web/dist/web/browser "s3://${WEB_BUCKET}" \
+          --delete \
+          --exclude index.html \
+          --cache-control "public, max-age=31536000, immutable"
+      - echo "Uploading index.html"
+      - |
+        aws s3 cp apps/web/dist/web/browser/index.html "s3://${WEB_BUCKET}/index.html" \
+          --cache-control "no-cache, no-store, must-revalidate"
+
+      - echo "Invalidating the distribution"
+      - |
+        aws cloudfront create-invalidation \
+          --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+          --paths "/" "/index.html"
