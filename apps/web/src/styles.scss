@@ -3,69 +3,242 @@
 /**
  * PACS design system.
  *
- * The visual language comes from the subject: a residential parking structure. Raw
- * concrete for the ground, painted steel for the one solid block, and the yellow of a
- * painted bay line as the single accent — load-bearing, because it is what marks a
- * space as yours. Nothing has a shadow; concrete is matte.
+ * The visual language comes from the thesis rather than from the building: PACS
+ * publishes a place in line, so the screen is a civic call board. The ground is
+ * committed deep slate, the board is a darker object standing on it, and one luminous
+ * signal carries position, turn and the single action - nowhere else. The ticket is the
+ * second material: pale paper, the one soft thing, carrying what is yours.
+ *
+ * Depth is by layer and by ground value. Nothing has a drop shadow.
  *
  * Painted things have square corners, because paint does. Objects you press have a
  * small radius, because objects do. That distinction is the only use of radius here.
  *
  * The components are Angular Material (MIT), but the palette is not Material's. M3
- * emits its design decisions as CSS custom properties — `--mat-sys-*` — and every
+ * emits its design decisions as CSS custom properties - `--mat-sys-*` - and every
  * component reads them at runtime, so the whole library is re-pointed at the tokens
  * below by reassigning those variables. That is the supported customization path and
  * it beats fighting component styles one `::ng-deep` at a time.
  */
-
 /* ============================================================== foundations */
 
-:root {
+/**
+ * One temperature, committed: cool.
+ *
+ * Every neutral carries a hue whisper at H 229 - the same lean as the signal, which is
+ * the rule that keeps a palette from reading as two palettes. Saturation stays at or
+ * below 22% on every neutral, so the surfaces are quiet and the signal is the only
+ * saturated thing on screen. Signal coverage is intended to stay under 10%: it belongs
+ * on the action, the focus ring, the active nav item, the viewer's own row and the bay
+ * that is yours, and nowhere else.
+ *
+ * The light palette is the same system at a different brightness, not a second palette.
+ * The hues do not move; the ramp inverts; interactive colours darken rather than
+ * lighten, because on a light ground that is what a hover does. Every pairing in both
+ * is measured.
+ */
+
+/**
+ * The light palette: concrete under a lit ceiling. It is a choice a person makes, not
+ * the product's own value, which is why it lives in a mixin applied by an attribute
+ * rather than in `:root`.
+ */
+@mixin pacs-light {
   color-scheme: light;
 
-  /* ------------------------------------------------------------------ surface */
-  --concrete: #e4e2dd;
-  --concrete-deep: #d8d5cf;
-  --slab: #f3f1ed;
-  --white: #ffffff;
+  --surface-1: #fafbff; /* raised: cards, dialogs, the sheet a table sits on */
+  --surface-2: #edeff7; /* the ground */
+  --surface-3: #dddfed; /* recessed: hover, wells, an empty bay */
 
-  /* ---------------------------------------------------------------------- ink */
-  --steel: #243041;
-  --steel-soft: #46566b;
-  --steel-faint: #727f8d;
-  --stencil: #f6f5f2;
+  --ink-1: #1d1f29; /* 14.3:1 on the ground */
+  --ink-2: #434654; /*  8.2:1 */
+  --ink-3: #696c7a; /*  4.5:1 - the floor for body text */
 
-  /* ------------------------------------------- the one accent: painted bay line */
-  --bay-line: #e8b931;
-  --bay-line-deep: #a8810f;
+  --rule: #afb3c9;
+  --rule-soft: #cacde0;
 
-  /* ------------------------------------ status, all >= 4.5:1 on their own wash */
-  --held: #2a6349;
-  --held-wash: #d9e7df;
-  --waiting: #35537180;
-  --waiting-ink: #2f4c6b;
-  --waiting-wash: #dae4ee;
-  --attention: #7d5110;
-  --attention-wash: #f1e5cd;
-  --revoked: #873624;
-  --revoked-wash: #f0dad4;
-  --idle: #55606b;
-  --idle-wash: #dcdad5;
+  /* What the page is dimmed to while a dialog holds it. */
+  --scrim: rgb(29 31 41 / 42%);
 
-  /* -------------------------------------------------------------------- lines */
-  --rule: #c5c1b9;
-  --rule-soft: #d5d1ca;
+  --primary: #5049d6;
+  --primary-strong: #3b30b8; /* hover and pressed: darker on a light ground */
+  --primary-wash: #e0dff7;
+  --on-primary: #ffffff; /* 7.3:1 */
 
-  /* --------------------------------------------------------------------- type */
+  --success: #317a62;
+  --warning: #bd490f;
+  --danger: #9e424a;
+  --info: #437294;
+  --success-wash: #dceae5;
+  --warning-wash: #fae3d6;
+  --danger-wash: #f1dcde;
+  --info-wash: #dde8ef;
+  --on-semantic: #ffffff;
+
+  --bay-free: var(--success);
+  --bay-free-edge: #245946;
+  --bay-free-ink: #ffffff;
+  --bay-held: #5a5e70;
+  --bay-held-edge: #434654;
+  --bay-held-ink: #ffffff;
+  /* Measured at 4.96:1 on the held fill: a caption on it is still body text. */
+  --bay-held-ink-dim: #dfe2ec;
+  --bay-mine: var(--primary);
+  --bay-mine-edge: #241f6e;
+  --bay-mine-ink: #ffffff;
+  --bay-closed: var(--danger);
+  --bay-closed-edge: #763137;
+  --bay-closed-ink: #ffffff;
+
+  --board: #1a1d2b;
+  --board-rule: #2e3346;
+  --board-ink: #e7e9f2;
+  --board-ink-dim: #9298ae;
+
+  /* A field is a well you type into: on paper it is whiter, on slate it is deeper. */
+  --field: #ffffff;
+
+  --ticket: #fbfbfe;
+  --ticket-ink: #1d1f29;
+  --ticket-edge: #d7dae8;
+
+  --signal: #5049d6;
+  --signal-on-board: #9b96ff;
+
+  --stencil: #ffffff;
+}
+
+/**
+ * Slate: the product's own value, and the default.
+ *
+ * The thesis is a call board, and a call board is a dark object in a lit room - the
+ * numbers on it are the light. So the ground is committed deep slate rather than a
+ * tinted white, carrying the same H 229 whisper as the signal so the screen reads as one
+ * material. Every neutral stays at or under 22% saturation; the signal is the only
+ * saturated thing, and it is spent on position, turn and the one action.
+ *
+ * Every pairing below is measured against the ground (#15171f).
+ */
+@mixin pacs-slate {
+  color-scheme: dark;
+
+  /* ---------------------------------------------------------------- surfaces */
+  --surface-1: #1d202b; /* raised: the board's frame, a dialog, a panel */
+  --surface-2: #15171f; /* the ground */
+  --surface-3: #272b38; /* recessed: a well, a hover, an empty bay */
+
+  /* --------------------------------------------------------------------- ink */
+  --ink-1: #eef0f7; /* 15.7:1 on the ground */
+  --ink-2: #c3c7d6; /* 10.5:1 */
+  --ink-3: #959ab0; /*  6.4:1 - the floor for body text */
+
+  /* ------------------------------------------------------------------- lines */
+  --rule: #333849;
+  --rule-soft: #262a37;
+
+  /* Deeper on the dark ground: a 42% wash over slate is barely a change at all. */
+  --scrim: rgb(5 6 10 / 66%);
+
+  /* ----------------------------------------------------------------- primary */
+  --primary: #8d87ff; /* 6.0:1 on the ground */
+  --primary-strong: #aaa5ff; /* on a dark ground a hover lightens */
+  --primary-wash: #23233a;
+  --on-primary: #12141c; /* 6.2:1 on the signal */
+
+  /* --------------------------------------------------------------- semantics */
+  --success: #58bd9b;
+  --warning: #e8903f;
+  --danger: #d9838b;
+  --info: #74a8cd;
+  --success-wash: #16302a;
+  --warning-wash: #33200f;
+  --danger-wash: #341f23;
+  --info-wash: #1a2b36;
+  --on-semantic: #12141c;
+
+  /* ------------------------------------------- the lot map, from the same set */
+  /* The deck is slate, so a bay fill has to be darker than its own edge to read. */
+  --bay-free: #2c7f68;
+  --bay-free-edge: #74d7b6;
+  --bay-free-ink: #eaf7f2;
+  --bay-held: #343a4d;
+  --bay-held-edge: #6e7691;
+  --bay-held-ink: #d3d7e4;
+  /* 5.2:1 on the held fill. */
+  --bay-held-ink-dim: #a9afc4;
+  --bay-mine: var(--signal);
+  --bay-mine-edge: #cfccff;
+  --bay-mine-ink: #12141c;
+  --bay-closed: #7e3a42;
+  --bay-closed-edge: #d9949b;
+  --bay-closed-ink: #f6e2e4;
+
+  /* The board sits below the ground in value, so it still reads as an object on it. */
+  --board: #0f111a;
+  --board-rule: #232838;
+  --board-ink: #f2f4fb;
+  --board-ink-dim: #8c92a8;
+
+  --field: #101219;
+
+
+  /* The ticket is paper in both palettes: the one pale, soft thing in the product. */
+  --ticket: #f6f6fb;
+  --ticket-ink: #15171f;
+  --ticket-edge: #cfd3e4;
+
+  --signal: #8d87ff;
+  --signal-on-board: #a9a4ff;
+
+  --stencil: #eef0f7;
+}
+
+:root {
+  @include pacs-slate;
+
+  /*
+   * Names the components already use, repointed rather than renamed: one definition here
+   * corrects every screen, which is the whole reason they are tokens.
+   */
+  --concrete: var(--surface-2);
+  --concrete-deep: var(--surface-3);
+  --slab: var(--surface-1);
+  --white: var(--surface-1);
+  --steel: var(--ink-1);
+  --steel-soft: var(--ink-2);
+  --steel-faint: var(--ink-3);
+  --accent: var(--primary);
+  --accent-deep: var(--primary-strong);
+  --on-accent: var(--on-primary);
+  --bay-line: var(--primary);
+  --bay-line-deep: var(--primary-strong);
+  --held: var(--success);
+  --held-wash: var(--success-wash);
+  --waiting: var(--info);
+  --waiting-ink: var(--info);
+  --waiting-wash: var(--info-wash);
+  --attention: var(--warning);
+  --attention-wash: var(--warning-wash);
+  --revoked: var(--danger);
+  --revoked-wash: var(--danger-wash);
+  --idle: var(--ink-3);
+  --idle-wash: var(--surface-3);
+
+  /* -------------------------------------------------------------------- type */
   --face: 'Archivo', ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  /* A 1.26 scale on a 16px body. */
   --t-fine: 0.8125rem;
   --t-small: 0.9375rem;
   --t-body: 1rem;
   --t-lead: 1.25rem;
   --t-title: 1.5625rem;
   --t-head: 1.9375rem;
+  /*
+   * Display scale, and the only thing that gets it: the number that is the subject of
+   * the screen. Clamped so it is still the biggest thing on a phone without pushing the
+   * figure beneath it off the viewport.
+   */
+  --t-display: clamp(3.25rem, 9vw, 5.25rem);
 
   --sp-1: 0.25rem;
   --sp-2: 0.5rem;
@@ -77,12 +250,94 @@
   --sp-8: 4.5rem;
 }
 
+/*
+ * The palette is a stated commitment rather than a preference read off the machine: the
+ * board is a dark object in a lit room, and that stays true on a laptop set to light.
+ * The light palette is still here and a person's stated choice still outranks everything
+ * - which is the right order. It just no longer starts the argument.
+ */
+:root[data-theme='light'] {
+  @include pacs-light;
+}
+
+:root[data-theme='dark'] {
+  @include pacs-slate;
+}
+
+/* A theme flip must not animate every themed property at once. */
+:root[data-theme-switching] * {
+  transition: none !important;
+}
+
+
+/* The primary action, wherever Material draws one. */
+html {
+  --mat-button-filled-container-color: var(--signal);
+  --mat-button-filled-label-text-color: var(--on-primary);
+  --mat-button-filled-state-layer-color: var(--on-primary);
+  --mat-fab-container-color: var(--signal);
+  --mat-fab-foreground-color: var(--on-primary);
+}
+
+/* ========================================== surfaces the browser supplies */
+
+/**
+ * Selection, caret, scrollbars, focus and numerals arrive with browser defaults that
+ * belong to no design system. They are cheap to theme and they are the difference
+ * between a page that was built and a page that was assembled.
+ */
+
+::selection {
+  background: var(--signal);
+  color: #ffffff;
+}
+
+:root {
+  caret-color: var(--signal);
+  scrollbar-color: var(--rule) transparent;
+  scrollbar-width: thin;
+  /* Figures line up in a column whatever the digits are: this product is full of them. */
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-3);
+  background-clip: content-box;
+}
+
+/* One focus ring for the whole product, so keyboard position never changes character. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--signal);
+  outline-offset: 2px;
+}
+
+:where(a) {
+  color: inherit;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
 /* ============================================== angular material, re-pointed */
 
 /**
  * The base theme has to be emitted before the overrides below can mean anything: this
  * is what defines every `--mat-sys-*` variable in the first place. The palettes picked
- * here barely matter, because the colour variables are all reassigned underneath — what
+ * here barely matter, because the colour variables are all reassigned underneath - what
  * this include really buys is the component structure, the density scale and the
  * typography wiring.
  */
@@ -90,8 +345,8 @@ html {
   @include mat.theme(
     (
       color: (
-        primary: mat.$azure-palette,
-        tertiary: mat.$yellow-palette,
+        primary: mat.$violet-palette,
+        tertiary: mat.$azure-palette,
       ),
       typography: (
         plain-family: 'Archivo, ui-sans-serif, system-ui, sans-serif',
@@ -108,27 +363,27 @@ html {
  * Steel is the primary, because it is what the solid pressable things are made of here.
  * The bay line is the tertiary: Material reserves tertiary for the accent that marks
  * something out, which is exactly the job the painted line already does, and keeping it
- * off primary stops every button in the app turning yellow.
+ * off primary stops every button in the app turning signal.
  *
  * Concrete is the surface. Material layers its surfaces by elevation, and concrete does
- * not — a slab is a slab — so the container steps stay close together and separation is
+ * not - a slab is a slab - so the container steps stay close together and separation is
  * carried by the outline instead.
  */
 :root {
-  --mat-sys-primary: var(--steel);
-  --mat-sys-on-primary: var(--stencil);
-  --mat-sys-primary-container: var(--concrete-deep);
-  --mat-sys-on-primary-container: var(--steel);
+  --mat-sys-primary: var(--signal);
+  --mat-sys-on-primary: var(--on-primary);
+  --mat-sys-primary-container: var(--primary-wash);
+  --mat-sys-on-primary-container: var(--ink-1);
 
-  --mat-sys-secondary: var(--steel-soft);
-  --mat-sys-on-secondary: var(--stencil);
-  --mat-sys-secondary-container: var(--concrete-deep);
-  --mat-sys-on-secondary-container: var(--steel);
+  --mat-sys-secondary: var(--ink-2);
+  --mat-sys-on-secondary: var(--surface-1);
+  --mat-sys-secondary-container: var(--surface-3);
+  --mat-sys-on-secondary-container: var(--ink-1);
 
   --mat-sys-tertiary: var(--bay-line-deep);
-  --mat-sys-on-tertiary: #2b2004;
+  --mat-sys-on-tertiary: var(--on-primary);
   --mat-sys-tertiary-container: var(--bay-line);
-  --mat-sys-on-tertiary-container: #2b2004;
+  --mat-sys-on-tertiary-container: var(--on-primary);
 
   --mat-sys-error: var(--revoked);
   --mat-sys-on-error: var(--white);
@@ -159,7 +414,7 @@ html {
   /*
    * Paint has square corners. Material's defaults round from 4px up to 28px for the
    * larger surfaces; everything here collapses to the two radii the system already
-   * had — 3px for things you press, 4px for the one floating surface.
+   * had - 3px for things you press, 4px for the one floating surface.
    */
   --mat-sys-corner-none: 0;
   --mat-sys-corner-extra-small: 3px;
@@ -171,8 +426,8 @@ html {
 
 /**
  * Buttons derive their radius from `corner-full`, which is what makes a Material button
- * a pill. That token is left alone — a fully round corner is right for the things that
- * are meant to be round — and the five button appearances are pointed at the 3mm radius
+ * a pill. That token is left alone - a fully round corner is right for the things that
+ * are meant to be round - and the five button appearances are pointed at the 3mm radius
  * the rest of the system uses for things you press.
  */
 html {
@@ -191,9 +446,9 @@ html {
  * Two button treatments the M3 roles do not cover, because they are about where the
  * button sits rather than what it does.
  *
- * `.go` is the one yellow button in the product: a filled button takes its colour from
- * the primary, which is steel, and steel disappears on the steel panel these sit on.
- * `.on-steel` is the same problem for the quieter buttons — Material's text and outline
+ * `.go` is the one filled button in the product: a filled button takes its colour from
+ * the primary, which is steel, and the board swallows a steel button that sits on it.
+ * `.on-steel` is the same problem for the quieter buttons - Material's text and outline
  * colours are mixed for a light surface and go invisible on a dark one.
  *
  * Both are set through the button's own tokens rather than by overriding its internals,
@@ -201,8 +456,8 @@ html {
  */
 .go {
   --mat-button-filled-container-color: var(--bay-line);
-  --mat-button-filled-label-text-color: #2b2004;
-  --mat-button-filled-state-layer-color: #2b2004;
+  --mat-button-filled-label-text-color: var(--on-primary);
+  --mat-button-filled-state-layer-color: var(--on-primary);
 }
 
 .on-steel {
@@ -215,7 +470,7 @@ html {
 
 /**
  * The dialog defaults to `surface`, which here is the same concrete the page is made of
- * — the panel then reads as a lighter rectangle of the same material rather than as a
+ * - the panel then reads as a lighter rectangle of the same material rather than as a
  * thing on top. The slab is the one surface above ground level, so it is what floats.
  */
 html {
@@ -227,12 +482,29 @@ html {
 }
 
 /**
- * The outlined field is transparent by design, which on concrete reads as "not a field".
- * White is what says a thing can be typed into here, so the wrapper gets the paper and
- * the outline stays Material's.
+ * The dialog's scrim.
+ *
+ * The CDK no longer renders a backdrop element for an overlay: it puts the pane in the
+ * top layer as `popover="manual"`, so the dim has to come from `::backdrop`, which is
+ * not painted by default. Without this a dialog opens over a page that looks exactly as
+ * live as it was a moment ago — and these dialogs are where the irreversible actions
+ * are confirmed, so "the page behind is waiting on you" is the whole point of it.
+ *
+ * `:has()` keeps it to dialogs. The same popover wrapper carries menus and select
+ * panels, and dimming the building's register because someone opened a row menu would
+ * be absurd.
+ */
+.cdk-overlay-popover:has(.mat-mdc-dialog-container)::backdrop {
+  background: var(--scrim);
+}
+
+/**
+ * The outlined field is transparent by design, which on either ground reads as "not a
+ * field". What says a thing can be typed into is that it is a well: whiter than paper,
+ * deeper than slate. One token, opposite directions, and the outline stays Material's.
  */
 .mat-mdc-form-field-appearance-outline .mat-mdc-text-field-wrapper {
-  background: var(--white);
+  background: var(--field);
   border-radius: 3px;
 }
 
@@ -304,7 +576,7 @@ code {
 
 /**
  * Stencil: the type treatment that carries the design. Archivo's width axis pushed
- * wide and heavy, tracking tightened — the way a bay number is painted on concrete.
+ * wide and heavy, tracking tightened - the way a bay number is painted on concrete.
  * For bay codes and the few numbers that are the point of a screen, never for labels.
  */
 .stencil {
@@ -341,7 +613,7 @@ code {
  * Material's table, dressed as the rest of the system.
  *
  * The defaults are a Material card: a filled surface, a 56px header, a hairline under
- * every row. Here a table is printed on concrete — the header is a painted rule, the
+ * every row. Here a table is printed on concrete - the header is a painted rule, the
  * rows are separated by the lightest line that still separates, and nothing has a
  * shadow. Only the surface treatment changes; the structure Material provides, and the
  * sort and paging behaviour attached to it, is left alone.
@@ -349,7 +621,7 @@ code {
 /**
  * Row height comes from a token, not from a rule, so a rule here cannot win: Material's
  * component styles are injected after this stylesheet. A fixed 52px row is also wrong
- * for this content — an ineligible resident carries a reason under the pill, and on a
+ * for this content - an ineligible resident carries a reason under the pill, and on a
  * phone every row becomes a stack of labelled lines. Both overflow a fixed height, and
  * the rows then print on top of each other.
  */
@@ -419,8 +691,8 @@ html {
 /**
  * Below 52rem a table stops being a table.
  *
- * Horizontal scrolling hides the columns that carry the decision — eligibility, whether
- * a bay is in service — behind a gesture nobody makes. Each row becomes a block and
+ * Horizontal scrolling hides the columns that carry the decision - eligibility, whether
+ * a bay is in service - behind a gesture nobody makes. Each row becomes a block and
  * each cell carries its own heading, taken from the `data-label` the template sets, so
  * the information survives at phone width instead of being scrolled out of reach.
  *
@@ -497,4 +769,47 @@ html {
   border-left-color: var(--attention);
   background: var(--attention-wash);
   color: var(--attention);
+}
+
+/* ------------------------------------------------- the account menu's own parts */
+
+/*
+ * A mat-menu renders in an overlay outside the component that declared it, so these
+ * cannot be component styles. Scoped by class rather than by element so nothing else
+ * in the overlay container is caught.
+ */
+.acct {
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+}
+
+.acct__name {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.acct__role {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-3);
+}
+
+.acct__label {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+  font-size: var(--t-fine);
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+}
+
+.acct__sep {
+  height: 1px;
+  background: var(--rule-soft);
+}
+
+/* The tick sits at the end of the row, which is where a chosen state belongs. */
+.acct__tick {
+  margin-left: auto;
+  color: var(--signal);
 }

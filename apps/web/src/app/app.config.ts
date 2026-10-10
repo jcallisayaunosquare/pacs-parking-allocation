@@ -7,30 +7,40 @@ import {
 import { provideRouter, withComponentInputBinding, withInMemoryScrolling } from '@angular/router';
 import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
 import { provideAuth } from 'angular-auth-oidc-client';
+import { MAT_ICON_DEFAULT_OPTIONS } from '@angular/material/icon';
 
 import { routes } from './app.routes';
-import { authConfig } from './core/auth/auth.config';
 import { AuthStore } from './core/auth/auth.store';
 import { authInterceptor, traceInterceptor } from './core/http/interceptors';
 
 import {
+  AllocationConfigRepository,
   CycleRepository,
   DashboardRepository,
+  LotRepository,
   MeRepository,
   MetricsRepository,
+  PlateRepository,
   ResidentRepository,
+  CaptureRepository,
   RunRepository,
   SpotRepository,
+  VehicleRepository,
 } from './domain/repositories';
 import {
+  HttpAllocationConfigRepository,
+  HttpCaptureRepository,
   HttpCycleRepository,
   HttpDashboardRepository,
   HttpMeRepository,
   HttpMetricsRepository,
+  HttpPlateRepository,
   HttpResidentRepository,
   HttpRunRepository,
   HttpSpotRepository,
+  HttpVehicleRepository,
 } from './data/http.repositories';
+import { SeedLotRepository } from './data/seed-lot.repository';
 
 /**
  * The composition root of the frontend (§10): the one place that binds the domain's
@@ -47,6 +57,9 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
 
+    // Every mat-icon reads from the subset face loaded in index.html.
+    { provide: MAT_ICON_DEFAULT_OPTIONS, useValue: { fontSet: 'material-symbols-outlined' } },
+
     provideRouter(
       routes,
       withComponentInputBinding(),
@@ -57,16 +70,25 @@ export const appConfig: ApplicationConfig = {
     // when its params change, which is what stops a fast filter from racing itself.
     provideHttpClient(withFetch(), withInterceptors([authInterceptor, traceInterceptor])),
 
-    provideAuth(authConfig),
-
     // ------------------------------------------------- domain → data bindings
     { provide: MeRepository, useClass: HttpMeRepository },
     { provide: DashboardRepository, useClass: HttpDashboardRepository },
     { provide: ResidentRepository, useClass: HttpResidentRepository },
     { provide: SpotRepository, useClass: HttpSpotRepository },
+    { provide: VehicleRepository, useClass: HttpVehicleRepository },
     { provide: CycleRepository, useClass: HttpCycleRepository },
     { provide: RunRepository, useClass: HttpRunRepository },
     { provide: MetricsRepository, useClass: HttpMetricsRepository },
+    { provide: PlateRepository, useClass: HttpPlateRepository },
+    { provide: CaptureRepository, useClass: HttpCaptureRepository },
+    { provide: AllocationConfigRepository, useClass: HttpAllocationConfigRepository },
+
+    /**
+     * The lot geometry has no endpoint yet, so the map runs against a generated layout.
+     * One line changes when `GET /lots/{id}/layout` lands, and nothing above the data ring
+     * knows the difference — which is the whole reason the contract is an abstract class.
+     */
+    { provide: LotRepository, useClass: SeedLotRepository },
 
     /**
      * Resolve the session before the first route renders. Without this, a reload on a

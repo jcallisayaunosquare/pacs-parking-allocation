@@ -9,9 +9,31 @@
       name="description"
       content="A fair, auditable quarterly parking draw for a residential building."
     />
-    <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#243041" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#15171f" />
     <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    <!--
+      The ground, inline, so the first paint is slate rather than the browser's white.
+      The stylesheet sets the same value; this only has to beat it to the screen. The
+      stored light choice is read back in the same breath, because a person who chose
+      light should not be flashed the board first.
+    -->
+    <style>
+      html {
+        background: #15171f;
+      }
+      html[data-theme='light'] {
+        background: #edeff7;
+      }
+    </style>
+    <script>
+      try {
+        var t = localStorage.getItem('pacs.theme');
+        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!--
@@ -24,6 +46,24 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap"
       rel="stylesheet"
     />
+    <!--
+      The icon face, subset to the icons actually used via `icon_names`. Google serves
+      only those glyphs, so this is a few hundred bytes rather than the whole set - which
+      matters against the 180 kB budget for the first route. Add any new icon name here
+      or mat-icon renders the literal word.
+    -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&icon_names=arrow_back,arrow_forward,check,dark_mode,fit_screen,light_mode,lock,logout,more_vert,my_location,person,replay,zoom_in,zoom_out&display=swap"
+    />
+    <!--
+      amazon-cognito-identity-js is published for Node and reaches for `global`. Defining
+      it here rather than in a polyfill file guarantees it exists before the module graph
+      evaluates; a polyfill import would be hoisted alongside the package, not before it.
+    -->
+    <script>
+      window.global = window;
+    </script>
   </head>
   <body>
     <app-root></app-root>

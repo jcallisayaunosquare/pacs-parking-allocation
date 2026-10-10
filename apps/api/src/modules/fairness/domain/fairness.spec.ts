@@ -1,73 +1,95 @@
 import { describe, expect, it } from 'vitest';
-import { applyOutcome, drawWeight, explain, initialFairnessState } from './fairness';
+import { bayStatus } from '../../allocation/domain/types';
+import {
+  explainRunOutcome,
+  explainStanding,
+  type FairnessStanding,
+  type RunCandidateRecord,
+} from './fairness';
 
-const base = initialFairnessState('r1');
+const standing = (over: Partial<FairnessStanding> = {}): FairnessStanding => ({
+  residentId: 'r1',
+  anchorAt: new Date('2026-01-01T09:00:00Z'),
+  waitingHours: 2160,
+  effectiveWaitHours: 2160,
+  servedCount: 1,
+  biasApplied: false,
+  firstTimeParticipant: false,
+  ...over,
+});
 
-describe('applyOutcome', () => {
-  it('resets the score and counts a win when assigned', () => {
-    const s = applyOutcome({ ...base, score: 5, consecutiveMisses: 5 }, 'ASSIGNED', 'c1');
-    expect(s.score).toBe(0);
-    expect(s.consecutiveMisses).toBe(0);
-    expect(s.totalWins).toBe(1);
-    expect(s.totalRegistrations).toBe(1);
-    expect(s.lastWonCycleId).toBe('c1');
+const row = (over: Partial<RunCandidateRecord> = {}): RunCandidateRecord => ({
+  residentId: 'r1',
+  anchorAt: new Date('2026-01-01T09:00:00Z'),
+  rawWaitHours: 2160,
+  effectiveWaitHours: 2160,
+  servedCount: 2,
+  biasApplied: false,
+  firstTimeParticipant: false,
+  finalRank: 4,
+  outcome: 'WAITLISTED',
+  waitlistPosition: 1,
+  ...over,
+});
+
+describe('explainStanding', () => {
+  it('tells a holder their waiting time restarts when the period ends', () => {
+    expect(explainStanding(standing(), true)).toMatch(/starts again/);
   });
 
-  it('increments the score and misses when waitlisted', () => {
-    const s = applyOutcome({ ...base, score: 2, consecutiveMisses: 2 }, 'WAITLISTED', 'c1');
-    expect(s.score).toBe(3);
-    expect(s.consecutiveMisses).toBe(3);
-    expect(s.totalWins).toBe(0);
-    expect(s.totalRegistrations).toBe(1);
-    expect(s.lastWonCycleId).toBeNull();
+  it('quotes the accrued waiting time and what breaks a tie', () => {
+    const s = explainStanding(standing({ servedCount: 0 }), false);
+    expect(s).toContain('2160 hours');
+    expect(s).toContain('never held a bay');
   });
 
-  it('leaves the state untouched when skipped (FR-21)', () => {
-    const before = { ...base, score: 4, consecutiveMisses: 4, totalRegistrations: 9 };
-    expect(applyOutcome(before, 'SKIPPED', 'c1')).toEqual(before);
+  it('says plainly why a resident is below everyone during the early-waiting window', () => {
+    const s = explainStanding(standing({ waitingHours: 7, effectiveWaitHours: -17, biasApplied: true }), false);
+    expect(s).toContain('7 hours ago');
+    expect(s).toContain('first time');
+  });
+});
+
+describe('explainRunOutcome', () => {
+  it('names the raffle only when the raffle actually decided', () => {
+    const withRaffle = explainRunOutcome(row(), { tiedOnWait: 3, tiedOnWaitAndHistory: 2, spots: 3 });
+    expect(withRaffle).toContain('raffle token decided');
+    expect(withRaffle).toContain('2 other residents');
+    expect(withRaffle).toContain('number 1 on the waitlist');
+
+    const noTie = explainRunOutcome(row(), { tiedOnWait: 1, tiedOnWaitAndHistory: 1, spots: 3 });
+    expect(noTie).not.toContain('raffle');
   });
 
-  it('walks the four-cycle worked example of §13', () => {
-    let s = initialFairnessState('r1');
-    s = applyOutcome(s, 'WAITLISTED', 'c1'); // score 1
-    s = applyOutcome(s, 'WAITLISTED', 'c2'); // score 2
-    s = applyOutcome(s, 'ASSIGNED', 'c3'); //  score 0, win
-    s = applyOutcome(s, 'WAITLISTED', 'c4'); // score 1
-    expect(s).toEqual({
-      residentId: 'r1',
-      score: 1,
-      consecutiveMisses: 1,
-      totalRegistrations: 4,
-      totalWins: 1,
-      lastWonCycleId: 'c3',
+  it('explains a win', () => {
+    const s = explainRunOutcome(row({ outcome: 'ASSIGNED', finalRank: 1, waitlistPosition: null }), {
+      tiedOnWait: 1,
+      tiedOnWaitAndHistory: 1,
+      spots: 3,
     });
+    expect(s).toContain('were assigned one');
+  });
+
+  it('explains the Early-Waiting Bias from the stored negative key', () => {
+    const s = explainRunOutcome(
+      row({ rawWaitHours: 7, effectiveWaitHours: -17, biasApplied: true, finalRank: 8 }),
+      { tiedOnWait: 1, tiedOnWaitAndHistory: 1, spots: 3 },
+    );
+    expect(s).toContain('early-waiting window');
+  });
+
+  it('says nothing changed for a resident who was not in the draw', () => {
+    expect(explainRunOutcome(row({ outcome: 'SKIPPED' }), { tiedOnWait: 1, tiedOnWaitAndHistory: 1, spots: 3 })).toMatch(
+      /not in this draw/,
+    );
   });
 });
 
-describe('drawWeight', () => {
-  it('is score + 1 so nobody is ever excluded', () => {
-    expect(drawWeight(0)).toBe(1);
-    expect(drawWeight(8)).toBe(9);
-  });
-});
-
-describe('explain', () => {
-  it('explains a held spot', () => {
-    expect(explain(base, true)).toMatch(/reset to 0/);
-  });
-
-  it('explains a first-time entrant', () => {
-    expect(explain(base, false)).toMatch(/once/);
-  });
-
-  it('states the multiplier for a resident who has missed cycles', () => {
-    const s = { ...base, score: 3, consecutiveMisses: 3 };
-    expect(explain(s, false)).toContain('4 times');
-    expect(explain(s, false)).toContain('4×');
-  });
-
-  it('uses the singular for a single missed cycle', () => {
-    const s = { ...base, score: 1, consecutiveMisses: 1 };
-    expect(explain(s, false)).toContain('1 cycle,');
+describe('bayStatus', () => {
+  it('derives the three states and offers no fourth', () => {
+    expect(bayStatus({ isActive: false, hasActiveAssignment: false })).toBe('OUT_OF_SERVICE');
+    expect(bayStatus({ isActive: false, hasActiveAssignment: true })).toBe('OUT_OF_SERVICE');
+    expect(bayStatus({ isActive: true, hasActiveAssignment: true })).toBe('HELD');
+    expect(bayStatus({ isActive: true, hasActiveAssignment: false })).toBe('FREE');
   });
 });

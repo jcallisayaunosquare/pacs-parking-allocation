@@ -1,14 +1,15 @@
 /**
  * Development seed: 24 residents, 10 spots and one cycle in REGISTRATION_OPEN.
  *
- * Idempotent — safe to re-run. Reads the connection from DATABASE_URL so no credential
+ * Idempotent - safe to re-run. Reads the connection from DATABASE_URL so no credential
  * is hard-coded or passed on the command line:
  *
  *   pnpm --filter @pacs/api seed
  *
- * Deliberately shaped so the first run is interesting: 24 entrants for 10 spots means
- * 14 people on the waitlist, and the seeded fairness scores make the weighting visible
- * in the very first draw.
+ * Deliberately shaped so the first run is interesting: 24 entrants for 10 spots means 14
+ * people on the waitlist, and the spread of participation_started_at values makes the
+ * ordering, the history tie-break and the raffle all visible in the very first draw -
+ * several residents share an exact anchor, so the raffle really does decide between them.
  */
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
@@ -33,6 +34,8 @@ const db = new Kysely<Database>({
 const FIRST = ['Ana', 'Luis', 'Maria', 'Diego', 'Sofia', 'Carla', 'Jorge', 'Elena'];
 const LAST = ['Rivera', 'Quispe', 'Flores', 'Vargas', 'Torres', 'Rojas', 'Mendoza', 'Callisaya'];
 
+const HOUR = 3_600_000;
+
 const residents = Array.from({ length: 24 }, (_, i) => {
   const first = FIRST[i % FIRST.length]!;
   const last = LAST[Math.floor(i / FIRST.length) % LAST.length]!;
@@ -40,9 +43,11 @@ const residents = Array.from({ length: 24 }, (_, i) => {
     email: `${first.toLowerCase()}.${last.toLowerCase()}${i}@example.test`,
     full_name: `${first} ${last}`,
     unit_number: `${Math.floor(i / 4) + 1}0${(i % 4) + 1}`,
-    // A spread of fairness scores so the weighted draw has something to work with.
-    score: i % 5,
+    // Five buckets of waiting time, so residents tie on the hour and the secondary
+    // criterion and the raffle both get exercised.
+    participation_started_at: new Date(Date.now() - (i % 5) * 500 * HOUR),
     needs_accessible_spot: i === 3 || i === 17,
+    has_electric_vehicle: i === 5,
   };
 });
 
@@ -60,34 +65,37 @@ const spots = [
 async function main(): Promise<void> {
   // ------------------------------------------------------------- residents
   for (const r of residents) {
-    const row = await db
+    await db
       .insertInto('resident')
       .values({
         email: r.email,
         full_name: r.full_name,
         unit_number: r.unit_number,
         needs_accessible_spot: r.needs_accessible_spot,
-      })
-      .onConflict((oc) => oc.column('email').doUpdateSet({ full_name: r.full_name }))
-      .returning('id')
-      .executeTakeFirstOrThrow();
-
-    await db
-      .insertInto('fairness_state')
-      .values({
-        resident_id: row.id,
-        score: r.score,
-        consecutive_misses: r.score,
-        total_registrations: r.score,
+        has_electric_vehicle: r.has_electric_vehicle,
+        participation_started_at: r.participation_started_at,
       })
       .onConflict((oc) =>
-        oc.column('resident_id').doUpdateSet({
-          score: r.score,
-          consecutive_misses: r.score,
+        oc.column('email').doUpdateSet({
+          full_name: r.full_name,
+          participation_started_at: r.participation_started_at,
         }),
       )
       .execute();
   }
+
+  // One administrator account, to show that it is excluded from candidacy rather than
+  // merely discouraged from entering.
+  await db
+    .insertInto('resident')
+    .values({
+      email: 'admin@example.test',
+      full_name: 'Building Administrator',
+      unit_number: 'OFFICE',
+      is_admin: true,
+    })
+    .onConflict((oc) => oc.column('email').doUpdateSet({ is_admin: true }))
+    .execute();
 
   // ----------------------------------------------------------------- spots
   for (const s of spots) {
@@ -114,7 +122,13 @@ async function main(): Promise<void> {
     .executeTakeFirstOrThrow();
 
   // ---------------------------------------------------------- registrations
-  const all = await db.selectFrom('resident').select('id').where('deactivated_at', 'is', null).execute();
+  // Administrator accounts are never entered: the administrator operates the raffle.
+  const all = await db
+    .selectFrom('resident')
+    .select('id')
+    .where('deactivated_at', 'is', null)
+    .where('is_admin', '=', false)
+    .execute();
   for (const r of all) {
     await db
       .insertInto('raffle_registration')

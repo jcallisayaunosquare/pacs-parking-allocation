@@ -28,10 +28,27 @@ tags:
   - name: self
     description: Routes scoped to the caller's own record
   - name: residents
+  - name: vehicles
+    description: >-
+      The cars a resident may bring in. The plate is stored twice — canonical and as
+      typed — because a camera at the gate matches the first and a resident reads the
+      second.
   - name: spots
   - name: cycles
   - name: runs
   - name: reports
+  - name: config
+    description: Rule A — the allocation policy, versioned and admin-editable
+  - name: plates
+    description: >-
+      Licence-plate recognition at the gate (M-7). Nothing here recognises anything
+      synchronously: a camera asks for a presigned PUT, the object notification triggers
+      the recogniser outside the VPC, and an in-VPC stream consumer applies the result.
+      These routes read the resulting log and let an administrator correct a doubtful read.
+  - name: access
+    description: >-
+      The access log — who was let in or refused, and why. Append-only: a decision is
+      overturned by inserting a new row and linking the old one, never by editing it.
 
 paths:
   /health:
@@ -68,7 +85,12 @@ paths:
     get:
       tags: [self]
       summary: UC-09 — aggregated status for the signed-in resident
-      description: Cached for 5 minutes; invalidated by allocation and release events.
+      description: |
+        Cached for 5 minutes; invalidated by allocation and release events.
+
+        403 FORBIDDEN for an administrator token, including one that also carries the
+        RESIDENT group: an administrator operates the draw, so they hold no bay and have
+        no resident dashboard. Separation of duties, same rule as the registration route.
       responses:
         '200':
           description: Dashboard
@@ -76,12 +98,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Dashboard' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /me/history:
     get:
       tags: [self]
       summary: UC-10 — the caller's own allocation history, newest first
+      description: 403 FORBIDDEN for an administrator token — separation of duties.
       parameters:
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -98,11 +122,13 @@ paths:
                     items: { $ref: '#/components/schemas/HistoryEntry' }
                   nextCursor: { type: [string, 'null'] }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /me/assignment/release:
     post:
       tags: [self]
       summary: UC-11 — give up the current spot; the waitlist head is promoted
+      description: 403 FORBIDDEN for an administrator token — an administrator holds no bay.
       responses:
         '200':
           description: Released
@@ -116,12 +142,19 @@ paths:
                     type: [string, 'null']
                     format: uuid
                     description: The resident who took the spot, if the waitlist was not empty.
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /cycles/{id}/registrations:
     post:
       tags: [self]
       summary: UC-08 — enter the raffle. Idempotent.
+      description: |
+        403 FORBIDDEN for an administrator account, and 403 NOT_ELIGIBLE for a resident
+        marked ineligible. The administrator case is separation of duties: whoever operates
+        the raffle does not enter it. Administrator is read from two independent sources
+        and either one refuses: the ADMIN group on the token, and `is_admin` on the
+        register row.
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '201':
@@ -188,6 +221,11 @@ paths:
                 fullName: { type: string, minLength: 1, maxLength: 200 }
                 unitNumber: { type: string, minLength: 1, maxLength: 40 }
                 needsAccessibleSpot: { type: boolean, default: false }
+                hasElectricVehicle: { type: boolean, default: false }
+                isAdmin:
+                  type: boolean
+                  default: false
+                  description: An administrator account never holds a bay or enters the draw.
       responses:
         '201':
           description: Created
@@ -201,13 +239,24 @@ paths:
     get:
       tags: [residents]
       summary: Resident detail (admin)
+      description: |
+        Carries the resident's registered vehicles. The list endpoint does not: the
+        register is a keyset page over `resident` alone, and only the detail view pays
+        for the second query.
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200':
           description: Resident
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Resident' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Resident'
+                  - type: object
+                    properties:
+                      vehicles:
+                        type: array
+                        items: { $ref: '#/components/schemas/Vehicle' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [residents]
@@ -224,6 +273,12 @@ paths:
                 fullName: { type: string, minLength: 1, maxLength: 200 }
                 unitNumber: { type: string, minLength: 1, maxLength: 40 }
                 needsAccessibleSpot: { type: boolean }
+                hasElectricVehicle: { type: boolean }
+                isAdmin:
+                  type: boolean
+                  description: >-
+                    Refused with 409 SPOT_IN_USE while the resident holds a bay: the bay has
+                    to be released before the account leaves the draw.
       responses:
         '200':
           description: Updated
@@ -267,6 +322,452 @@ paths:
               schema: { $ref: '#/components/schemas/Resident' }
         '400': { $ref: '#/components/responses/ValidationFailed' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /residents/{id}/participation-start:
+    patch:
+      tags: [residents]
+      summary: Correct where a resident's waiting time starts
+      description: |
+        Rule C's anchor is a stored, correctable column rather than a derived value,
+        precisely so that "the administrator set me up late" has one field to fix and an
+        audit row behind it, instead of requiring surgery on history.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participationStartedAt]
+              properties:
+                participationStartedAt: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resident' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /residents/{id}/vehicles:
+    get:
+      tags: [vehicles]
+      summary: A resident's registered vehicles
+      description: |
+        An administrator may read anyone's; a resident may read only their own. Ownership
+        is decided from the verified token, never from the path — a resident reaching for
+        another record gets 404 rather than 403, so the route cannot be used to find out
+        which ids exist.
+
+        Removed vehicles are not returned. They are kept in the database so a past
+        recognition event still resolves to a car, but they are out of the register.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: The resident's vehicles, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Vehicle' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [vehicles]
+      summary: Register a vehicle
+      description: |
+        The plate is accepted as the resident typed it and normalised server-side:
+        uppercased, separators dropped, and the glyphs that are indistinguishable in a
+        plate face folded onto their digit (`O` and `Q` → `0`, `I` → `1`). Two residents
+        cannot hold the same normalised plate at the same time; a clash is 400
+        VALIDATION_FAILED with `plate: already registered`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehicleInput' }
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /residents/{id}/vehicles/{vehicleId}:
+    patch:
+      tags: [vehicles]
+      summary: Edit a registered vehicle
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/VehicleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/VehicleInput'
+                - type: object
+                  minProperties: 1
+              description: >-
+                Every field optional, and an absent field keeps its stored value. `plate`
+                is re-validated against the uniqueness rule only when it actually changes.
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [vehicles]
+      summary: Remove a vehicle from the register
+      description: |
+        A deactivation, not a delete. The row stays so a recognition event recorded last
+        month still resolves to a car; the plate itself is freed, because the uniqueness
+        index is partial on the active rows — the neighbour who buys the car has to be
+        able to register it.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/VehicleId'
+      responses:
+        '204': { description: Removed }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vehicles/by-plate/{plate}:
+    get:
+      tags: [vehicles]
+      summary: Look up a plate (admin)
+      description: |
+        What the plate-recognition module calls with a plate read off a camera. The path
+        segment is taken verbatim and normalised with the same rule the register stores,
+        so `abc-123`, `ABC 123` and `ABO12` all find the vehicle registered as `AB012`.
+
+        Administrator only, deliberately: the answer names the resident a car belongs to,
+        and an open version of it would turn the car park into a directory of who drives
+        what. Only active registrations are matched.
+      parameters:
+        - name: plate
+          in: path
+          required: true
+          description: As read or as typed. Normalised server-side; not a UUID.
+          schema: { type: string, minLength: 1, maxLength: 40 }
+          example: ABC-123
+      responses:
+        '200':
+          description: The registered vehicle
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /captures:
+    post:
+      tags: [plates]
+      summary: Ask for a presigned PUT for one captured frame
+      description: |
+        The camera's only route, and the whole of its API surface. Role `CAMERA`: one
+        Cognito user per gate, so rotating a gate's credential touches no resident and no
+        other gate. An administrator may call it too, for a frame captured by hand.
+
+        The response's `objectKey` is derived server-side as
+        `raw/<cameraId>/<yyyy>/<mm>/<dd>/<captureId>.jpg`, from the **server's** clock and
+        not from `capturedAt`. A camera with a drifting clock would otherwise file its
+        frames under the wrong day prefix and quietly break both the lifecycle rules and
+        the day listings; the camera's own timestamp is still recorded on the row, where a
+        skew is visible instead.
+
+        The client does not choose the key. It is a device in a car park, and naming its
+        own key would let it write outside the prefix the function's IAM statement scopes
+        it to.
+
+        Recognition is triggered by the object landing in S3, not by this call. A
+        synchronous endpoint that ran OCR would take 600 ms inside a VPC that cannot reach
+        Rekognition, and would fail with the camera's uplink.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cameraId, capturedAt]
+              properties:
+                cameraId:
+                  type: string
+                  minLength: 3
+                  maxLength: 64
+                  pattern: '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'
+                  example: gate-north
+                capturedAt:
+                  type: string
+                  format: date-time
+                  description: The camera's own instant. Recorded, but it does not pick the key.
+                contentType:
+                  type: string
+                  enum: [image/jpeg, image/png]
+                  default: image/jpeg
+      responses:
+        '201':
+          description: The upload ticket
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaptureTicket' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /plate-reads:
+    get:
+      tags: [plates]
+      summary: The gate log — recent reads, newest first (admin)
+      description: |
+        One row per captured frame: what the camera read, the canonical form it was
+        matched on, the three confidence numbers, the resident and bay it resolved to, and
+        the standing decision. A read with no match is the most interesting row on the
+        screen, so every join behind this is a left join.
+
+        No image URLs. The list carries `imageKey` as a reference and `GET
+        /plate-reads/{id}` mints a five-minute URL when somebody actually opens a frame —
+        a log page handing out fifty credentials to pictures of residents' cars is a worse
+        artefact than one extra request.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PlateReadStatus' }
+        - name: cameraId
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - name: plate
+          in: query
+          description: As read or as typed. Normalised server-side with the register's own rule.
+          schema: { type: string, maxLength: 40 }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: needsReview
+          in: query
+          description: Only the reads a human still has to look at. Returned oldest first.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: A page of the gate log
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlateRead' }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /plate-reads/review:
+    get:
+      tags: [plates]
+      summary: The review queue — oldest first (admin)
+      description: |
+        Everything with `status: REVIEW` that nobody has decided yet. Ascending by
+        `capturedAt`, unlike the log, because a doubtful read loses its value once the car
+        has gone.
+
+        Declared before `/plate-reads/{id}` on purpose: the server matches routes in order
+        and the identifier check would otherwise reject "review" as a malformed UUID.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The queue
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlateRead' }
+                  nextCursor: { type: [string, 'null'] }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /plate-reads/{id}:
+    get:
+      tags: [plates]
+      summary: One read in full, with five-minute image URLs (admin)
+      description: |
+        The only route that mints image URLs, and they last five minutes. The API never
+        serves an image itself.
+
+        `nearby` is the active registrations within two edits of the read, nearest first.
+        It exists because an administrator looking at a frame usually recognises the car
+        before they can read the plate, and the fastest correct answer is the one they can
+        point at.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: The read, its candidates, its decision and its images
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlateReadDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /plate-reads/{id}/resolve:
+    post:
+      tags: [plates]
+      summary: Review a doubtful read (admin)
+      description: |
+        Requires `Idempotency-Key`, for the same reason the draw does: a retried click must
+        replay rather than write a second decision.
+
+        Applied in one transaction — the read is updated, the standing access event is
+        pointed at the new one, the new one is inserted, and an `AccessReviewResolved`
+        outbox row is queued. The concurrency guard is `WHERE reviewed_at IS NULL` on the
+        update, so two administrators on the same row means the second gets
+        `409 PLATE_READ_ALREADY_REVIEWED` and the screen reloads. The database decides,
+        not the application.
+
+        `plate` is stored twice on purpose: as the read's plate, and as `correctedPlate` —
+        the administrator's assertion. Only the second is a ground-truth label, and after
+        a couple of hundred of them the building has a real evaluation set against images
+        still in S3. That is the number that decides whether the engine is good enough,
+        and the reason recognition sits behind a port.
+
+        Three outcomes the caller should expect:
+
+        - an `ALLOW` naming a plate whose resident is ineligible is **recorded as a DENY**
+          with reason `RESIDENT_NOT_ELIGIBLE`, not refused. The administrator is right
+          about which car it was and wrong about whether it may enter, so the
+          identification is kept and the rule decides;
+        - an `ALLOW` naming a plate in no registration is recorded as a manual override
+          (`MANUAL_REVIEW`), because a building does wave in a delivery van and a row
+          saying who decided that is better than no row;
+        - `discard: true` marks the frame `DISCARDED` and writes **no** access event. It
+          must be sent with `decision: DENY`; discarding is not a judgement about an entry.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlateReviewInput' }
+      responses:
+        '200':
+          description: The read as it now stands, with its new decision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlateRead' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /access-events:
+    get:
+      tags: [access]
+      summary: The access log (admin)
+      description: |
+        Append-only. A row with `supersededBy` set was overturned by an administrator; the
+        row itself was never edited, which is the point — it is the record somebody reaches
+        for when an entry is disputed.
+
+        `?format=csv` returns the page as CSV, like the period report.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: decision
+          in: query
+          schema: { $ref: '#/components/schemas/AccessDecision' }
+        - name: residentId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv] }
+      responses:
+        '200':
+          description: A page of the access log, or a CSV of it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AccessEvent' }
+                  nextCursor: { type: [string, 'null'] }
+            text/csv:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /me/access-events:
+    get:
+      tags: [access, self]
+      summary: The caller's own entries, newest first
+      description: |
+        Scoped by the verified token and never by a parameter, like the rest of the
+        resident surface. Superseded rows are excluded: a resident should see what the
+        building concluded, not an administrator's working.
+
+        403 FORBIDDEN for an administrator token — separation of duties, same rule as
+        `/me/dashboard`. An administrator reads `/access-events`.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The caller's entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AccessEvent' }
+                  nextCursor: { type: [string, 'null'] }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /metrics/plates:
+    get:
+      tags: [plates]
+      summary: Recognition metrics over the last 30 days (admin)
+      description: |
+        The numbers the threshold calibration of MODULO-PLACAS.md §8 is argued from: match
+        rate, queue depth and the age of its oldest item, the mean **fused** confidence —
+        not the raw one, which reads higher than anything the gate ever decided on — and
+        `corrections`, which is the size of the evaluation set. Cached for 10 minutes.
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlateMetrics' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /spots:
     get:
@@ -364,14 +865,23 @@ paths:
           application/json:
             schema:
               type: object
-              required: [startsOn, endsOn, registrationOpensAt, registrationClosesAt]
+              required: [startsOn, registrationOpensAt, registrationClosesAt]
               properties:
                 label:
                   type: string
-                  pattern: '^\d{4}-Q[1-4]$'
-                  description: Derived from startsOn when omitted.
+                  maxLength: 20
+                  example: 2026-04+3M
+                  description: >-
+                    Derived from startsOn and the configured allocation duration when
+                    omitted. Deliberately not a quarter label: quarters would bake three
+                    months into every cycle's identity, which rule A forbids.
                 startsOn: { type: string, format: date }
-                endsOn: { type: string, format: date }
+                endsOn:
+                  type: string
+                  format: date
+                  description: >-
+                    Computed from allocationDurationMonths with end-of-month clamping when
+                    omitted, then persisted, so a later duration change cannot move it.
                 registrationOpensAt: { type: string, format: date-time }
                 registrationClosesAt: { type: string, format: date-time }
       responses:
@@ -381,6 +891,52 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Cycle' }
         '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /cycles/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [cycles]
+      summary: Rename a period
+      description: >-
+        The name is the only field a period can change after creation. Its dates are
+        stamped onto every assignment it made and onto the run that made them, so moving
+        one would rewrite when a resident's bay ended and therefore when their waiting
+        time restarted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, minLength: 1, maxLength: 20 }
+      responses:
+        '200':
+          description: The renamed period
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cycle' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [cycles]
+      summary: Remove a period that has produced nothing
+      description: >-
+        Refused once the period has run a draw or handed out a bay: allocation history is
+        never reset, because a past draw must stay explainable to the resident who lost
+        it. Before a draw has run a period is a plan, and a plan can be abandoned.
+      responses:
+        '204': { description: Removed }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: The period has a record and cannot be removed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /cycles/{id}/open-registration:
     post:
@@ -453,6 +1009,105 @@ paths:
               schema: { $ref: '#/components/schemas/RunDetail' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /runs/{id}/explanation:
+    get:
+      tags: [runs]
+      summary: Why every candidate landed where they did, from the stored record
+      description: |
+        The contestable record of one run: each candidate's anchor, waiting time, bias
+        flag, history count, raffle token, rank and outcome, plus the criterion that
+        actually decided their place. Read from `allocation_run_candidate`, never
+        recomputed — today's data has moved.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Explanation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunExplanation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /config/allocation:
+    get:
+      tags: [config]
+      summary: Rule A — the allocation policy in force
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllocationConfigView' }
+    patch:
+      tags: [config]
+      summary: Change the policy. Inserts a new version; rows are never edited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                allocationDurationMonths: { type: integer, minimum: 1, maximum: 60 }
+                earlyWaitingBiasHours: { type: integer, minimum: 0, maximum: 8760 }
+                waitQuantumMinutes: { type: integer, minimum: 1 }
+                declineGraceHours: { type: integer, minimum: 0 }
+                absenceResetMonths: { type: [integer, 'null'], minimum: 1 }
+                totalBays: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The new version, with any soft warnings about it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllocationConfigView' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /config/allocation/history:
+    get:
+      tags: [config]
+      summary: Every version, newest first, with who changed it and when
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 15 }
+      responses:
+        '200':
+          description: Versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AllocationConfigVersion' }
+
+  /runs:
+    get:
+      tags: [runs]
+      summary: Every committed draw, newest first
+      description: >-
+        Capped rather than paged: a building draws a handful of times a year, so the whole
+        history fits in one response for decades, and a cursor would be machinery for a
+        list that never grows.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 15 }
+      responses:
+        '200':
+          description: Draws
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/RunSummary' }
+
   /runs/{id}/assignments:
     get:
       tags: [runs]
@@ -488,10 +1143,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FairnessMetrics' }
 
+  /reports/period/{cycleId}:
+    get:
+      tags: [reports]
+      summary: UC-07 — allocation-period export
+      parameters:
+        - name: cycleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReportRow' }
+            text/csv:
+              schema: { type: string }
+
   /reports/quarterly/{cycleId}:
     get:
       tags: [reports]
-      summary: UC-07 — quarterly export
+      deprecated: true
+      summary: >-
+        UC-07 — kept as an alias of /reports/period/{cycleId} so existing clients do not
+        break. The report is per allocation period, whatever the configured duration is.
       parameters:
         - name: cycleId
           in: path
@@ -529,6 +1214,11 @@ components:
   parameters:
     Id:
       name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VehicleId:
+      name: vehicleId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -592,6 +1282,9 @@ components:
             - REGISTRATION_CLOSED
             - SPOT_IN_USE
             - ALREADY_REGISTERED
+            # Two administrators opened the same doubtful read; the second one's write was
+            # refused by the database, not by the application.
+            - PLATE_READ_ALREADY_REVIEWED
             - INVALID_CYCLE_STATE
             - NO_SPOTS_AVAILABLE
             - RATE_LIMITED
@@ -626,9 +1319,334 @@ components:
       type: string
       enum: [ASSIGNED, WAITLISTED, SKIPPED]
 
+    PlateReadStatus:
+      type: string
+      description: >-
+        What the read is. `DISCARDED` is a frame that was not an entry — a duplicate inside
+        the cooldown window, or one an administrator threw away — and it never carries an
+        access event.
+      enum: [MATCHED, UNMATCHED, REVIEW, DISCARDED]
+
+    PlateMatchKind:
+      type: string
+      description: >-
+        How the plate was attached to a registration. `MANUAL` means a human said so, and
+        a `MANUAL` row is the one that carries a `correctedPlate`.
+      enum: [EXACT, FUZZY, MANUAL, NONE]
+
+    AccessDecision:
+      type: string
+      enum: [ALLOW, DENY, REVIEW]
+
+    AccessReason:
+      type: string
+      description: |
+        A stable code, translated in the frontend. Never prose.
+
+        Three of these are worth reading twice, because each is a place where the obvious
+        behaviour would be wrong:
+
+        - `UNREADABLE` produces **no** access event. An unreadable frame is not a denied
+          entry; it is a dirty lens or a fast car. Logging it as a DENY would fill the log
+          with refusals belonging to nobody and make the denial metric measure lens dirt.
+        - `FUZZY_MATCH_AMBIGUOUS` never opens. Two registered plates equally close to the
+          read means opening would pick at random whose entry this was.
+        - `PLATE_NOT_REGISTERED` is a DENY, not a review. A clearly read plate that is in
+          no registration is a visitor or an intruder: a fact, not a doubt. A visitor lane
+          is a separate feature — a temporary plate with an expiry — not a lower threshold.
+      enum:
+        - EXACT_MATCH
+        - FUZZY_MATCH_SINGLE
+        - FUZZY_MATCH_AMBIGUOUS
+        - PLATE_NOT_REGISTERED
+        - LOW_CONFIDENCE
+        - UNREADABLE
+        - RESIDENT_NOT_ELIGIBLE
+        - VEHICLE_INACTIVE
+        - DUPLICATE_WITHIN_COOLDOWN
+        - MANUAL_REVIEW
+
+    CaptureTicket:
+      type: object
+      required: [captureId, objectKey, uploadUrl, expiresIn]
+      properties:
+        captureId:
+          type: string
+          maxLength: 40
+          description: >-
+            A ULID, and the idempotency key of the whole pipeline. Sortable by the instant
+            it was minted, so a prefix listing of a day's captures comes back in arrival
+            order with no index and no metadata read.
+          example: 01JB3K5Z9Q7M2N4P6R8T0V2X4Y
+        objectKey:
+          type: string
+          example: raw/gate-north/2026/10/09/01JB3K5Z9Q7M2N4P6R8T0V2X4Y.jpg
+        uploadUrl:
+          type: string
+          format: uri
+          description: >-
+            A presigned PUT. `Content-Type` is part of what is signed, so the camera must
+            send the same one it asked for.
+        expiresIn: { type: integer, example: 300 }
+
+    PlateCandidate:
+      type: object
+      required: [plate, raw, confidence, score]
+      properties:
+        plate:
+          type: string
+          description: The canonical form of this candidate — a re-spelling of the raw line.
+          example: '1234ABC'
+        raw:
+          type: string
+          description: >-
+            The line the engine actually returned, verbatim. Every candidate derived from
+            one line carries that line's confidence unchanged, because the engine was that
+            sure of the pixels and not of our re-spelling of them; what separates the
+            candidates is `score`.
+          example: '1234 A8C'
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        score:
+          type: number
+          description: >-
+            The plate-likeness score: confidence, length, digit and letter presence, and a
+            bonus for matching a Bolivian series. This is what does the detecting — the
+            engine is a scene OCR and has no idea which string in the frame is a plate.
+
+    PlateRead:
+      type: object
+      required:
+        [id, captureId, cameraId, capturedAt, plate, confidence, fused, status, matchKind, needsReview]
+      properties:
+        id: { type: string, format: uuid }
+        captureId: { type: string, maxLength: 40 }
+        cameraId: { type: string, maxLength: 64 }
+        capturedAt: { type: string, format: date-time }
+        rawText:
+          type: [string, 'null']
+          description: What the OCR returned, untouched. Null when it returned nothing at all.
+        plate:
+          type: [string, 'null']
+          description: >-
+            The canonical form, folded by the same function that writes `vehicle.plate`.
+            Null on an unreadable frame. Two definitions of this would let "already
+            registered" and "recognised at the gate" disagree.
+          example: '1234ABC'
+        registeredPlate:
+          type: [string, 'null']
+          description: The matched vehicle's own stored plate, when the read matched one.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: The engine's own confidence in the best candidate.
+        quality:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: >-
+            Sharpness and geometry of the plate crop — an independent signal from the OCR
+            confidence, because a blurred crop the engine is certain about is the dangerous
+            read and only two separate numbers can say so.
+        fused:
+          type: number
+          description: >-
+            `confidence * (0.6 + 0.4 * quality)`, and the number the thresholds actually
+            compare against. Derived on read rather than stored, so it cannot disagree
+            with its own two inputs after a correction. All three go out, not just this
+            one: a reviewer who sees only the product cannot tell a blurred frame the
+            engine was sure about from a sharp frame it was not, and those are opposite
+            faults.
+        status: { $ref: '#/components/schemas/PlateReadStatus' }
+        matchKind: { $ref: '#/components/schemas/PlateMatchKind' }
+        matchDistance:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 4
+          description: >-
+            Damerau-Levenshtein distance to the matched plate. 0 on an exact match.
+            Damerau and not plain Levenshtein because a transposition is a common OCR
+            error and Levenshtein charges it as two edits.
+        vehicleId: { type: [string, 'null'], format: uuid }
+        residentId: { type: [string, 'null'], format: uuid }
+        residentName: { type: [string, 'null'] }
+        unitNumber: { type: [string, 'null'] }
+        spotCode:
+          type: [string, 'null']
+          description: >-
+            The bay the matched resident holds in the period in force. It answers the
+            administrator's real question, which is an authorised car in somebody else's bay.
+        vehicleMake: { type: [string, 'null'] }
+        vehicleModel: { type: [string, 'null'] }
+        vehicleYear: { type: [integer, 'null'] }
+        vehicleColour:
+          type: [string, 'null']
+          description: >-
+            The car as the register describes it. All four are null for a read that matched
+            nothing. They exist because the arrivals board is watched while a car rolls up
+            to the barrier: the plate and the name do not tell the person on duty whether
+            the car in the lane is the car on file.
+        decision:
+          oneOf:
+            - $ref: '#/components/schemas/AccessDecision'
+            - type: 'null'
+          description: Null means no access event was written for this read.
+        reason:
+          oneOf:
+            - $ref: '#/components/schemas/AccessReason'
+            - type: 'null'
+        imageKey:
+          type: string
+          description: >-
+            The S3 object holding the frame — a reference, not a URL. Images are never
+            served by the API; `GET /plate-reads/{id}` mints a five-minute URL.
+        cropKey: { type: [string, 'null'] }
+        engine: { type: string, example: rekognition-detect-text }
+        engineVersion:
+          type: [string, 'null']
+          description: >-
+            Rekognition does not version DetectText in its response, so the month is
+            recorded. It is the only thing that lets a precision regression be attributed
+            to a model change rather than to our own deploy.
+          example: '2026-10'
+        latencyMs: { type: [integer, 'null'], minimum: 0 }
+        needsReview:
+          type: boolean
+          description: REVIEW and not yet reviewed. What the queue filter selects on.
+        reviewedAt: { type: [string, 'null'], format: date-time }
+        reviewedBy: { type: [string, 'null'], format: uuid }
+        reviewNote: { type: [string, 'null'] }
+        correctedPlate:
+          type: [string, 'null']
+          description: >-
+            What an administrator asserted the plate really was. A ground-truth label
+            against an image still in S3, and the reason the evaluation set builds itself
+            from day one.
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/PlateCandidate' }
+          maxItems: 8
+
+    PlateReadDetail:
+      allOf:
+        - $ref: '#/components/schemas/PlateRead'
+        - type: object
+          required: [imageUrl, cropUrl, nearby]
+          properties:
+            imageUrl:
+              type: [string, 'null']
+              format: uri
+              description: A five-minute presigned GET. Null when no bucket is configured.
+            cropUrl: { type: [string, 'null'], format: uri }
+            nearby:
+              type: array
+              description: Active registrations within two edits of the read, nearest first.
+              items:
+                type: object
+                required: [vehicleId, plate, residentId, distance]
+                properties:
+                  vehicleId: { type: string, format: uuid }
+                  plate: { type: string }
+                  residentId: { type: string, format: uuid }
+                  distance: { type: integer, minimum: 0, maximum: 2 }
+
+    PlateReviewInput:
+      type: object
+      required: [decision]
+      properties:
+        plate:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 40
+          description: >-
+            As the administrator typed it; normalised server-side with the register's own
+            rule. Required when the decision is ALLOW — an access row that names no plate
+            cannot be joined to anything and cannot be contested.
+          example: 1234-abc
+        vehicleId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            Optional. When omitted and a plate is given, the server resolves the plate to
+            an active registration itself, so the reviewer need not know ids.
+        decision:
+          type: string
+          enum: [ALLOW, DENY]
+        note: { type: [string, 'null'], maxLength: 2000 }
+        discard:
+          type: boolean
+          description: >-
+            Marks the frame DISCARDED and writes no access event. Must be sent with
+            `decision: DENY`. A separate flag rather than a third value of `decision`,
+            because discarding is not a judgement about an entry and every reader of the
+            access log would otherwise have to wonder what a DISCARD row meant.
+
+    AccessEvent:
+      type: object
+      required: [id, plateReadId, plate, decision, reason, cameraId, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        plateReadId: { type: string, format: uuid }
+        captureId: { type: string, maxLength: 40 }
+        plate:
+          type: string
+          description: >-
+            Denormalised deliberately: the resident may remove the vehicle, and the log
+            still has to say which plate came through.
+        vehicleId: { type: [string, 'null'], format: uuid }
+        residentId: { type: [string, 'null'], format: uuid }
+        residentName: { type: [string, 'null'] }
+        unitNumber: { type: [string, 'null'] }
+        spotCode: { type: [string, 'null'] }
+        decision: { $ref: '#/components/schemas/AccessDecision' }
+        reason: { $ref: '#/components/schemas/AccessReason' }
+        cameraId: { type: string, maxLength: 64 }
+        occurredAt: { type: string, format: date-time }
+        supersededBy:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The row that replaced this one, when an administrator overturned the decision.
+            This row itself was never edited.
+
+    PlateMetrics:
+      type: object
+      required: [windowDays, reads, matched, unmatched, pendingReview, allowed, denied, corrections]
+      properties:
+        windowDays: { type: integer, example: 30 }
+        reads: { type: integer }
+        matched: { type: integer }
+        unmatched: { type: integer }
+        pendingReview: { type: integer }
+        oldestPendingHours:
+          type: [number, 'null']
+          description: >-
+            Age of the oldest unreviewed read. Null when the queue is empty. Past about a
+            day it means the thresholds are mis-calibrated or a camera has moved — which no
+            AWS metric can tell you, because the pipeline is working perfectly.
+        allowed: { type: integer }
+        denied: { type: integer }
+        averageFused:
+          type: [number, 'null']
+          description: Mean fused confidence over the window. Null when there were no reads.
+        corrections:
+          type: integer
+          description: >-
+            How many reads carry a `correctedPlate` — the size of the evaluation set, and
+            the figure that decides whether the engine is good enough to keep.
+        byCamera:
+          type: array
+          items:
+            type: object
+            required: [cameraId, reads, matched]
+            properties:
+              cameraId: { type: string }
+              reads: { type: integer }
+              matched: { type: integer }
+
     Resident:
       type: object
-      required: [id, email, fullName, unitNumber, isEligible, needsAccessibleSpot]
+      required: [id, email, fullName, unitNumber, isEligible, needsAccessibleSpot, isAdmin]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
@@ -637,9 +1655,94 @@ components:
         isEligible: { type: boolean }
         ineligibleReason: { type: [string, 'null'] }
         needsAccessibleSpot: { type: boolean }
+        hasElectricVehicle: { type: boolean }
+        isAdmin:
+          type: boolean
+          description: >-
+            Separation of duties: an administrator operates the raffle, so an administrator
+            account never holds a bay, never enters the draw, and is refused with 403 if it
+            tries.
+        participationStartedAt:
+          type: string
+          format: date-time
+          description: Where waiting time starts for a resident who has never held a bay.
         externalSubject: { type: [string, 'null'] }
+        currentSpotCode:
+          type: [string, 'null']
+          description: >-
+            The bay this resident holds right now. Carried on the register so an
+            administrator is told before acting: removing a resident who holds a bay is
+            refused with 409, and a refusal that only arrives after the button is pressed
+            is a worse answer than a row that already said so.
         createdAt: { type: string, format: date-time }
         deactivatedAt: { type: [string, 'null'], format: date-time }
+
+    Vehicle:
+      type: object
+      required: [id, residentId, plate, plateDisplay, photos, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        residentId: { type: string, format: uuid }
+        plate:
+          type: string
+          description: >-
+            The canonical form, and the key a recognised plate is matched against:
+            uppercase, no spaces, dashes or dots, and the glyphs that are
+            indistinguishable in a plate face folded onto their digit (O and Q to 0, I to
+            1). S/5, B/8, Z/2, G/6 and D/0 are deliberately not folded — those are real
+            OCR confusions, but folding them makes two genuine plates collide and refuses
+            a registration with no way through, while a miss at the gate is recoverable.
+          example: AB012
+        plateDisplay:
+          type: string
+          description: >-
+            What the resident typed, trimmed and uppercased. What the register prints,
+            because a resident who cannot find their own plate in the list stops trusting
+            the list.
+          example: ABO-12
+        make: { type: [string, 'null'], maxLength: 80 }
+        model: { type: [string, 'null'], maxLength: 80 }
+        year: { type: [integer, 'null'], minimum: 1900 }
+        colour: { type: [string, 'null'], maxLength: 40 }
+        notes: { type: [string, 'null'] }
+        photos:
+          type: array
+          items: { type: string }
+          maxItems: 8
+          description: >-
+            Object keys or URLs, in the order the resident added them. There is no upload
+            pipeline behind this field: an S3 presigned PUT per photo is the intended
+            follow-up, and until it exists the API stores the strings it is given and
+            hosts nothing.
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    VehicleInput:
+      type: object
+      required: [plate]
+      properties:
+        plate:
+          type: string
+          minLength: 1
+          maxLength: 40
+          description: As typed. Normalised server-side; the response carries both forms.
+          example: abc-123
+        make: { type: [string, 'null'], maxLength: 80 }
+        model: { type: [string, 'null'], maxLength: 80 }
+        year:
+          type: [integer, 'null']
+          minimum: 1900
+          description: A model year. At most next year, since next year's models are on sale this year.
+        colour:
+          type: [string, 'null']
+          maxLength: 40
+          description: A colour name. Letters, spaces, hyphens and slashes only.
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        photos:
+          type: array
+          items: { type: string, maxLength: 512 }
+          maxItems: 8
 
     ParkingSpot:
       type: object
@@ -681,15 +1784,20 @@ components:
 
     HistoryEntry:
       type: object
-      required: [cycle, result, scoreAtDraw, recordedAt]
+      required: [cycle, result, recordedAt]
       properties:
-        cycle: { type: string, example: 2025-Q4 }
+        cycle: { type: string, example: 2025-10+3M }
         result: { $ref: '#/components/schemas/DrawOutcome' }
         spotCode: { type: [string, 'null'] }
         position: { type: [integer, 'null'] }
-        scoreAtDraw:
-          type: number
-          description: Snapshot taken at draw time; never recalculated.
+        effectiveWaitHours:
+          type: [number, 'null']
+          description: >-
+            The priority key as it stood in that run, from the stored row. Negative when
+            the Early-Waiting Bias applied. Never recalculated against today's data.
+        servedCountAtDraw: { type: [integer, 'null'] }
+        biasApplied: { type: [boolean, 'null'] }
+        finalRank: { type: [integer, 'null'] }
         recordedAt: { type: string, format: date-time }
 
     Dashboard:
@@ -724,35 +1832,80 @@ components:
             - type: 'null'
         fairness:
           type: object
-          required: [score, consecutiveMisses, totalWins, drawWeight, explanation]
+          required:
+            [anchorAt, waitingHours, effectiveWaitHours, servedCount, biasApplied, explanation]
           properties:
-            score: { type: number }
-            consecutiveMisses: { type: integer }
-            totalWins: { type: integer }
-            drawWeight:
-              type: number
-              description: score + 1. How many times the resident's name is in the hat.
+            anchorAt:
+              type: string
+              format: date-time
+              description: >-
+                The instant waiting restarted: max(participationStartedAt,
+                lastBenefitEndAt). This is the stored fact; the hour counts below are a
+                rendering of it, never a counter.
+            waitingHours: { type: integer }
+            effectiveWaitHours:
+              type: integer
+              description: waitingHours minus the Early-Waiting Bias. Negative while cooling.
+            servedCount: { type: integer }
+            biasApplied: { type: boolean }
+            firstTimeParticipant: { type: boolean }
             explanation:
               type: string
               description: One sentence a resident can read, generated from the same rule.
+        policy:
+          type: object
+          description: The configuration in force, so the dashboard can explain the numbers.
+          properties:
+            allocationDurationMonths: { type: integer }
+            earlyWaitingBiasHours: { type: integer }
+            waitQuantumMinutes: { type: integer }
+            configVersion: { type: integer }
         nextCycle:
           oneOf:
             - $ref: '#/components/schemas/Cycle'
             - type: 'null'
+        registeredForNextCycle:
+          type: boolean
+          description: >-
+            Whether the caller has already entered the draw named by `nextCycle`. Sent
+            with the period rather than left for the client to infer, because the client
+            cannot: a resident's own registration is not readable from any other field
+            here, and a screen that guessed it would offer "Register" to somebody who
+            already had.
         recentHistory:
           type: array
           items: { $ref: '#/components/schemas/HistoryEntry' }
 
     RunResult:
       type: object
-      required: [runId, state, algorithmVersion, randomSeed, entrants, spots, assigned, waitlisted]
+      required:
+        [runId, state, algorithmVersion, randomSeedHex, seedCommitmentHex, decidedAt,
+         configVersion, entrants, spots, assigned, waitlisted]
       properties:
         runId: { type: string, format: uuid }
         state: { type: string, enum: [COMPLETED, COMPLETED_EMPTY] }
-        algorithmVersion: { type: string, example: weighted-lottery-v1 }
-        randomSeed:
+        algorithmVersion: { type: string, example: waiting-time-fairness-v1 }
+        randomSeedHex:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: >-
+            256 bits of seed, revealed with the result. The raffle token of any resident is
+            sha256("<randomSeedHex>:<runId>:<residentId>"), first 16 bytes.
+        seedCommitmentHex:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: >-
+            sha256(randomSeedHex), written before the candidate list was read. Checking it
+            against the revealed seed is what rules out re-rolling for a nicer result.
+        decidedAt:
+          type: string
+          format: date-time
+          description: The single instant every priority key in the run was computed against.
+        configVersion:
           type: integer
-          description: Stored so the draw can be replayed and explained.
+          description: The configuration version in force, so a past run replays under its own rules.
+        inputHashHex: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
+        resultHashHex: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
         entrants: { type: integer }
         spots: { type: integer }
         assigned: { type: integer }
@@ -773,24 +1926,145 @@ components:
 
     FairnessMetrics:
       type: object
-      required: [residents, averageScore, maxScore, neverWon, distribution]
+      required: [residents, averageWaitHours, maxWaitHours, neverServed, distribution]
+      description: >-
+        Every number is computed from timestamps at query time, so the admin dashboard
+        cannot disagree with a run: there is no materialised score to go stale.
       properties:
         residents: { type: integer }
-        averageScore: { type: number }
-        maxScore: { type: number }
-        neverWon: { type: integer }
+        averageWaitHours: { type: integer }
+        maxWaitHours: { type: integer }
+        neverServed:
+          type: integer
+          description: Residents with no allocation that counted as served.
         distribution:
           type: array
           items:
             type: object
-            required: [score, residents]
+            required: [servedCount, residents]
             properties:
-              score: { type: integer }
+              servedCount: { type: integer }
               residents: { type: integer }
+
+    AllocationConfig:
+      type: object
+      description: Rule A. Versioned and append-only; a run stamps the version it used.
+      required:
+        [version, allocationDurationMonths, earlyWaitingBiasHours, waitQuantumMinutes,
+         declineGraceHours, totalBays]
+      properties:
+        version: { type: integer }
+        allocationDurationMonths: { type: integer, minimum: 1, maximum: 60, default: 3 }
+        earlyWaitingBiasHours: { type: integer, minimum: 0, maximum: 8760, default: 24 }
+        waitQuantumMinutes:
+          type: integer
+          minimum: 1
+          default: 60
+          description: The granularity at which two waiting times count as equal.
+        declineGraceHours: { type: integer, minimum: 0, default: 48 }
+        absenceResetMonths:
+          type: [integer, 'null']
+          minimum: 1
+          description: Months of absence after which waiting restarts. null disables the reset.
+        totalBays:
+          type: integer
+          minimum: 0
+          description: Bays the scheme allocates. 0 means the whole active inventory.
+
+    RunSummary:
+      type: object
+      description: One committed draw, as the draws report lists it.
+      required: [runId, cycleId, state, decidedAt, entrants, spots, assigned]
+      properties:
+        runId: { type: string, format: uuid }
+        cycleId: { type: string, format: uuid }
+        cycleLabel:
+          type: [string, 'null']
+          description: The period's name, resolved here so a report names it rather than its id.
+        state: { type: string }
+        algorithmVersion: { type: string }
+        configVersion: { type: integer }
+        randomSeedHex:
+          type: string
+          description: Exposed on purpose - it is what makes a past result checkable.
+        decidedAt: { type: string, format: date-time }
+        entrants: { type: integer }
+        spots: { type: integer }
+        assigned: { type: integer }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        errorDetail: { type: [string, 'null'] }
+
+    AllocationConfigVersion:
+      type: object
+      description: >-
+        A stored version with its audit columns. The policy values alone do not make a
+        history: the question the history answers is who changed a number, and when.
+      allOf:
+        - $ref: '#/components/schemas/AllocationConfig'
+        - type: object
+          required: [changedAt]
+          properties:
+            changedAt: { type: string, format: date-time }
+            changedBy:
+              type: [string, 'null']
+              description: The administrator's resident id, where they have one.
+
+    AllocationConfigView:
+      type: object
+      required: [config, warnings]
+      properties:
+        config: { $ref: '#/components/schemas/AllocationConfig' }
+        warnings:
+          type: array
+          description: Legal values that produce a surprising policy. Shown, never enforced.
+          items: { type: string }
+
+    RunCandidate:
+      type: object
+      description: One row of the contestable record, as stored when the run committed.
+      required: [residentId, rank, outcome, effectiveWaitHours, servedCount, decidedBy]
+      properties:
+        residentId: { type: string, format: uuid }
+        unit: { type: string }
+        anchorAt: { type: string, format: date-time }
+        waitHours: { type: integer }
+        effectiveWaitHours: { type: integer }
+        biasApplied: { type: boolean }
+        firstTimeParticipant: { type: boolean }
+        servedCount: { type: integer }
+        raffleToken:
+          type: string
+          description: The 128-bit token as a decimal string, so nothing rounds.
+        rank: { type: integer, minimum: 1 }
+        pool: { type: [string, 'null'], enum: [ACCESSIBLE, EV, STANDARD, null] }
+        outcome: { $ref: '#/components/schemas/DrawOutcome' }
+        spotCode: { type: [string, 'null'] }
+        decidedBy:
+          type: string
+          enum: [WAITING_TIME, ALLOCATION_HISTORY, RAFFLE, EARLY_WAITING_BIAS]
+        explanation: { type: string }
+
+    RunExplanation:
+      type: object
+      required: [runId, configVersion, ordering, items]
+      properties:
+        runId: { type: string, format: uuid }
+        configVersion: { type: integer }
+        policy:
+          type: object
+          properties:
+            earlyWaitingBiasHours: { type: integer }
+            waitQuantumMinutes: { type: integer }
+            allocationDurationMonths: { type: integer }
+        ordering: { type: string, example: 'effectiveWait DESC, servedCount ASC, raffleToken ASC, residentId ASC' }
+        tokenRecipe: { type: string }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunCandidate' }
 
     ReportRow:
       type: object
-      required: [residentId, fullName, unitNumber, result, scoreAtDraw]
+      required: [residentId, fullName, unitNumber, result]
       properties:
         residentId: { type: string, format: uuid }
         fullName: { type: string }
@@ -798,4 +2072,5 @@ components:
         result: { $ref: '#/components/schemas/DrawOutcome' }
         spotCode: { type: [string, 'null'] }
         position: { type: [integer, 'null'] }
-        scoreAtDraw: { type: number }
+        effectiveWaitHours: { type: [number, 'null'] }
+        servedCountAtDraw: { type: [integer, 'null'] }

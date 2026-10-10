@@ -7,6 +7,8 @@
  */
 export const environment = {
   production: true,
+  /** Never on in a deployed build: the real issuer is the Cognito pool below. */
+  localAuth: false,
   apiBaseUrl: 'https://frd8e8nkhl.execute-api.us-east-2.amazonaws.com',
   auth: {
     authority: 'https://cognito-idp.us-east-2.amazonaws.com/us-east-2_NsdZ4M0mj',

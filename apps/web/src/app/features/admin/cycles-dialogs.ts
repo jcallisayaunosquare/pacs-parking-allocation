@@ -1,54 +1,120 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
-import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatDatepickerModule } from '@angular/material/datepicker';
+import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { provideNativeDateAdapter } from '@angular/material/core';
 import { CyclesFacade } from '../../application/admin.facades';
+import { AllocationConfigFacade } from '../../application/allocation-config.facade';
+import type { Cycle } from '../../domain/models';
 
 /**
- * The dates are native `type="date"` inputs inside Material fields rather than
- * `MatDatepicker`.
+ * The day a picker hands back, as the `yyyy-MM-dd` string the contract speaks.
  *
- * The contract is a `yyyy-MM-dd` string and a native date input speaks exactly that,
- * while the datepicker hands back a `Date` that has to be converted at both ends. That
- * conversion is where a quarter beginning on 1 January was once displayed as 31
- * December, so the string stays a string the whole way through.
+ * Built from the local parts, never from `toISOString()`. A `Date` is an instant, and
+ * the instant behind local midnight on 1 January is 31 December in UTC for anyone west
+ * of it — which is exactly how a quarter beginning on 1 January once came to be shown as
+ * the day before. The picker's own value is a calendar day in the operator's zone, and
+ * reading its parts is the only conversion that keeps it one.
+ */
+const toDay = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** The same calendar day, N months on. Clamped the way a calendar clamps: 31 Jan + 1M = 28 Feb. */
+const addMonths = (d: Date, months: number): Date => {
+  const out = new Date(d.getFullYear(), d.getMonth() + months, d.getDate());
+  if (out.getDate() !== d.getDate()) out.setDate(0);
+  return out;
+};
+
+/**
+ * Creating a period.
+ *
+ * An administrator picks one date - the day the period begins - and nothing else about
+ * its length. The end comes from Period length in the allocation rules, so the number
+ * that governs the rotation lives in exactly one place and a period cannot be created
+ * that disagrees with it. The end is still shown here, because deriving a value is not a
+ * reason to hide it: an operator about to commit the whole building for a quarter should
+ * see the date they are committing to.
+ *
+ * The server derives it too, and the server's answer is the one that counts. What this
+ * screen computes is a preview, and it says so if it cannot compute one.
  */
 @Component({
   selector: 'app-new-cycle-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  providers: [provideNativeDateAdapter()],
+  imports: [
+    DatePipe,
+    FormsModule,
+    MatButtonModule,
+    MatDatepickerModule,
+    MatDialogModule,
+    MatFormFieldModule,
+    MatInputModule,
+  ],
   template: `
-    <h2 mat-dialog-title>New cycle</h2>
+    <h2 mat-dialog-title>New period</h2>
 
     <mat-dialog-content class="form">
+      <mat-form-field appearance="outline">
+        <mat-label>Name</mat-label>
+        <input matInput [(ngModel)]="label" maxlength="20" [placeholder]="derivedLabel()" />
+        <mat-hint>Optional. Left empty, the building names it {{ derivedLabel() }}.</mat-hint>
+      </mat-form-field>
+
+      <!--
+        A real datepicker rather than a bare text field: an administrator picking the
+        quarter a building rotates on should see the month, not type eight characters
+        and hope.
+      -->
+      <mat-form-field appearance="outline">
+        <mat-label>Period begins</mat-label>
+        <input
+          matInput
+          [matDatepicker]="startPicker"
+          [(ngModel)]="startsOn"
+          cdkFocusInitial
+          (ngModelChange)="onStartChange()"
+        />
+        <mat-datepicker-toggle matIconSuffix [for]="startPicker" />
+        <mat-datepicker #startPicker />
+      </mat-form-field>
+
+      <p class="derived">
+        @if (endsOn(); as end) {
+          Ends <strong>{{ end | date: 'longDate' }}</strong>
+          &middot; {{ months() }} months, from Period length in the rules
+        } @else if (startsOn()) {
+          The end date comes from Period length in the rules, which could not be read.
+          The server will still work it out.
+        } @else {
+          Pick a start date and the end follows from Period length in the rules.
+        }
+      </p>
+
       <div class="dates">
         <mat-form-field appearance="outline">
-          <mat-label>Quarter begins</mat-label>
-          <input matInput type="date" [(ngModel)]="form.startsOn" cdkFocusInitial />
-        </mat-form-field>
-
-        <mat-form-field appearance="outline">
-          <mat-label>Quarter ends</mat-label>
-          <input matInput type="date" [(ngModel)]="form.endsOn" />
-        </mat-form-field>
-
-        <mat-form-field appearance="outline">
           <mat-label>Registration opens</mat-label>
-          <input matInput type="date" [(ngModel)]="form.opensAt" />
+          <input matInput [matDatepicker]="opensPicker" [(ngModel)]="opensAt" />
+          <mat-datepicker-toggle matIconSuffix [for]="opensPicker" />
+          <mat-datepicker #opensPicker />
         </mat-form-field>
 
         <mat-form-field appearance="outline">
           <mat-label>Registration closes</mat-label>
-          <input matInput type="date" [(ngModel)]="form.closesAt" />
+          <input matInput [matDatepicker]="closesPicker" [(ngModel)]="closesAt" />
+          <mat-datepicker-toggle matIconSuffix [for]="closesPicker" />
+          <mat-datepicker #closesPicker />
         </mat-form-field>
       </div>
 
-      <p class="note">
-        The label, such as 2026-Q2, comes from the start date, so two administrators
-        cannot spell it differently.
-      </p>
+      @if (windowProblem(); as problem) {
+        <p class="msg msg--warn" role="alert">{{ problem }}</p>
+      }
 
       @if (facade.error(); as e) {
         <div class="msg msg--bad" role="alert">{{ e.message }}</div>
@@ -58,7 +124,7 @@ import { CyclesFacade } from '../../application/admin.facades';
     <mat-dialog-actions align="end">
       <button matButton mat-dialog-close>Cancel</button>
       <button matButton="filled" [disabled]="!valid() || facade.busy()" (click)="submit()">
-        Create cycle
+        {{ facade.busy() ? 'Creating...' : 'Create period' }}
       </button>
     </mat-dialog-actions>
   `,
@@ -68,18 +134,27 @@ import { CyclesFacade } from '../../application/admin.facades';
         display: flex;
         flex-direction: column;
         gap: var(--sp-2);
+        padding-top: var(--sp-2);
+        min-width: 28rem;
       }
       .dates {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: var(--sp-2);
-        padding-top: var(--sp-2);
       }
-      .note {
-        font-size: var(--t-fine);
-        color: var(--steel-faint);
+      /* The consequence of the date above it, so it sits with it rather than in a box. */
+      .derived {
+        margin: 0 0 var(--sp-3);
+        font-size: var(--t-small);
+        color: var(--steel-soft);
       }
-      @media (max-width: 30rem) {
+      .derived strong {
+        color: var(--ink-1);
+      }
+      @media (max-width: 34rem) {
+        .form {
+          min-width: 0;
+        }
         .dates {
           grid-template-columns: 1fr;
         }
@@ -89,29 +164,170 @@ import { CyclesFacade } from '../../application/admin.facades';
 })
 export class NewCycleDialog {
   readonly facade = inject(CyclesFacade);
+  private readonly config = inject(AllocationConfigFacade);
   private readonly ref = inject(MatDialogRef<NewCycleDialog>);
 
-  form = { startsOn: '', endsOn: '', opensAt: '', closesAt: '' };
+  readonly label = signal('');
+  readonly startsOn = signal<Date | null>(null);
+  readonly opensAt = signal<Date | null>(null);
+  readonly closesAt = signal<Date | null>(null);
+
+  /** Period length, when the rules could be read. Null means "ask the server". */
+  readonly months = computed(() => this.config.saved()?.allocationDurationMonths ?? null);
+
+  readonly endsOn = computed(() => {
+    const start = this.startsOn();
+    const months = this.months();
+    if (!start || months === null) return null;
+    // A period ends the day before the next one would begin, so the rotation has no gap.
+    const end = addMonths(start, months);
+    end.setDate(end.getDate() - 1);
+    return end;
+  });
+
+  /** What the building will call it if the name is left empty: the server's own rule. */
+  readonly derivedLabel = computed(() => {
+    const start = this.startsOn();
+    const months = this.months();
+    if (!start) return 'the start month';
+    if (months === 3) return `${start.getFullYear()}-Q${Math.floor(start.getMonth() / 3) + 1}`;
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  /**
+   * Said as a warning rather than enforced: these are the two orderings that produce a
+   * period nobody can register for, and an operator is better told than blocked.
+   */
+  readonly windowProblem = computed(() => {
+    const opens = this.opensAt();
+    const closes = this.closesAt();
+    const starts = this.startsOn();
+    if (opens && closes && closes < opens) return 'Registration closes before it opens.';
+    if (closes && starts && closes > starts) {
+      return 'Registration closes after the period begins, so the draw would run late.';
+    }
+    return null;
+  });
 
   constructor() {
     this.facade.dismissError();
   }
 
+  /** Opening the picker for a window with no dates yet should not start from nowhere. */
+  onStartChange(): void {
+    const start = this.startsOn();
+    if (!start) return;
+    if (!this.closesAt()) {
+      const closes = new Date(start);
+      closes.setDate(closes.getDate() - 1);
+      this.closesAt.set(closes);
+    }
+    if (!this.opensAt()) this.opensAt.set(new Date());
+  }
+
   valid(): boolean {
-    const f = this.form;
-    return Boolean(f.startsOn && f.endsOn && f.opensAt && f.closesAt);
+    return Boolean(this.startsOn() && this.opensAt() && this.closesAt());
   }
 
   async submit(): Promise<void> {
     if (!this.valid()) return;
-    const f = this.form;
+    const name = this.label().trim();
+
     const created = await this.facade.create({
-      startsOn: f.startsOn,
-      endsOn: f.endsOn,
-      // The window is a timestamp in the contract; midnight UTC on the chosen day.
-      registrationOpensAt: new Date(`${f.opensAt}T00:00:00Z`).toISOString(),
-      registrationClosesAt: new Date(`${f.closesAt}T23:59:59Z`).toISOString(),
+      // Omitted on purpose: the server derives both from Period length, and a value sent
+      // from here would be this screen's opinion competing with the rule.
+      ...(name ? { label: name } : {}),
+      startsOn: toDay(this.startsOn()!),
+      // The window is a timestamp in the contract; the chosen day, whole, in UTC.
+      registrationOpensAt: new Date(`${toDay(this.opensAt()!)}T00:00:00Z`).toISOString(),
+      registrationClosesAt: new Date(`${toDay(this.closesAt()!)}T23:59:59Z`).toISOString(),
     });
     if (created) this.ref.close(true);
+  }
+}
+
+/**
+ * Renaming a period.
+ *
+ * The only thing about a period that can change once it exists. Its dates are stamped
+ * onto every assignment it made, so moving one would rewrite when a resident's bay ended
+ * and therefore when their waiting time restarted - the dialog says so rather than
+ * leaving an administrator to wonder why there is only one field.
+ */
+@Component({
+  selector: 'app-rename-cycle-dialog',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [DatePipe, FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  template: `
+    <h2 mat-dialog-title>Rename period</h2>
+
+    <mat-dialog-content class="form">
+      <mat-form-field appearance="outline">
+        <mat-label>Name</mat-label>
+        <input matInput [(ngModel)]="label" maxlength="20" cdkFocusInitial />
+      </mat-form-field>
+
+      <p class="fixed">
+        Runs {{ cycle.startsOn | date: 'd MMM y' }} to {{ cycle.endsOn | date: 'd MMM y' }}.
+        Those dates are stamped on every assignment this period made, so they do not
+        change here.
+      </p>
+
+      @if (facade.error(); as e) {
+        <div class="msg msg--bad" role="alert">{{ e.message }}</div>
+      }
+    </mat-dialog-content>
+
+    <mat-dialog-actions align="end">
+      <button matButton mat-dialog-close>Cancel</button>
+      <button matButton="filled" [disabled]="!dirty() || facade.busy()" (click)="submit()">
+        {{ facade.busy() ? 'Saving...' : 'Save name' }}
+      </button>
+    </mat-dialog-actions>
+  `,
+  styles: [
+    `
+      .form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--sp-2);
+        padding-top: var(--sp-2);
+        min-width: 22rem;
+      }
+      .fixed {
+        margin: 0;
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+        max-width: 44ch;
+      }
+      @media (max-width: 30rem) {
+        .form {
+          min-width: 0;
+        }
+      }
+    `,
+  ],
+})
+export class RenameCycleDialog {
+  readonly facade = inject(CyclesFacade);
+  private readonly ref = inject(MatDialogRef<RenameCycleDialog>);
+  readonly cycle = inject<Cycle>(MAT_DIALOG_DATA);
+
+  readonly label = signal('');
+
+  constructor() {
+    this.facade.dismissError();
+    this.label.set(this.cycle.label);
+  }
+
+  dirty(): boolean {
+    const next = this.label().trim();
+    return next.length > 0 && next !== this.cycle.label;
+  }
+
+  async submit(): Promise<void> {
+    if (!this.dirty()) return;
+    const saved = await this.facade.rename(this.cycle.id, this.label().trim());
+    if (saved) this.ref.close(true);
   }
 }

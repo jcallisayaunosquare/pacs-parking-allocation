@@ -4,18 +4,22 @@ import { getContainer } from './composition-root';
 const logger = new Logger({ serviceName: process.env.POWERTOOLS_SERVICE_NAME ?? 'pacs' });
 
 interface SchedulerPayload {
-  /** Set by the pre-warm schedule five minutes before the real run (§10). */
+  /** Set by the pre-warm schedule five minutes before the real run (section 10). */
   readonly warmup?: boolean;
   readonly cycleId?: string;
 }
 
 /**
- * EventBridge Scheduler → ExecuteRun. The same use case the admin button calls, so the
- * two paths cannot drift; the run lock makes them safe together (§12).
+ * EventBridge -> ExecuteRun. The same use case the admin button calls, so the two paths
+ * cannot drift; the run lock makes them safe together (section 12).
  *
- * A quarterly function is guaranteed to start cold, so a warm-up invocation arrives five
- * minutes earlier and returns immediately after the container is built — the NFR-01
- * measurement is taken on the warm one (§10).
+ * The schedule is a daily poll rather than a quarterly cron, because the allocation
+ * duration is configurable (rule A): this handler draws only for a cycle that is already
+ * in REGISTRATION_CLOSED, so the data decides when a run happens.
+ *
+ * A rarely-invoked function is guaranteed to start cold, so a warm-up invocation arrives
+ * five minutes earlier and returns immediately after the container is built - the NFR-01
+ * measurement is taken on the warm one (section 10).
  */
 export const handler = async (event: SchedulerPayload = {}): Promise<unknown> => {
   const app = await getContainer();
@@ -39,8 +43,9 @@ export const handler = async (event: SchedulerPayload = {}): Promise<unknown> =>
     cycleId = candidate.id;
   }
 
-  // Deterministic key: a scheduler retry inside the same quarter replays rather than
-  // re-draws (§12, §16).
+  // Deterministic key, one per cycle: the daily poll, a scheduler retry and an admin
+  // clicking at the same moment all collapse onto it and replay rather than re-draw
+  // (section 12, section 16).
   const idempotencyKey = `scheduler-${cycleId}`;
   const result = await app.executeRun.execute({ cycleId, idempotencyKey });
 

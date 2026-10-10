@@ -82,7 +82,7 @@ export type BayVariant = 'held' | 'waiting' | 'open' | 'closed';
 
       .bay__code {
         margin: 0;
-        font-size: clamp(2.6rem, 7vw, 4rem);
+        font-size: var(--t-display);
       }
 
       /* A waitlist line like "Position 6" needs to sit at body width, not bay-code width. */
@@ -106,39 +106,36 @@ export type BayVariant = 'held' | 'waiting' | 'open' | 'closed';
 
       /* ------------------------------------------------------------------- held */
       .bay--held {
-        background: var(--steel);
-        color: var(--stencil);
+        background: var(--bay-held);
+        color: var(--bay-held-ink);
       }
       .bay--held .bay__line {
         background: var(--bay-line);
       }
-      .bay--held .bay__caption {
-        color: #c3cbd6;
-      }
+      .bay--held .bay__caption,
       .bay--held .bay__note {
-        color: #a9b4c1;
+        /* Measured against the held fill, not against the page: this block is dark. */
+        color: var(--bay-held-ink-dim);
       }
 
       /* ---------------------------------------------------------------- waiting */
       .bay--waiting {
-        background: var(--steel);
-        color: var(--stencil);
+        background: var(--bay-held);
+        color: var(--bay-held-ink);
       }
       /* Dimmed line: a queue position is not a space. */
       .bay--waiting .bay__line {
-        background: #5a6675;
+        background: var(--rule);
       }
-      .bay--waiting .bay__caption {
-        color: #c3cbd6;
-      }
+      .bay--waiting .bay__caption,
       .bay--waiting .bay__note {
-        color: #a9b4c1;
+        color: var(--bay-held-ink-dim);
       }
 
       /* ------------------------------------------------------------------- open */
       .bay--open {
-        background: var(--concrete-deep);
-        color: var(--steel);
+        background: var(--surface-3);
+        color: var(--ink-1);
         /* Dashed: marked out, not yet painted as anyone's. */
         outline: 3px dashed var(--bay-line-deep);
         outline-offset: -3px;

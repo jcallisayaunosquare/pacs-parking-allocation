@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { DashboardFacade } from '../../application/dashboard.facade';
 import { Bay } from '../../shared/ui/bay';
-import type { Cycle } from '../../domain/models';
+import type { Cycle, HistoryEntry } from '../../domain/models';
 import type { PillTone } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { FairnessExplainer } from '../../shared/ui/fairness-explainer';
@@ -24,8 +24,21 @@ import { ConfirmService } from '../../shared/ui/confirm';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, RouterLink, MatButtonModule, Bay, ViewStateHost, FairnessExplainer],
   template: `
+    <!--
+      The subject of this screen is a number, not a greeting. So the heading is small,
+      top left, and states the period and whose board this is; the number underneath is
+      the thing at display scale. "Your parking" stays as the page's accessible heading,
+      because a screen reader does need a title even where the eye does not.
+    -->
     <header class="head">
-      <h1 class="head__h">Your parking</h1>
+      <h1 class="sr-only">Your parking</h1>
+      <p class="head__period">
+        @if (facade.nextCycle(); as c) {
+          {{ c.label }} &middot; closes {{ c.registrationClosesAt | date: 'd MMM' }}
+        } @else {
+          No period open
+        }
+      </p>
       @if (facade.resident(); as r) {
         <p class="head__who">{{ r.fullName }}, unit {{ r.unit }}</p>
       }
@@ -42,7 +55,7 @@ import { ConfirmService } from '../../shared/ui/confirm';
       [state]="facade.state()"
       [skeletonCount]="4"
       emptyTitle="No parking activity yet"
-      emptyBody="When the building opens registration for the next quarter, you can enter the draw from this page."
+      emptyBody="When the building opens registration for the next period, you can enter the draw from this page."
       (retry)="facade.refresh()"
     >
       <div class="live" aria-live="polite" aria-atomic="true">
@@ -73,10 +86,15 @@ import { ConfirmService } from '../../shared/ui/confirm';
 
           @case ('waitlisted') {
             @if (facade.waitlist(); as w) {
+              <!--
+                The position is the number, so it is set as one. Prefixing it with the
+                word "Position" halved it on screen to make room for a label the status
+                marker and the caption were both already carrying.
+              -->
               <app-bay
                 variant="waiting"
-                [code]="'Position ' + w.position"
-                caption="You are on the waitlist for this quarter."
+                [code]="w.position.toString()"
+                caption="Your position in the queue for this quarter."
                 note="If someone releases a bay, the first person in the queue gets it. You will be told."
                 [label]="'Waitlist position ' + w.position"
                 status="Waiting"
@@ -146,6 +164,51 @@ import { ConfirmService } from '../../shared/ui/confirm';
       @if (facade.nextCycle(); as c) {
         <section class="cycle">
           <h2 class="sec__h">Next cycle {{ c.label }}</h2>
+
+          <!--
+            The entry for the coming period, for whoever the block above did not offer
+            it to. Bays rotate: a resident holding one this period keeps it only by
+            entering the next draw like everyone else, and that screen state used to
+            have no way to do it at all - the one person it mattered most to was the one
+            person who could not see the button.
+          -->
+          @if (facade.registrationOpen() && facade.situation() !== 'registration-open') {
+            <div class="enter">
+              <p class="enter__p">
+                @if (facade.registered()) {
+                  You are entered for {{ c.label }}. Bays are reassigned from scratch, so
+                  this entry is what keeps you in the order.
+                } @else if (facade.canRegister()) {
+                  Registration for {{ c.label }} is open. Every bay is reassigned, so an
+                  entry is needed even if you hold one now.
+                } @else {
+                  You are not eligible for {{ c.label }}. Ask the building administration
+                  to resolve it before registration closes.
+                }
+              </p>
+
+              @if (facade.registered()) {
+                <button
+                  matButton
+                  type="button"
+                  [disabled]="facade.busy()"
+                  (click)="withdraw()"
+                >
+                  Withdraw
+                </button>
+              } @else if (facade.canRegister()) {
+                <button
+                  matButton="filled"
+                  type="button"
+                  [disabled]="facade.busy()"
+                  (click)="facade.register()"
+                >
+                  Enter the draw
+                </button>
+              }
+            </div>
+          }
+
           <ol class="timeline">
             @for (step of timeline(c); track step.what) {
               <li class="timeline__step" [class.timeline__step--done]="step.done">
@@ -166,7 +229,7 @@ import { ConfirmService } from '../../shared/ui/confirm';
         @if (recent().length === 0) {
           <p class="recent__none">
             You have not been in a draw yet. Your first result will appear here, with the
-            score it was drawn against.
+            waiting time it was decided on.
           </p>
         } @else {
           <ul class="results">
@@ -186,7 +249,11 @@ import { ConfirmService } from '../../shared/ui/confirm';
                     }
                   }
                 </span>
-                <span class="results__score">{{ h.scoreAtDraw }} score at draw</span>
+                <!--
+                  The key as it stood in that run, not a score: there is no score. A
+                  run the resident sat out has no key at all, and says so.
+                -->
+                <span class="results__score">{{ keyAtDraw(h) }}</span>
               </li>
             }
           </ul>
@@ -197,16 +264,25 @@ import { ConfirmService } from '../../shared/ui/confirm';
   styles: [
     `
       :host {
+        /* This screen's measure. The shell is full-bleed; pages own their width. */
+        width: 100%;
+        max-width: 68rem;
+        margin: 0 auto;
+        padding: var(--sp-6) var(--sp-5) var(--sp-8);
         display: flex;
         flex-direction: column;
         gap: var(--sp-6);
       }
 
-      .head__h {
-        font-size: var(--t-head);
+      /* Small, factual, and out of the way of the number. */
+      .head__period {
+        font-size: var(--t-small);
+        letter-spacing: 0.08em;
+        color: var(--steel-soft);
       }
       .head__who {
-        color: var(--steel-soft);
+        color: var(--steel-faint);
+        font-size: var(--t-small);
         margin-top: var(--sp-1);
       }
 
@@ -238,6 +314,23 @@ import { ConfirmService } from '../../shared/ui/confirm';
       }
 
       /* A genuine sequence, so it reads along a line. */
+      /* A line of text and its action, not a panel: the direction contract has no cards. */
+      .enter {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--sp-3);
+        margin-bottom: var(--sp-4);
+        padding-bottom: var(--sp-4);
+        border-bottom: 1px solid var(--rule-soft);
+      }
+      .enter__p {
+        margin: 0;
+        max-width: 60ch;
+        color: var(--ink-2);
+      }
+
       .timeline {
         list-style: none;
         margin: 0;
@@ -320,6 +413,21 @@ export default class DashboardPage {
     if (this.facade.registered()) return 'held';
     return this.facade.canRegister() ? 'attention' : 'revoked';
   });
+
+  /**
+   * What a past run was decided on, from that run's stored row. Hours up to two days,
+   * then days, so a long wait does not print as a four-digit number nobody reads.
+   */
+  keyAtDraw(h: HistoryEntry): string {
+    if (h.effectiveWaitHours === null) return 'not in this draw';
+    const hours = Math.round(h.effectiveWaitHours);
+    const wait =
+      Math.abs(hours) < 48
+        ? `${hours} ${Math.abs(hours) === 1 ? 'hour' : 'hours'}`
+        : `${Math.floor(hours / 24)} days`;
+    const rank = h.finalRank === null ? '' : `, ranked ${h.finalRank}`;
+    return `${wait} waited${rank}`;
+  }
 
   bayType(t: string): string {
     return t === 'ACCESSIBLE' ? 'accessible bay' : t === 'EV' ? 'EV bay' : 'standard bay';

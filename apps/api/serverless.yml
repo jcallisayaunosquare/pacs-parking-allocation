@@ -28,6 +28,15 @@ provider:
     CACHE_TABLE: !Ref CacheTable
     EVENTS_TABLE: !Ref EventsTable
     COGNITO_USER_POOL_ID: !Ref UserPool
+    # ------------------------------------------------------------ plates (M-7)
+    # The thresholds are here AND in `plate_config`, and the table wins. These are the
+    # cold-start defaults before the first query; the INSERT is what lets a calibration
+    # move them without a deploy (MODULO-PLACAS.md §8).
+    CAPTURES_BUCKET: ${self:custom.captures.bucket}
+    CAPTURE_MAX_BYTES: ${self:custom.captures.maxBytes}
+    PLATES_MIN_FUSED: ${self:custom.plates.minFused}
+    PLATES_REVIEW_FUSED: ${self:custom.plates.reviewFused}
+    PLATES_COOLDOWN_SECONDS: ${self:custom.plates.cooldownSeconds}
   httpApi:
     cors:
       allowedOrigins:
@@ -89,9 +98,67 @@ provider:
           Action: rds-db:connect
           Resource: !Sub 'arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${self:custom.db.resourceId}/${self:custom.db.user}'
 
+        # --------------------------------------------------- plates (M-7)
+        # DetectText takes no resource restriction: the Rekognition operations that work
+        # without a collection have no ARNs at all. Scoped by action, which is the only
+        # thing the service permits, and said out loud here so the wildcard does not read
+        # as the oversight it would otherwise look like.
+        - Effect: Allow
+          Action: rekognition:DetectText
+          Resource: '*'
+        # Reading the uploaded frames, only under raw/. This is also the permission
+        # Rekognition exercises on our behalf when it is handed an S3Object reference.
+        #
+        # The ARNs below are written out rather than taken from `!GetAtt
+        # CapturesBucket.Arn`, for the same reason the bucket's Lambda permission is:
+        # the bucket's NotificationConfiguration names plateRecognizer, that function
+        # needs this role, and a role that reads the bucket's attributes closes the
+        # circle — CloudFormation rejects the whole template with "Circular dependency
+        # between resources". The name is ours and deterministic, so nothing is lost.
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:GetObjectAttributes
+          Resource: 'arn:aws:s3:::${self:custom.captures.bucket}/raw/*'
+        # The presigned PUT handed out by POST /captures. Signing makes no call to S3, but
+        # the signing role must itself hold the permission the URL grants, or the camera's
+        # upload fails with 403 and the failure looks like a bad signature.
+        - Effect: Allow
+          Action: s3:PutObject
+          Resource: 'arn:aws:s3:::${self:custom.captures.bucket}/raw/*'
+        # The plate crop the review screen shows, when one is written.
+        - Effect: Allow
+          Action: s3:PutObject
+          Resource: 'arn:aws:s3:::${self:custom.captures.bucket}/crops/*'
+        # Reading the stream, for plateIngest. `integrations` is attached to the same
+        # stream and the service role is shared, so this may already be in force - it is
+        # written explicitly rather than assumed.
+        - Effect: Allow
+          Action:
+            - dynamodb:DescribeStream
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            - dynamodb:ListStreams
+          Resource: !GetAtt EventsTable.StreamArn
+        # The cooldown lives on pacs-cache and the recognition event on pacs-events, both
+        # already covered by the statements above. Nothing further is needed for them.
+
 custom:
   webOrigin:
     dev: http://localhost:4200
+  # ---------------------------------------------------------------- plates (M-7)
+  captures:
+    bucket: pacs-captures-${self:provider.stage}
+    # 8 MiB. A well-compressed 1080p JPEG does not come close, so anything above this is
+    # a misconfigured camera or a client uploading something that is not a frame. Enforced
+    # by HeadObject in the recogniser rather than by the presigned URL: a content-length
+    # condition needs a POST policy, and switching the camera client to multipart POST to
+    # gain it is a worse trade than one HeadObject per capture.
+    maxBytes: '8388608'
+  plates:
+    minFused: '0.85'
+    reviewFused: '0.55'
+    cooldownSeconds: '30'
   # The existing hotel-db instance. Kept in one place so a move to a dedicated
   # instance is a single edit.
   db:
@@ -168,21 +235,25 @@ functions:
 
   runRaffle:
     handler: src/main/run-raffle.handler
-    description: Quarterly allocation run (UC-05)
+    description: Allocation run for whichever cycle has closed registration (UC-05)
     timeout: 60
     # Correctness does not depend on reserving 1 here: the partial unique index is the
     # real lock (§12, guard 1), and it holds across containers and deployments.
     vpc: ${self:custom.vpc}
     events:
-      # The real draw: 06:00 on the first day of each quarter.
+      # A daily poll, not a quarterly cron. allocationDuration is configurable (rule A),
+      # so cron(0 6 1 1,4,7,10 ? *) would hard-code "every three months" into the
+      # infrastructure, where no admin edit can reach it. The handler draws only for a
+      # cycle in REGISTRATION_CLOSED and returns NO_RUNNABLE_CYCLE otherwise, so the data
+      # decides when a run happens and the schedule cannot desynchronise from it.
       - schedule:
-          name: pacs-${self:provider.stage}-quarterly-run
-          rate: cron(0 6 1 1,4,7,10 ? *)
+          name: pacs-${self:provider.stage}-daily-run-check
+          rate: cron(0 6 * * ? *)
           enabled: true
       # Pre-warm five minutes earlier so NFR-01 is measured on a warm container (§10).
       - schedule:
           name: pacs-${self:provider.stage}-prewarm
-          rate: cron(55 5 1 1,4,7,10 ? *)
+          rate: cron(55 5 * * ? *)
           enabled: true
           input:
             warmup: true
@@ -203,6 +274,63 @@ functions:
           # One bad event must not block the shard forever.
           maximumRetryAttempts: 3
           functionResponseType: ReportBatchItemFailures
+
+  # The plate recogniser. OUTSIDE the VPC, for the same reason `integrations` is: it needs
+  # S3 and Rekognition, and an in-VPC function reaches neither without a NAT gateway
+  # (~32 USD/month, the thing ADR-016 exists to avoid) or a Rekognition interface endpoint
+  # (~7.30 USD per AZ per month - over three subnets, more than this building's entire
+  # inference bill).
+  #
+  # Note there is no `events:` block. The S3 trigger is declared on the bucket itself,
+  # under resources, because Serverless' own `s3:` event would create the bucket and we
+  # need the lifecycle rules and `DeletionPolicy: Retain` that only an explicit resource
+  # gives. Declaring both produces a circular dependency - see the comment on
+  # CapturesBucket.
+  plateRecognizer:
+    handler: src/main/plate-recognizer.handler
+    description: S3 -> Rekognition DetectText -> PlateRecognized event (M-7)
+    # 1024 MB and not 512: a full vCPU is allocated at 1769 MB and the share below that is
+    # proportional, and while the inference itself is Rekognition's, this function still
+    # pays for JSON, signing and the SDK's own work on a cold start. 1024 is where the
+    # duration stops falling; measure with Lambda Power Tuning before changing it.
+    memorySize: 1024
+    # 30 s. DetectText answers in 300-700 ms, so the margin is for one SDK retry and for
+    # a timeout to always be a symptom rather than the normal case.
+    timeout: 30
+    environment:
+      REKOGNITION_MIN_TEXT_CONFIDENCE: '70'
+      # Folded through normalizePlate at load, not compared verbatim: "PARQUEO"
+      # canonicalises to PAR0UE0, and a hand-folded list is a silent hole.
+      PLATE_BLOCKLIST: 'PARQUEO,PRIVADO,VISITAS,SALIDA,ENTRADA,RESERVADO,BOLIVIA,LA PAZ,SANTA CRUZ,COCHABAMBA,PROHIBIDO,ESTACIONAR,TAXI,STOP'
+
+  # The in-VPC consumer: applies the event to Postgres. A DynamoDB stream is polled by the
+  # Lambda service, not by the function, so a function with no outbound route can still be
+  # invoked by one.
+  plateIngest:
+    handler: src/main/plate-ingest.handler
+    description: Stream consumer — PlateRecognized -> plate_read + access_event (M-7)
+    memorySize: 512
+    timeout: 30
+    vpc: ${self:custom.vpc}
+    events:
+      - stream:
+          type: dynamodb
+          arn: !GetAtt EventsTable.StreamArn
+          batchSize: 10
+          startingPosition: LATEST
+          maximumRetryAttempts: 3
+          # Per-record failure reporting: one malformed event must not block the shard for
+          # its whole retention, because at a gate that means every car after the bad one
+          # goes unrecorded.
+          functionResponseType: ReportBatchItemFailures
+          # Without this filter the function wakes for every Cognito and allocation event
+          # on the table and pays for an RDS connection to discard them.
+          filterPatterns:
+            - eventName: [INSERT, MODIFY]
+              dynamodb:
+                Keys:
+                  pk:
+                    S: [{ prefix: 'plateread#' }]
 
   sweeper:
     handler: src/main/sweeper.handler
@@ -272,6 +400,118 @@ resources:
         VpcEndpointType: Gateway
         RouteTableIds:
           - rtb-090c848e1b269f5c4
+
+    # --------------------------------------------------------- captures (M-7)
+    #
+    # Declared here rather than created by a Serverless `s3:` event, because the lifecycle
+    # rules and `DeletionPolicy: Retain` matter and the event's implicit bucket gets
+    # neither.
+    #
+    # The cost of doing it this way is the circular dependency, and the shape of it is
+    # worth stating: the bucket needs the function's ARN for its notification, the
+    # function's invoke permission needs the bucket, and CloudFormation refuses the loop.
+    # It is broken by giving the permission a LITERAL SourceArn instead of
+    # `!GetAtt CapturesBucket.Arn`. The bucket name is deterministic - it is built from the
+    # stage - so writing it out costs nothing and removes the edge.
+    CapturesBucket:
+      Type: AWS::S3::Bucket
+      # The frames are evidence of who entered the building. A `serverless remove` must
+      # not be able to destroy them.
+      DeletionPolicy: Retain
+      UpdateReplacePolicy: Retain
+      DependsOn: PlateRecognizerLambdaPermissionS3
+      Properties:
+        BucketName: ${self:custom.captures.bucket}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+              BucketKeyEnabled: true
+        OwnershipControls:
+          Rules:
+            - ObjectOwnership: BucketOwnerEnforced
+        VersioningConfiguration:
+          Status: Enabled
+        LifecycleConfiguration:
+          Rules:
+            # A frame is worth keeping while somebody could still dispute the entry. After
+            # that it is dead weight, and it is personal data: it gets deleted, not kept
+            # "just in case".
+            - Id: raw-tiering
+              Status: Enabled
+              Prefix: raw/
+              Transitions:
+                - StorageClass: GLACIER_IR
+                  TransitionInDays: 90
+              ExpirationInDays: 400
+            - Id: crops-expire
+              Status: Enabled
+              Prefix: crops/
+              ExpirationInDays: 120
+            - Id: abort-incomplete
+              Status: Enabled
+              AbortIncompleteMultipartUpload:
+                DaysAfterInitiation: 1
+        # One configuration per extension, and both are needed.
+        #
+        # S3 allows a single suffix rule per configuration, and `POST /captures` accepts
+        # image/png as well as image/jpeg - it derives the key's extension from the content
+        # type. With only the .jpg rule in place a PNG frame uploaded through a perfectly
+        # valid capture ticket landed in the bucket and nothing ever ran on it: no error,
+        # no read, no row in the gate log. A camera sending PNG would have looked like a
+        # camera that was not sending anything.
+        #
+        # The suffix is kept rather than dropped because the prefix alone would also fire
+        # on whatever else ends up under raw/, and `plateRecognizer` would then spend a
+        # Rekognition call to find out it was handed something that is not a frame. The
+        # two rules must not overlap, which .jpg and .png do not.
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: s3:ObjectCreated:Put
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: raw/
+                    - Name: suffix
+                      Value: .jpg
+              Function: !GetAtt PlateRecognizerLambdaFunction.Arn
+            - Event: s3:ObjectCreated:Put
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: raw/
+                    - Name: suffix
+                      Value: .png
+              Function: !GetAtt PlateRecognizerLambdaFunction.Arn
+        CorsConfiguration:
+          CorsRules:
+            # The presigned PUT is executed by the camera client, which in the web capture
+            # mode is a browser. PUT only, and only from the frontend's origin.
+            - AllowedMethods: [PUT]
+              AllowedOrigins:
+                - ${self:custom.webOrigin.${self:provider.stage}, 'http://localhost:4200'}
+              AllowedHeaders: ['*']
+              MaxAge: 3600
+
+    # `SourceArn` as a literal string and NOT `!GetAtt CapturesBucket.Arn`. Referencing
+    # the bucket here is what creates bucket -> permission -> bucket, and CloudFormation
+    # aborts the whole stack on it. (The logical id Serverless generates for the function
+    # is `PlateRecognizerLambdaFunction`: PascalCase of the function name plus the suffix.)
+    PlateRecognizerLambdaPermissionS3:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !GetAtt PlateRecognizerLambdaFunction.Arn
+        Action: lambda:InvokeFunction
+        Principal: s3.amazonaws.com
+        SourceAccount: !Ref AWS::AccountId
+        SourceArn: !Sub 'arn:aws:s3:::pacs-captures-${self:provider.stage}'
 
     # --------------------------------------------------------------- identity
     UserPool:
@@ -368,6 +608,53 @@ resources:
         Precedence: 10
         UserPoolId: !Ref UserPool
 
+    # A machine group, one user per gate. A dedicated Cognito user rather than an API key
+    # in a header, because a key cannot be revoked for one gate without a redeploy - and
+    # the credential sitting in a box at a car park entrance is the one most likely to be
+    # lifted. Its only permission is POST /captures (M-7, MODULO-PLACAS.md §3.1).
+    CameraGroup:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: CAMERA
+        Description: Gate camera clients — POST /captures only (M-7)
+        Precedence: 20
+        UserPoolId: !Ref UserPool
+
+    # ------------------------------------------------------- alarms (M-7)
+    PlateRecognizerErrors:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: pacs-${self:provider.stage}-plate-recognizer-errors
+        Namespace: AWS/Lambda
+        MetricName: Errors
+        Dimensions:
+          - Name: FunctionName
+            Value: !Ref PlateRecognizerLambdaFunction
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 3
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+
+    PlateIngestIteratorAge:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: pacs-${self:provider.stage}-plate-ingest-lag
+        Namespace: AWS/Lambda
+        MetricName: IteratorAge
+        Dimensions:
+          - Name: FunctionName
+            Value: !Ref PlateIngestLambdaFunction
+        Statistic: Maximum
+        Period: 300
+        EvaluationPeriods: 2
+        # A minute behind on the stream means the access log is behind the cars that have
+        # already driven in, which is the one state in which the log cannot be trusted.
+        Threshold: 60000
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+
   Outputs:
     ApiBaseUrl:
       Description: HTTP API base URL for the frontend
@@ -382,3 +669,5 @@ resources:
       Value: !Sub 'https://pacs-${self:provider.stage}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com'
     CacheTableName:
       Value: !Ref CacheTable
+    CapturesBucketName:
+      Value: !Ref CapturesBucket

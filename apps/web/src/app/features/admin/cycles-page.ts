@@ -2,19 +2,21 @@ import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/cor
 import { DatePipe } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialog } from '@angular/material/dialog';
+import { MatIconModule } from '@angular/material/icon';
+import { MatMenuModule } from '@angular/material/menu';
 import { MatTableModule } from '@angular/material/table';
 import { CyclesFacade } from '../../application/admin.facades';
 import type { Cycle, RunAssignment } from '../../domain/models';
 import { ConfirmService } from '../../shared/ui/confirm';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
-import { NewCycleDialog } from './cycles-dialogs';
+import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
 
 /**
- * Admin — cycles and draws (UC-04, UC-05, §17).
+ * Admin — periods and draws (UC-04, UC-05, §17).
  *
  * The draw button is the most consequential control in the product, so it is guarded
- * three ways: it appears only for the one cycle in REGISTRATION_CLOSED, which is the
+ * three ways: it appears only for the one period in REGISTRATION_CLOSED, which is the
  * only state a draw may start from (§11); it goes through a confirmation; and the
  * request carries an idempotency key, so a double click replays the first draw rather
  * than running a second one.
@@ -26,14 +28,25 @@ import { NewCycleDialog } from './cycles-dialogs';
 @Component({
   selector: 'app-cycles-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, MatButtonModule, MatTableModule, StatusPill, ViewStateHost],
+  imports: [
+    DatePipe,
+    MatButtonModule,
+    MatIconModule,
+    MatMenuModule,
+    MatTableModule,
+    StatusPill,
+    ViewStateHost,
+  ],
   template: `
     <header class="head">
       <div>
-        <h1 class="head__h">Cycles and draws</h1>
-        <p class="head__p">One cycle per quarter: open registration, close it, run the draw.</p>
+        <h1 class="head__h">Periods</h1>
+        <p class="head__p">
+        One period at a time: open registration, close it, run the draw. How long a period
+        runs comes from Period length in the rules.
+      </p>
       </div>
-      <button matButton="filled" type="button" (click)="openCreate()">New cycle</button>
+      <button matButton="filled" type="button" (click)="openCreate()">New period</button>
     </header>
 
     @if (facade.error(); as e) {
@@ -122,17 +135,17 @@ import { NewCycleDialog } from './cycles-dialogs';
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="4"
-      emptyTitle="No cycles yet"
-      emptyBody="A cycle sets the quarter it covers, the registration window, and when the draw runs."
-      emptyActionLabel="New cycle"
+      emptyTitle="No periods yet"
+      emptyBody="A period sets when it begins and when registration runs. Its end comes from Period length in the rules."
+      emptyActionLabel="New period"
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <h2 class="sec__h">All cycles</h2>
+      <h2 class="sec__h">All periods</h2>
       <table mat-table [dataSource]="facade.allCycles()">
         <ng-container matColumnDef="label">
-          <th mat-header-cell *matHeaderCellDef>Cycle</th>
-          <td mat-cell *matCellDef="let c" data-label="Cycle" class="code stencil">
+          <th mat-header-cell *matHeaderCellDef>Period</th>
+          <td mat-cell *matCellDef="let c" data-label="Period" class="code stencil">
             {{ c.label }}
           </td>
         </ng-container>
@@ -161,8 +174,8 @@ import { NewCycleDialog } from './cycles-dialogs';
         </ng-container>
 
         <ng-container matColumnDef="quarter">
-          <th mat-header-cell *matHeaderCellDef>Quarter</th>
-          <td mat-cell *matCellDef="let c" data-label="Quarter">
+          <th mat-header-cell *matHeaderCellDef>Runs</th>
+          <td mat-cell *matCellDef="let c" data-label="Runs">
             {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
           </td>
         </ng-container>
@@ -177,32 +190,39 @@ import { NewCycleDialog } from './cycles-dialogs';
 
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+          <!--
+            One trigger per row, like the register and the inventory. The state still
+            decides what is inside it: a period that has drawn offers nothing but its
+            name, because its dates and its result are the record.
+          -->
           <td mat-cell *matCellDef="let c">
-            @switch (c.state) {
-              @case ('DRAFT') {
-                <button
-                  matButton
-                  type="button"
-                  [disabled]="facade.busy()"
-                  (click)="facade.openRegistration(c.id)"
-                >
-                  Open registration
-                </button>
+            <button
+              matIconButton
+              type="button"
+              [disabled]="facade.busy()"
+              [matMenuTriggerFor]="rowMenu"
+              [attr.aria-label]="'Actions for period ' + c.label"
+            >
+              <mat-icon>more_vert</mat-icon>
+            </button>
+            <mat-menu #rowMenu="matMenu">
+              @switch (c.state) {
+                @case ('DRAFT') {
+                  <button mat-menu-item type="button" (click)="facade.openRegistration(c.id)">
+                    Open registration
+                  </button>
+                }
+                @case ('REGISTRATION_OPEN') {
+                  <button mat-menu-item type="button" (click)="facade.closeRegistration(c.id)">
+                    Close registration
+                  </button>
+                }
               }
-              @case ('REGISTRATION_OPEN') {
-                <button
-                  matButton
-                  type="button"
-                  [disabled]="facade.busy()"
-                  (click)="facade.closeRegistration(c.id)"
-                >
-                  Close registration
-                </button>
-              }
-              @default {
-                <span class="dim">—</span>
-              }
-            }
+              <button mat-menu-item type="button" (click)="rename(c)">Rename</button>
+              <button mat-menu-item type="button" class="danger" (click)="remove(c)">
+                Remove
+              </button>
+            </mat-menu>
           </td>
         </ng-container>
 
@@ -214,8 +234,18 @@ import { NewCycleDialog } from './cycles-dialogs';
   `,
   styles: [
     `
+      /* The destructive item, so it does not read like the ones above it. */
+      .danger {
+        color: var(--revoked);
+      }
+
       :host {
-        display: flex;
+        /* This screen's measure. The shell is full-bleed; pages own their width. */
+        width: 100%;
+        max-width: 88rem;
+        margin: 0 auto;
+        padding: var(--sp-6) var(--sp-5) var(--sp-8);
+        /* A register needs columns, not a reading measure. */        display: flex;
         flex-direction: column;
         gap: var(--sp-6);
       }
@@ -241,8 +271,8 @@ import { NewCycleDialog } from './cycles-dialogs';
       /* The one thing on this page that should stop an administrator's eye. */
       .ready {
         display: flex;
-        background: var(--steel);
-        color: var(--stencil);
+        background: var(--signal);
+        color: var(--on-primary);
       }
       .ready__line {
         flex: 0 0 10px;
@@ -258,8 +288,13 @@ import { NewCycleDialog } from './cycles-dialogs';
       .ready__h {
         font-size: var(--t-title);
       }
+      /*
+       * On the signal ground, not on the page: --ink-2 is the page's second ink and
+       * landed here as dark indigo on indigo, around 1.6:1. The banner carries the one
+       * irreversible action in the product, so its sentence has to be readable.
+       */
       .ready__p {
-        color: #c3cbd6;
+        color: var(--on-primary);
         max-width: 60ch;
       }
 
@@ -351,6 +386,36 @@ export default class CyclesPage {
 
   openCreate(): void {
     this.dialog.open(NewCycleDialog, { width: '34rem', maxWidth: 'calc(100vw - 2rem)' });
+  }
+
+  rename(c: Cycle): void {
+    this.dialog.open(RenameCycleDialog, {
+      data: c,
+      width: '28rem',
+      maxWidth: 'calc(100vw - 2rem)',
+    });
+  }
+
+  /**
+   * Removing a period.
+   *
+   * The server is the one that decides, and it refuses once the period has drawn or
+   * handed out a bay - allocation history is never reset. The dialog says what is about
+   * to be lost, and a refusal arrives as the server's own sentence rather than a generic
+   * failure, because the reason is the useful part.
+   */
+  async remove(c: Cycle): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: `Remove ${c.label}?`,
+      body:
+        'This takes the period and its registrations off the register. It is refused if ' +
+        'the period has already run a draw or handed out a bay, because those are part ' +
+        'of the record.',
+      confirmLabel: 'Remove it',
+      cancelLabel: 'Keep it',
+      danger: true,
+    });
+    if (ok) await this.facade.remove(c.id);
   }
 
   async runDraw(c: Cycle): Promise<void> {

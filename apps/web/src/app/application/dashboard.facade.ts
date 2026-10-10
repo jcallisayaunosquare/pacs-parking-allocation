@@ -2,7 +2,7 @@ import { Injectable, computed, inject, resource, signal } from '@angular/core';
 import { CycleRepository, DashboardRepository } from '../domain/repositories';
 import type { ApiError } from '../domain/models';
 import { toApiError } from '../core/http/api-error';
-import { viewState } from './async-state';
+import { peek, viewState } from './async-state';
 
 /**
  * The resident dashboard, as one page-level query feeding presentational children —
@@ -30,26 +30,33 @@ export class DashboardFacade {
   /** Set while a mutation is in flight, so buttons can disable without a global spinner. */
   private readonly _busy = signal(false);
   private readonly _mutationError = signal<ApiError | null>(null);
-  /** Shown optimistically the moment the resident enters the raffle. */
-  private readonly _optimisticallyRegistered = signal(false);
+  /**
+   * The optimistic override, and only that: `null` means "whatever the server last
+   * said". It used to be a plain boolean starting at false, which made entering the
+   * draw look like it had not happened the moment the page was reloaded — the flag was
+   * client state with nothing behind it. `registeredForNextCycle` on the dashboard is
+   * now the source of truth and this only covers the second between the click and the
+   * reload.
+   */
+  private readonly _optimisticallyRegistered = signal<boolean | null>(null);
 
   readonly state = viewState(this.dashboard);
   readonly historyState = viewState(this.historyRes, (h) => h.length === 0);
 
-  readonly value = computed(() => this.dashboard.value());
-  readonly history = computed(() => this.historyRes.value() ?? []);
+  readonly value = computed(() => peek(this.dashboard));
+  readonly history = computed(() => peek(this.historyRes) ?? []);
   readonly busy = this._busy.asReadonly();
   readonly mutationError = this._mutationError.asReadonly();
 
-  readonly assignment = computed(() => this.dashboard.value()?.assignment ?? null);
-  readonly waitlist = computed(() => this.dashboard.value()?.waitlist ?? null);
-  readonly fairness = computed(() => this.dashboard.value()?.fairness ?? null);
-  readonly nextCycle = computed(() => this.dashboard.value()?.nextCycle ?? null);
-  readonly resident = computed(() => this.dashboard.value()?.resident ?? null);
+  readonly assignment = computed(() => peek(this.dashboard)?.assignment ?? null);
+  readonly waitlist = computed(() => peek(this.dashboard)?.waitlist ?? null);
+  readonly fairness = computed(() => peek(this.dashboard)?.fairness ?? null);
+  readonly nextCycle = computed(() => peek(this.dashboard)?.nextCycle ?? null);
+  readonly resident = computed(() => peek(this.dashboard)?.resident ?? null);
 
   /** Which of §17's three dashboard states to render. */
   readonly situation = computed<'holds-spot' | 'waitlisted' | 'registration-open' | 'idle'>(() => {
-    const d = this.dashboard.value();
+    const d = peek(this.dashboard);
     if (!d) return 'idle';
     if (d.assignment) return 'holds-spot';
     if (d.waitlist) return 'waitlisted';
@@ -57,13 +64,28 @@ export class DashboardFacade {
     return 'idle';
   });
 
+  /**
+   * Whether the coming period is taking entries at all.
+   *
+   * Separate from `situation()` on purpose: a resident holding a bay this period is in
+   * the `holds-spot` state, and the bays rotate, so they have to enter the next draw
+   * like everyone else. Keying the action off the situation hid it from exactly the
+   * people with the most to lose by missing it.
+   */
+  readonly registrationOpen = computed(
+    () => this.nextCycle()?.state === 'REGISTRATION_OPEN',
+  );
+
+  readonly registered = computed(
+    () => this._optimisticallyRegistered() ?? this.value()?.registeredForNextCycle ?? false,
+  );
+
   readonly canRegister = computed(
     () =>
-      this.situation() === 'registration-open' &&
-      !this._optimisticallyRegistered() &&
+      this.registrationOpen() &&
+      !this.registered() &&
       (this.resident()?.isEligible ?? false),
   );
-  readonly registered = this._optimisticallyRegistered.asReadonly();
 
   refresh(): void {
     this.dashboard.reload();
@@ -81,9 +103,11 @@ export class DashboardFacade {
     try {
       await this.cycles.register(cycle.id);
       this.refresh();
+      // Back to the server's answer: the reload now carries it.
+      this._optimisticallyRegistered.set(null);
       return true;
     } catch (e) {
-      this._optimisticallyRegistered.set(false);
+      this._optimisticallyRegistered.set(null);
       this._mutationError.set(toApiError(e));
       return false;
     } finally {
@@ -101,6 +125,7 @@ export class DashboardFacade {
       await this.cycles.withdraw(cycle.id);
       this._optimisticallyRegistered.set(false);
       this.refresh();
+      this._optimisticallyRegistered.set(null);
       return true;
     } catch (e) {
       this._mutationError.set(toApiError(e));

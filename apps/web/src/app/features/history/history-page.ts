@@ -3,13 +3,14 @@ import { DatePipe } from '@angular/common';
 import { DashboardFacade } from '../../application/dashboard.facade';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
+import type { HistoryEntry } from '../../domain/models';
 
 /**
  * UC-10 — every past result and the score it was drawn against.
  *
- * The score column is the reason this page exists: it is the snapshot taken at draw
- * time (§11) and never recalculated, so a resident can see why a past draw went the way
- * it did instead of being asked to trust it. A plain list rather than a data grid,
+ * The key column is the reason this page exists: it is the row stored when the run was
+ * committed and it is never recalculated, so a resident can see why a past draw went the
+ * way it did instead of being asked to trust it. A plain list rather than a data grid,
  * because four quarters a year is not a data grid.
  */
 @Component({
@@ -20,7 +21,8 @@ import { ViewStateHost } from '../../shared/ui/view-state';
     <header class="head">
       <h1 class="head__h">Your results</h1>
       <p class="head__p">
-        The score shown is the one you held when the draw ran, not your score today.
+        Each result shows the waiting time you had when that draw ran, read from the
+        record of the run and never recalculated against today.
       </p>
     </header>
 
@@ -28,7 +30,7 @@ import { ViewStateHost } from '../../shared/ui/view-state';
       [state]="facade.historyState()"
       [skeletonCount]="5"
       emptyTitle="You have not been in a draw yet"
-      emptyBody="Once a draw runs with you entered, the result appears here along with the score it was drawn against."
+      emptyBody="Once a draw runs with you entered, the result appears here along with the waiting time it was decided on."
       (retry)="facade.refresh()"
     >
       <ol class="list">
@@ -65,7 +67,7 @@ import { ViewStateHost } from '../../shared/ui/view-state';
                   <app-status-pill label="Skipped" tone="idle" />
                 }
               }
-              <span class="row__score">{{ h.scoreAtDraw }} score at draw</span>
+              <span class="row__score">{{ keyAtDraw(h) }}</span>
               <span class="row__when">{{ h.recordedAt | date: 'd MMM y' }}</span>
             </div>
           </li>
@@ -76,6 +78,11 @@ import { ViewStateHost } from '../../shared/ui/view-state';
   styles: [
     `
       :host {
+        /* This screen's measure. The shell is full-bleed; pages own their width. */
+        width: 100%;
+        max-width: 68rem;
+        margin: 0 auto;
+        padding: var(--sp-6) var(--sp-5) var(--sp-8);
         display: flex;
         flex-direction: column;
         gap: var(--sp-5);
@@ -154,4 +161,24 @@ import { ViewStateHost } from '../../shared/ui/view-state';
 })
 export default class HistoryPage {
   readonly facade = inject(DashboardFacade);
+
+  /**
+   * What that run was decided on, from its stored row. Hours up to two days and then
+   * days, so a long wait does not print as a four-digit number nobody reads; a negative
+   * figure is the early-waiting window, and it is said in words rather than shown as a
+   * minus sign a resident would have to decode.
+   */
+  keyAtDraw(h: HistoryEntry): string {
+    if (h.effectiveWaitHours === null) return 'Not in this draw';
+    if (h.biasApplied) return 'Early-waiting window applied';
+
+    const hours = Math.round(h.effectiveWaitHours);
+    const wait =
+      hours < 48 ? `${hours} ${hours === 1 ? 'hour' : 'hours'}` : `${Math.floor(hours / 24)} days`;
+    const served =
+      h.servedCountAtDraw === null
+        ? ''
+        : `, ${h.servedCountAtDraw} past ${h.servedCountAtDraw === 1 ? 'bay' : 'bays'}`;
+    return `${wait} waited${served}`;
+  }
 }

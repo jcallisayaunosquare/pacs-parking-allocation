@@ -10,6 +10,7 @@ this README only covers how to run what is built.
 | HTTP | API Gateway HTTP API + native Cognito JWT authorizer |
 | Data | RDS PostgreSQL 18.3 (`hotel-db`, database `pacs_dev`) · Kysely · node-pg-migrate |
 | Cache | DynamoDB with TTL (ADR-017) |
+| Vision | Amazon Rekognition `DetectText`, behind a `PlateRecognizer` port (M-7) |
 | IaC | Serverless Framework v4 |
 | Region | **us-east-2** — the only region the account's SCP permits |
 
@@ -22,13 +23,14 @@ this README only covers how to run what is built.
 | User pool · client | `us-east-2_NsdZ4M0mj` · `2tu4q5vefr1g98u90u8dspmife` |
 | Hosted login | `https://pacs-dev-309887812390.auth.us-east-2.amazoncognito.com` |
 | Cache table | `pacs-cache-dev` |
-| Event bus | `pacs-events-dev` + stream → `integrations` |
-| Functions | `pacs-api-dev-api`, `-runRaffle`, `-sweeper`, `-integrations` |
+| Event bus | `pacs-events-dev` + stream to `integrations` and `plateIngest` |
+| Captures bucket | `pacs-captures-dev` — declared in the stack, not yet deployed |
+| Functions | `pacs-api-dev-api`, `-runRaffle`, `-sweeper`, `-integrations`, `-plateRecognizer`, `-plateIngest` |
 
 Those five values are what the Angular app needs. Verified after deploy:
 
 ```
-pnpm test                        54/54 unit, including 10 000 seeded draws
+pnpm test                        213/213 unit, including 10 000 seeded draws
 node scripts/smoke.mjs           31/31 auth, RBAC, validation, state machine, idempotency
 node scripts/verify-raffle.mjs   14/14 a real raffle over HTTPS, under 1 s
 node scripts/verify-cognito.mjs  14/14 async Cognito provisioning, end to end
@@ -44,7 +46,7 @@ price of having no NAT gateway (ADR-016). So it does not call it. Instead:
    no insert goes unannounced.
 2. It then pushes the event to `pacs-events` through the free DynamoDB gateway
    endpoint. Best-effort: this is latency, not correctness.
-3. The stream fans out to **integrations**, the one function *outside* the VPC. It
+3. The stream fans out to **integrations**, a function *outside* the VPC. It
    calls `AdminCreateUser` with `custom:resident_id`, adds the user to `RESIDENT`, and
    writes a `link#<sub>` item back to the table — it cannot reach the database itself.
 4. On the resident's first authenticated request the API claims that link, sets
@@ -57,38 +59,141 @@ Measured end to end: the Cognito user exists about 3 seconds after the 201, and 
 subject link about 1.5 seconds after that. Cognito's own default email sender delivers
 the invitation, so no SES verification is involved.
 
+## Plate recognition (M-7)
+
+A camera at the gate reads a plate; the system records what it read, matches it against
+the resident vehicle register, decides allow or deny, and sends anything doubtful to a
+human. The design is in `MODULO-PLACAS.md` and the AWS shape and engine comparison in
+`DESPLIEGUE-LAMBDA.md`.
+
+```
+camera --POST /captures--> api (in VPC) --presigned PUT--> S3 pacs-captures-dev/raw/...
+                                                             |  ObjectCreated:Put
+                                                             v
+                          plateRecognizer   OUTSIDE the VPC: sees S3 + Rekognition
+                            DetectText (S3Object, no bytes transferred)
+                            PutItem  pk = plateread#<captureId>
+                                                             |
+                                             DynamoDB pacs-events-dev (stream)
+                                                             v
+                          plateIngest       INSIDE the VPC: applies it to Postgres
+                            plate_read + access_event + event_outbox
+```
+
+**Why two functions.** There is no NAT gateway (ADR-016). An in-VPC function reaches RDS
+and DynamoDB through a free gateway endpoint and nothing else, so it cannot call
+Rekognition or S3; a function outside the VPC can, and cannot reach `hotel-db`. The
+alternatives were a NAT gateway (~32 USD/month, exactly what ADR-016 avoided) or a
+Rekognition interface endpoint (~7.30 USD per availability zone per month — over three
+subnets, more than this building's entire inference bill). So the event table sits between
+them: the Cognito provisioning pattern, inverted. A DynamoDB stream is polled by the
+Lambda service rather than by the function, so `plateIngest` can be triggered without
+having any outbound route of its own.
+
+**The engine is Rekognition `DetectText`, behind a port.** It is the most expensive of the
+three options per read (~1.03 USD per 1000, about 9.30 USD/month at 300 reads a day) and
+still the right one: it is the only option that adds no second language to the monorepo,
+the Python container route carries `ultralytics`' AGPL-3.0 obligation, and an 8-15 second
+cold start fails the first car of the day at a gate with no queue. Its weakness is
+precision, and that is answered by design rather than by hope — a Bolivian format table, a
+scene-word blocklist, a confidence threshold, a review queue, and an evaluation set that
+builds itself from every correction. If week one says it is not good enough, the change is
+one class in `infrastructure/` and one line in `src/main`, because recognition sits behind
+the `PlateRecognizer` port.
+
+**Thresholds.** `fused = confidence * (0.6 + 0.4 * quality)`. At or above `min_fused`
+(0.85) an exact or lone fuzzy match opens the gate; between `review_fused` (0.55) and that
+it goes to review; below it the read is unreadable and produces **no** access event,
+because a dirty lens is not a refused entry. They live in `plate_config`, append-only, so
+recalibrating is an `INSERT` and not a deploy — the environment variables are only the
+cold-start default.
+
+### Deploy steps
+
+```bash
+cd apps/api
+
+# 1. The three new tables. From a laptop with DATABASE_URL exported, as below.
+pnpm --filter @pacs/api migrate:up     # plate_config, plate_read, access_event
+
+# 2. Deploy. Creates plateRecognizer (no VPC), plateIngest (in VPC), the captures
+#    bucket with its lifecycle rules, the CAMERA Cognito group and two alarms.
+serverless deploy --stage dev --aws-profile hotel --region us-east-2
+
+# 3. Confirm the S3 trigger actually attached. This is the step that silently fails.
+aws s3api get-bucket-notification-configuration \
+    --bucket pacs-captures-dev --profile hotel --region us-east-2
+
+# 4. One camera user per gate, in the CAMERA group. Its only permission is POST /captures,
+#    so rotating a gate's credential touches no resident and no other gate.
+aws cognito-idp admin-create-user --user-pool-id us-east-2_NsdZ4M0mj \
+    --username gate-north@cameras.invalid --profile hotel --region us-east-2
+aws cognito-idp admin-add-user-to-group --user-pool-id us-east-2_NsdZ4M0mj \
+    --username gate-north@cameras.invalid --group-name CAMERA \
+    --profile hotel --region us-east-2
+
+# 5. Before building anything further: is Rekognition any good on THESE cameras?
+aws rekognition detect-text \
+    --image '{"S3Object":{"Bucket":"pacs-captures-dev","Name":"raw/gate-north/x.jpg"}}' \
+    --profile hotel --region us-east-2 \
+    --query 'TextDetections[?Type==`LINE`].[DetectedText,Confidence]' --output text
+```
+
+Step 5 is worth running against twenty real photographs of the gate **before** any of the
+rest. If the plates do not appear there, the recommendation changes to a hosted ALPR API
+and nothing built here is wasted — only the adapter.
+
+### Two things that will bite
+
+**An S3 trigger on a bucket the same stack creates is a circular dependency.** The bucket
+needs the function's ARN for its `NotificationConfiguration`, the function's invoke
+permission needs the bucket, and CloudFormation refuses the loop. Serverless' own `s3:`
+event sidesteps it by creating the bucket itself, and then the lifecycle rules and
+`DeletionPolicy: Retain` are lost, which is not acceptable for images that are evidence of
+who entered the building. So the bucket is declared in `resources` with an explicit
+notification, there is no `s3:` event on the function, and
+`PlateRecognizerLambdaPermissionS3` carries a **literal** `SourceArn` string rather than
+`!GetAtt CapturesBucket.Arn`. The bucket name is deterministic, so writing it out costs
+nothing and removes the edge.
+
+**`plateIngest` needs its event filter.** Without `filterPatterns` on
+`pk: [{ prefix: 'plateread#' }]` the function wakes for every Cognito provisioning and
+allocation event on the shared table, and pays for an RDS connection to discard each one.
+
 ## Layout
 
 ```
 code/
-├─ apps/api/                    the backend service
-│  ├─ serverless.yml            functions, events, Cognito, DynamoDB, VPC endpoint
-│  ├─ migrations/               node-pg-migrate, forward + down
-│  ├─ scripts/                  seed and an end-to-end draw against a real database
-│  └─ src/
-│     ├─ shared/                kernel: Result, errors, Clock, db, cache, http
-│     ├─ modules/               one Clean Architecture ring set per module (§08)
-│     │  ├─ allocation/         M-1 — cycles, runs, the draw, waitlist
-│     │  ├─ residents/          M-2
-│     │  ├─ inventory/          M-3
-│     │  ├─ fairness/           M-4 — scores, history, metrics
-│     │  └─ identity/           M-6 — JWT claims → Principal, RBAC
-│     └─ main/                  composition roots — the only place that calls `new`
-├─ apps/web/                    the Angular frontend
-│  └─ src/app/
-│     ├─ core/                 OIDC config, auth store, guards, interceptors, errors
-│     ├─ domain/               models + repository contracts as abstract classes
-│     ├─ data/                 DTOs, mappers, HttpClient implementations
-│     ├─ application/          signal facades with stale-while-revalidate
-│     ├─ features/             lazy standalone pages (PrimeNG lives only here)
-│     └─ shared/ui/            status pill, five-state host, fairness explainer
-└─ packages/contracts/          OpenAPI 3.1 — source for client types and mock servers
++- apps/api/                    the backend service
+|  +- serverless.yml            functions, events, Cognito, DynamoDB, S3, VPC endpoint
+|  +- migrations/               node-pg-migrate, forward + down
+|  +- scripts/                  seed, an end-to-end draw, and the offline stub API
+|  +- src/
+|     +- shared/                kernel: Result, errors, Clock, db, cache, http
+|     +- modules/               one Clean Architecture ring set per module
+|     |  +- allocation/         M-1: cycles, runs, the draw, waitlist
+|     |  +- residents/          M-2
+|     |  +- inventory/          M-3
+|     |  +- fairness/           M-4: scores, history, metrics
+|     |  +- identity/           M-6: JWT claims to Principal, RBAC
+|     |  +- plates/             M-7: recognition, the gate log, access events
+|     +- main/                  composition roots, the only place that calls `new`
++- apps/web/                    the Angular frontend
+|  +- src/app/
+|     +- core/                  OIDC config, auth store, guards, interceptors, errors
+|     +- domain/                models + repository contracts as abstract classes
+|     +- data/                  DTOs, mappers, HttpClient implementations
+|     +- application/           signal facades with stale-while-revalidate
+|     +- features/              lazy standalone pages
+|     +- shared/ui/             status pill, five-state host, fairness explainer
++- packages/contracts/          OpenAPI 3.1, source for client types and mock servers
 ```
 
 Each module has the same three rings and source dependencies point inward only:
 `domain/` is pure TypeScript with no `async` and no I/O, `application/` knows only
-ports, `infrastructure/` knows Kysely, DynamoDB and Cognito. The draw is therefore
-testable — and 10 000 times reproducible — without touching AWS.
+ports, `infrastructure/` knows Kysely, DynamoDB, S3, Rekognition and Cognito. The draw is
+therefore testable — and 10 000 times reproducible — without touching AWS, and so is the
+whole plate decision table.
 
 ## Prerequisites
 
@@ -111,8 +216,7 @@ The connection details live in Secrets Manager at `dev/hotel-db/connection`
 
 Export a connection string once per shell for the migration and script commands:
 
-```bash
-# PowerShell
+```powershell
 $s = aws secretsmanager get-secret-value --secret-id dev/hotel-db/connection `
        --profile hotel --region us-east-2 --query SecretString --output text | ConvertFrom-Json
 $env:DATABASE_URL = "postgresql://$($s.username):$([uri]::EscapeDataString($s.password))@$($s.host):$($s.port)/pacs_dev?sslmode=no-verify"
@@ -126,12 +230,12 @@ in git.
 ## Migrate, seed, verify
 
 ```bash
-pnpm --filter @pacs/api migrate:up      # schema of §11 — 11 tables, 36 indexes, 6 enums
+pnpm --filter @pacs/api migrate:up      # the schema of section 11 plus M-7's three tables
 pnpm --filter @pacs/api seed            # 24 residents, 10 spots, one open cycle
 pnpm --filter @pacs/api exec tsx scripts/run-draw.ts
 ```
 
-`run-draw.ts` is the integration layer of §27, runnable by hand. It wires the real
+`run-draw.ts` is the integration layer of section 27, runnable by hand. It wires the real
 repositories to the real use case and asserts the things only Postgres can prove:
 
 ```
@@ -139,7 +243,7 @@ PASS  run completes
 PASS  every spot filled                                    assigned=10
 PASS  remainder waitlisted                                 waitlisted=14
 PASS  NFR-01: under 2 s
-PASS  no resident assigned twice · no spot assigned twice
+PASS  no resident assigned twice, no spot assigned twice
 PASS  24 history rows, one per participant
 PASS  waitlist positions are 1..14 with no gaps
 PASS  cycle moved to ACTIVE
@@ -151,17 +255,37 @@ PASS  BR-05: app_user cannot UPDATE allocation_history
 16/16 checks passed
 ```
 
+## Run the whole app offline
+
+No AWS, no database, no deploy:
+
+```bash
+pnpm --filter @pacs/api local    # the stub API on http://localhost:4300
+cd apps/web && pnpm start        # http://localhost:4200, signs in as admin@local
+```
+
+`scripts/local-api.mjs` is an in-memory implementation of the same contract
+(`packages/contracts/openapi.yaml`), seeded with 72 residents, 56 bays, four periods, a
+vehicle register, and a gate log with reads waiting in the review queue. It is a fixture
+rather than a second implementation: when a shape there disagrees with the YAML, the YAML
+wins and the stub is the bug. Its bearer token is `local.<base64url json>` with no
+signature, accepted only by it — the deployed API rejects such a token at the Cognito
+authorizer before any handler runs.
+
 ## Test and typecheck
 
 ```bash
-pnpm --filter @pacs/api test        # 54 unit tests, including 10 000 seeded draws
+pnpm --filter @pacs/api test        # 213 unit tests, including 10 000 seeded draws
 pnpm --filter @pacs/api typecheck
 ```
 
 The statistical suite is the unusual one and the reason it exists: it checks the raffle
-is *fair*, not merely that it runs. Win frequency must track `(score + 1) / Σ(score + 1)`
-within a 15% relative band over 10 000 draws, and no entrant may ever have zero
-probability.
+is *fair*, not merely that it runs. The plate suite is the same argument applied to a
+different problem — the whole threshold table, the Bolivian format scoring, the fuzzy
+expansion and the scene blocklist are verified in milliseconds with no AWS, including the
+regression that matters most: `VISITAS` canonicalises to `V1S1TAS`, the U/V confusable
+pair expands that to `U1S1TAS`, and a string the blocklist has never heard of then scores
+like a plate. The blocklist is therefore checked on the OCR line, before expansion.
 
 ## Deploy
 
@@ -182,7 +306,7 @@ Then:
 ```bash
 cd apps/api
 serverless deploy --stage dev --aws-profile hotel --region us-east-2
-node scripts/smoke.mjs               # post-deploy smoke set (§23)
+node scripts/smoke.mjs               # post-deploy smoke set
 ```
 
 ### Two things that will bite on a fresh deploy
@@ -190,25 +314,28 @@ node scripts/smoke.mjs               # post-deploy smoke set (§23)
 **Handler filenames must contain no dots.** The bundle is flattened, and the Node
 runtime splits the handler string at the *first* dot — so `src/main/api.handler.ts` with
 handler `src/main/api.handler.handler` fails at init with `Cannot find module 'api'`.
-The files are therefore `api.ts`, `run-raffle.ts`, `sweeper.ts`. §10 of the document
-still shows the `*.handler.ts` convention; it does not work.
+The files are therefore `api.ts`, `run-raffle.ts`, `sweeper.ts`, `plate-recognizer.ts`
+and `plate-ingest.ts`. Section 10 of the document still shows the `*.handler.ts`
+convention; it does not work.
 
 **Reserved concurrency is impossible on a new account.** The Lambda quota starts at 10
 concurrent executions and AWS requires 10 to stay unreserved, so any
-`reservedConcurrency` fails the stack. The reservations of §10 are commented out with
-the reasoning; raise the quota, then restore them.
+`reservedConcurrency` fails the stack. The reservations of section 10 are commented out
+with the reasoning; raise the quota, then restore them.
 
 Serverless Framework v4 needs a vendor login in CI (`SERVERLESS_ACCESS_KEY`); it is
 free for individuals and for organisations under the vendor's revenue threshold.
 Confirm the licence terms before using it for a company account (ADR-011).
 
-The stack creates: three functions (`api`, `runRaffle`, `sweeper`), an HTTP API with a
-Cognito JWT authorizer, a Cognito user pool with `ADMIN`/`RESIDENT` groups and a hosted
-login domain, the `pacs-cache` DynamoDB table, and a free DynamoDB gateway endpoint —
-which is what removes the NAT gateway (ADR-016).
+The stack creates: six functions (`api`, `runRaffle`, `sweeper`, `integrations`, and the
+two M-7 ones, `plateRecognizer` and `plateIngest`), an HTTP API with a Cognito JWT
+authorizer, a Cognito user pool with `ADMIN`/`RESIDENT`/`CAMERA` groups and a hosted login
+domain, the `pacs-cache` and `pacs-events` DynamoDB tables, the `pacs-captures` bucket with
+its lifecycle rules, two CloudWatch alarms, and a free DynamoDB gateway endpoint — which is
+what removes the NAT gateway (ADR-016).
 
-Outputs include `ApiBaseUrl`, `UserPoolId`, `UserPoolClientId`, `CognitoIssuer` and
-`CognitoHostedUi`; the Angular app needs all five.
+Outputs include `ApiBaseUrl`, `UserPoolId`, `UserPoolClientId`, `CognitoIssuer`,
+`CognitoHostedUi` and `CapturesBucketName`; the Angular app needs the first five.
 
 ## Endpoints
 
@@ -220,24 +347,35 @@ are rejected before they reach a query, so records cannot be enumerated.
 |---|---|---|
 | `GET /health` | public | Liveness |
 | `GET /me` | any | Principal profile, from the token only |
-| `GET /me/dashboard` | any | UC-09 aggregated status · cached 5 min |
-| `GET /me/history` | any | UC-10 own history |
-| `POST /me/assignment/release` | any | UC-11 give up a spot · promotes the waitlist |
-| `POST /cycles/{id}/registrations` | any | UC-08 enter the raffle · idempotent |
+| `GET /me/dashboard` | resident | UC-09 aggregated status · cached 5 min |
+| `GET /me/history` | resident | UC-10 own history |
+| `POST /me/assignment/release` | resident | UC-11 give up a spot · promotes the waitlist |
+| `POST /cycles/{id}/registrations` | resident | UC-08 enter the raffle · idempotent |
 | `DELETE /cycles/{id}/registrations/me` | any | Withdraw while registration is open |
 | `GET` · `POST /residents` | admin | List · FR-10 create + provision Cognito user |
 | `GET` · `PATCH` · `DELETE /residents/{id}` | admin | Detail · edit · soft delete |
 | `PATCH /residents/{id}/eligibility` | admin | FR-15 · requires a reason |
+| `GET` · `POST /residents/{id}/vehicles` | admin · own | The resident's registered plates |
+| `PATCH` · `DELETE /residents/{id}/vehicles/{vehicleId}` | admin · own | Edit · remove (deactivate) |
+| `GET /vehicles/by-plate/{plate}` | admin | Plate lookup for the gate · normalises first |
 | `GET` · `POST /spots` | admin | FR-16 inventory |
 | `PATCH /spots/{id}` | admin | Edit / deactivate · refuses if assigned |
 | `GET` · `POST /cycles` | admin | UC-04 cycles |
-| `POST /cycles/{id}/open-registration` | admin | DRAFT → REGISTRATION_OPEN |
+| `POST /cycles/{id}/open-registration` | admin | DRAFT to REGISTRATION_OPEN |
 | `POST /cycles/{id}/close-registration` | admin | Manual close |
 | `POST /cycles/{id}/runs` | admin | UC-05 run · `Idempotency-Key` required |
 | `GET /runs/{id}` | admin | Run detail + the seed, for audit |
 | `GET /runs/{id}/assignments` | admin | Full result set |
 | `GET /metrics/fairness` | admin | FR-22 dashboard · cached 10 min |
 | `GET /reports/quarterly/{cycleId}` | admin | UC-07 export · `?format=csv` |
+| `POST /captures` | **camera** · admin | M-7 presigned PUT for one frame · the key is derived server-side |
+| `GET /plate-reads` | admin | The gate log, newest first · `?status= &cameraId= &plate= &from= &to=` |
+| `GET /plate-reads/review` | admin | The review queue, **oldest** first |
+| `GET /plate-reads/{id}` | admin | One read + its candidates + 5-minute image URLs |
+| `POST /plate-reads/{id}/resolve` | admin | Review a read · `Idempotency-Key` required · 409 if already reviewed |
+| `GET /access-events` | admin | The access log · `?decision= &residentId= &format=csv` |
+| `GET /me/access-events` | resident | Own entries only, from the token · 403 for an admin |
+| `GET /metrics/plates` | admin | Match rate, queue depth and age, correction count · cached 10 min |
 
 Errors use one shape, with a `traceId` matching the log correlation id:
 
@@ -245,28 +383,28 @@ Errors use one shape, with a `traceId` matching the log correlation id:
 {
   "error": "RAFFLE_IN_PROGRESS",
   "message": "An allocation run is already executing for this cycle.",
-  "traceId": "7b4e…",
+  "traceId": "7b4e...",
   "timestamp": "2026-03-26T02:00:00Z"
 }
 ```
 
 ## Where this deviates from analisis.html rev 2.2
 
-Each of these is a decision forced by the real account, not a design change. §10 of the
-document still needs updating to match.
+Each of these is a decision forced by the real account, not a design change. Section 10 of
+the document still needs updating to match.
 
 | Document says | Reality | Why |
 |---|---|---|
 | `us-east-1` | **`us-east-2`** | SCP `p-wvjo6arp` on account 309887812390 denies every other region |
 | RDS PostgreSQL 17 | **18.3** | The existing `hotel-db` instance |
 | Dedicated instance | Shares `hotel-db` | Reuses what exists; `pacs_dev` is its own database |
-| Private subnets, no public access | **Publicly accessible**, SG open to one `/32` | Requested, so migrations and scripts can run from a laptop. Reverting is two commands — see below |
+| Private subnets, no public access | **Publicly accessible**, SG open to one `/32` | Requested, so migrations and scripts can run from a laptop. Reverting is two commands, below |
 | `migrate` Lambda in the VPC | Migrations run from a laptop or CI | Only needed while the database is unreachable from outside; put it back when access is closed |
-| Per-function IAM roles via plugin | One scoped service role | Avoids a plugin whose v4 support is unverified; the statements are still resource-scoped with no wildcards |
-| Master DB password in SSM | **No database password at all** | IAM database authentication: a token signed locally per connection. Strictly better than §10, and it is what §10's own security list asks for |
-| Master DB password in SSM | **No database password at all** | IAM database authentication: a token signed locally per connection. Strictly better than §10, and it is what §10's own security list asks for |
-| `reservedConcurrency` api 10 / jobs 1–2 | None | Account quota is 10 concurrent executions; AWS requires 10 unreserved. The quota itself bounds the pool at 10 × 2 = 20 connections |
+| Per-function IAM roles via plugin | One scoped service role | Avoids a plugin whose v4 support is unverified. The statements are still resource-scoped with no wildcards, except `rekognition:DetectText` — the Rekognition operations that work without a collection have no ARNs to scope to, so it is scoped by action and said out loud in the file |
+| Master DB password in SSM | **No database password at all** | IAM database authentication: a token signed locally per connection. Strictly better than section 10, and it is what its own security list asks for |
+| `reservedConcurrency` api 10 / jobs 1-2 | None | Account quota is 10 concurrent executions; AWS requires 10 unreserved. The quota itself bounds the pool at 10 x 2 = 20 connections |
 | `custom:resident_id` claim identifies the caller | Claim, else `sub`, else a pending link | Cognito puts custom attributes in the **ID token only**, and the API is called with an access token, so the claim is normally absent. The id still comes only from the verified token |
+| Plate thresholds in `allocation_config` | Own `plate_config` table | The allocation module builds each new policy version from the one in force and lists its own columns, so threshold columns there would be reset to their defaults every time an administrator changed the period length |
 
 To close public access again:
 
@@ -281,57 +419,52 @@ aws rds modify-db-instance --db-instance-identifier hotel-db \
 
 ```bash
 cd apps/web
-pnpm start     # http://localhost:4200, against the deployed dev API
+pnpm start     # http://localhost:4200
 pnpm build     # production bundle into dist/web
-pnpm test      # 11 boundary tests
+pnpm test      # 29 boundary tests
 ```
 
 | | |
 |---|---|
 | Angular | **22.2** — zoneless, standalone, signals, no zone.js |
-| PrimeNG | **22.1** with the Aura preset and `@primeuix/themes` 3 |
+| Components | **Angular Material 22.2**, with the project's own theme |
 | Auth | `angular-auth-oidc-client` 22 · authorization code + PKCE · tokens in memory |
 | Node | Angular 22 needs `^22.22.3 \|\| ^24.15.0 \|\| >=26` |
 
-Six screens, lazy-loaded, so a resident never downloads the admin bundle:
-`/` dashboard · `/history` · `/admin/residents` · `/admin/spots` ·
-`/admin/cycles` · `/admin/metrics`.
+Lazy-loaded screens, so a resident never downloads the admin bundle:
+`/` dashboard · `/lot` · `/history` · `/admin/residents` · `/admin/spots` ·
+`/admin/draw` · `/admin/cycles` · `/admin/metrics` · `/admin/plates` · `/admin/reports`.
 
 The rings mirror the backend's. `domain/` is plain TypeScript with no Angular import
 beyond types; `data/` is the only place that knows `HttpClient` exists; facades expose
-signals and own refetch, so pages stay presentational; PrimeNG appears only under
-`features/` and `shared/ui/`. The bindings live in one place, `app.config.ts`, which is
-what makes a fake repository a one-line swap.
-
-Two details worth knowing before changing it:
-
-**PrimeNG 22 dropped the camelCase selectors.** `<p-confirmDialog>` is now
-`<p-confirm-dialog>`, `<p-progressSpinner>` → `<p-progress-spinner>`,
-`<p-toggleSwitch>` → `<p-toggle-switch>`. The modules kept their names, so the failure
-is `NG8001: not a known element` with an import that looks correct.
-
-**The initial bundle is 805 kB raw / 177 kB transferred.** Angular's default 500 kB
-warning is on raw size and Angular + PrimeNG + OIDC do not fit in it; the budget is set
-to 850 kB with the error at 1 MB. The number that matters is the 177 kB that crosses the
-wire.
+signals and own refetch, so pages stay presentational. The bindings live in one place,
+`app.config.ts`, which is what makes a fake repository a one-line swap.
 
 ### Still missing on the frontend
 
-- Transloco is installed but not wired. §17 requires Spanish and English; the copy is
-  currently Spanish literals, which is the gap
-- §17 asks for the fairness explanation as a message key plus parameters so it can be
-  translated. The API returns finished prose, so the sentence cannot be localised
-  without changing the contract — the one real design debt here
+- Transloco is installed but not wired. Section 17 requires Spanish and English
+- Section 17 asks for the fairness explanation as a message key plus parameters so it can
+  be translated. The API returns finished prose, so that one sentence cannot be localised
+  without changing the contract — the one real design debt here. The plates module
+  deliberately does not repeat it: `access_event.reason` is a stable code and the wording
+  lives in `features/plates/reason-label.ts`
 - No CloudFront/S3 deployment yet, so `environment.production.ts` still points its
   redirect URLs at localhost
 
 ## Not built yet
 
-- The Angular + PrimeNG frontend (`apps/web`) — the contract and a working API exist
 - SES notification templates (M-5). `integrations` already receives the allocation
   events and logs them; only the templates and the send call are missing. **SES is in
   sandbox** (`ProductionAccessEnabled: false`, 200/day): it can only send to verified
   addresses until production access is requested
-- Playwright E2E and k6 load suites (§27 names both)
-- CI workflow with GitHub Actions and OIDC (§23, ADR-018)
+- The plate crop writer. `plate_read.crop_key`, the `crops/` IAM statement and the
+  lifecycle rule all exist, but nothing writes a crop yet: cropping needs a native image
+  decoder in the bundle, and the review screen reads the full frame instead
+- A capture client. `POST /captures` is the contract a gate camera would call; no camera
+  firmware or web capture page is written
+- The threshold calibration of MODULO-PLACAS.md section 8. The procedure and the storage
+  exist; the week of shadow operation that produces real numbers has not happened, so
+  0.85 and 0.55 are a starting point and are labelled as one
+- Playwright E2E and k6 load suites
+- CI workflow with GitHub Actions and OIDC (ADR-018)
 - `git init` — this is not a repository yet

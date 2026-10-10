@@ -35,7 +35,7 @@ export type PillTone = 'held' | 'waiting' | 'attention' | 'revoked' | 'idle';
         background: var(--held-wash);
       }
       .tag--waiting {
-        color: var(--waiting);
+        color: var(--waiting-ink);
         background: var(--waiting-wash);
       }
       .tag--attention {
@@ -58,7 +58,7 @@ export type PillTone = 'held' | 'waiting' | 'attention' | 'revoked' | 'idle';
       }
       .tag--on-dark.tag--idle,
       .tag--on-dark.tag--waiting {
-        color: #c3cbd6;
+        color: var(--ink-2);
       }
     `,
   ],

@@ -14,6 +14,14 @@ export interface ConfirmRequest {
   readonly confirmLabel: string;
   readonly cancelLabel?: string;
   readonly danger?: boolean;
+  /**
+   * A statement rather than a question: one button, and nothing to decline.
+   *
+   * Used where an action is refused outright - a blocked removal is not a choice the
+   * administrator is being offered, and a Cancel beside it would imply there is a way
+   * through if they press the other one.
+   */
+  readonly notice?: boolean;
 }
 
 @Component({
@@ -26,7 +34,9 @@ export interface ConfirmRequest {
       <p>{{ data.body }}</p>
     </mat-dialog-content>
     <mat-dialog-actions align="end">
-      <button matButton [mat-dialog-close]="false">{{ data.cancelLabel ?? 'Cancel' }}</button>
+      @if (!data.notice) {
+        <button matButton [mat-dialog-close]="false">{{ data.cancelLabel ?? 'Cancel' }}</button>
+      }
       <button
         matButton="filled"
         [class.act--danger]="data.danger"

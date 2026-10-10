@@ -9,21 +9,35 @@ import type {
   HistoryEntry,
   Page,
   ParkingSpot,
+  PlateMetrics,
+  PlateRead,
+  PlateReviewDraft,
   Principal,
   Resident,
   RunAssignment,
+  RunExplanation,
   RunResult,
+  RunSummary,
   SpotType,
+  Vehicle,
+  VehicleDraft,
+  AllocationConfigPatch,
+  AllocationConfigVersion,
+  AllocationConfigView,
 } from '../domain/models';
-import type { ResidentListQuery } from '../domain/repositories';
+import type { CaptureTicket, PlateReadListQuery, ResidentListQuery } from '../domain/repositories';
 import {
+  CaptureRepository,
   CycleRepository,
   DashboardRepository,
   MeRepository,
   MetricsRepository,
+  PlateRepository,
   ResidentRepository,
   RunRepository,
   SpotRepository,
+  VehicleRepository,
+  AllocationConfigRepository,
 } from '../domain/repositories';
 import type {
   CycleDto,
@@ -34,21 +48,36 @@ import type {
   MeDto,
   PageDto,
   ParkingSpotDto,
+  PlateMetricsDto,
+  PlateReadDto,
+  PlateReviewInputDto,
   ResidentDto,
   RunAssignmentDto,
+  RunExplanationDto,
   RunResultDto,
+  RunSummaryDto,
+  VehicleDto,
+  VehicleInputDto,
+  AllocationConfigVersionDto,
+  AllocationConfigViewDto,
 } from './dto';
 import {
+  toConfigVersion,
   toCycle,
   toDashboard,
   toFairnessMetrics,
   toHistoryEntry,
   toPage,
+  toPlateMetrics,
+  toPlateRead,
   toPrincipal,
   toResident,
   toRunAssignment,
+  toRunExplanation,
   toRunResult,
+  toRunSummary,
   toSpot,
+  toVehicle,
 } from './mappers';
 
 /**
@@ -153,6 +182,167 @@ export class HttpResidentRepository extends ResidentRepository {
   }
 }
 
+/**
+ * The vehicle register. The same four calls serve an administrator and a resident: the
+ * server decides from the token whether the resident id in the path is theirs to touch,
+ * and answers 404 rather than 403 when it is not — so there is nothing for the client to
+ * assert here beyond the id it was given.
+ */
+@Injectable()
+export class HttpVehicleRepository extends VehicleRepository {
+  private readonly http = inject(HttpClient);
+
+  async list(residentId: string): Promise<readonly Vehicle[]> {
+    const res = await firstValueFrom(
+      this.http.get<ItemsDto<VehicleDto>>(`${API}/residents/${residentId}/vehicles`),
+    );
+    return (res.items ?? []).map(toVehicle);
+  }
+
+  async add(residentId: string, input: VehicleDraft): Promise<Vehicle> {
+    return toVehicle(
+      await firstValueFrom(
+        this.http.post<VehicleDto>(`${API}/residents/${residentId}/vehicles`, body(input)),
+      ),
+    );
+  }
+
+  async update(
+    residentId: string,
+    vehicleId: string,
+    patch: Partial<VehicleDraft>,
+  ): Promise<Vehicle> {
+    return toVehicle(
+      await firstValueFrom(
+        this.http.patch<VehicleDto>(
+          `${API}/residents/${residentId}/vehicles/${vehicleId}`,
+          body(patch),
+        ),
+      ),
+    );
+  }
+
+  async remove(residentId: string, vehicleId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.delete<void>(`${API}/residents/${residentId}/vehicles/${vehicleId}`),
+    );
+  }
+}
+
+/**
+ * Model → wire. Only the keys the caller actually set are sent: the server rejects an
+ * empty patch, and a field sent back unchanged still counts as an edit.
+ */
+const body = (v: Partial<VehicleDraft>): VehicleInputDto => ({
+  ...(v.plate === undefined ? {} : { plate: v.plate }),
+  ...(v.make === undefined ? {} : { make: v.make }),
+  ...(v.model === undefined ? {} : { model: v.model }),
+  ...(v.year === undefined ? {} : { year: v.year }),
+  ...(v.colour === undefined ? {} : { colour: v.colour }),
+  ...(v.notes === undefined ? {} : { notes: v.notes }),
+  ...(v.photos === undefined ? {} : { photos: [...v.photos] }),
+});
+
+/**
+ * The gate log (M-7). Administrator-only server-side; a resident token gets 403.
+ *
+ * There is no recognition call here and there cannot be one: recognition is triggered by
+ * a frame landing in S3, so this client's whole relationship with it is reading the result
+ * and correcting it.
+ */
+@Injectable()
+export class HttpPlateRepository extends PlateRepository {
+  private readonly http = inject(HttpClient);
+
+  async list(input: PlateReadListQuery): Promise<Page<PlateRead>> {
+    let params = new HttpParams().set('limit', input.limit);
+    if (input.cursor) params = params.set('cursor', input.cursor);
+    if (input.status) params = params.set('status', input.status);
+    if (input.cameraId) params = params.set('cameraId', input.cameraId);
+    if (input.plate) params = params.set('plate', input.plate);
+    if (input.needsReview) params = params.set('needsReview', true);
+
+    /*
+     * Two endpoints behind one method.
+     *
+     * `/plate-reads/review` is not just `/plate-reads?needsReview=true` with extra steps:
+     * it is ordered oldest first, because a doubtful read loses its value once the car has
+     * gone. Choosing here rather than exposing both keeps that ordering a property of the
+     * filter, which is what a caller actually means by "show me what needs review".
+     */
+    const path = input.needsReview ? '/plate-reads/review' : '/plate-reads';
+    const res = await firstValueFrom(
+      this.http.get<PageDto<PlateReadDto>>(`${API}${path}`, { params }),
+    );
+    return toPage(res, toPlateRead);
+  }
+
+  /** The key travels as a header, so a retried click replays instead of deciding twice. */
+  async resolve(
+    plateReadId: string,
+    draft: PlateReviewDraft,
+    idempotencyKey: string,
+  ): Promise<PlateRead> {
+    const body: PlateReviewInputDto = {
+      decision: draft.decision,
+      ...(draft.plate === null ? {} : { plate: draft.plate }),
+      ...(draft.vehicleId === null ? {} : { vehicleId: draft.vehicleId }),
+      ...(draft.note === null ? {} : { note: draft.note }),
+      ...(draft.discard ? { discard: true } : {}),
+    };
+    return toPlateRead(
+      await firstValueFrom(
+        this.http.post<PlateReadDto>(`${API}/plate-reads/${plateReadId}/resolve`, body, {
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }),
+      ),
+    );
+  }
+
+  async metrics(): Promise<PlateMetrics> {
+    return toPlateMetrics(
+      await firstValueFrom(this.http.get<PlateMetricsDto>(`${API}/metrics/plates`)),
+    );
+  }
+}
+
+@Injectable()
+export class HttpCaptureRepository extends CaptureRepository {
+  private readonly http = inject(HttpClient);
+
+  async ticket(input: {
+    cameraId: string;
+    capturedAt: Date;
+    contentType: 'image/jpeg' | 'image/png';
+  }): Promise<CaptureTicket> {
+    return firstValueFrom(
+      this.http.post<CaptureTicket>(`${API}/captures`, {
+        cameraId: input.cameraId,
+        capturedAt: input.capturedAt.toISOString(),
+        contentType: input.contentType,
+      }),
+    );
+  }
+
+  /**
+   * The bytes go to S3, not to us.
+   *
+   * `Content-Type` must be exactly what was signed, or S3 answers 403 and the failure
+   * reads like a bad credential rather than a mismatched header. The bearer token is not
+   * attached here because `authInterceptor` only signs requests to our own API - sending
+   * it to another origin would be a credential leak, and S3 would reject the request for
+   * carrying two forms of authorisation anyway.
+   */
+  async upload(ticket: CaptureTicket, frame: Blob): Promise<void> {
+    await firstValueFrom(
+      this.http.put(ticket.uploadUrl, frame, {
+        headers: { 'Content-Type': frame.type },
+        responseType: 'text',
+      }),
+    );
+  }
+}
+
 @Injectable()
 export class HttpSpotRepository extends SpotRepository {
   private readonly http = inject(HttpClient);
@@ -199,11 +389,21 @@ export class HttpCycleRepository extends CycleRepository {
   async create(input: {
     label?: string;
     startsOn: string;
-    endsOn: string;
+    endsOn?: string;
     registrationOpensAt: string;
     registrationClosesAt: string;
   }): Promise<Cycle> {
     return toCycle(await firstValueFrom(this.http.post<CycleDto>(`${API}/cycles`, input)));
+  }
+
+  async rename(id: string, label: string): Promise<Cycle> {
+    return toCycle(
+      await firstValueFrom(this.http.patch<CycleDto>(`${API}/cycles/${id}`, { label })),
+    );
+  }
+
+  async remove(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete<void>(`${API}/cycles/${id}`));
   }
 
   async openRegistration(id: string): Promise<Cycle> {
@@ -248,6 +448,19 @@ export class HttpRunRepository extends RunRepository {
     return toRunResult(await firstValueFrom(this.http.get<RunResultDto>(`${API}/runs/${runId}`)));
   }
 
+  async list(limit: number): Promise<readonly RunSummary[]> {
+    const res = await firstValueFrom(
+      this.http.get<ItemsDto<RunSummaryDto>>(`${API}/runs`, { params: { limit } }),
+    );
+    return (res.items ?? []).map(toRunSummary);
+  }
+
+  async explanation(runId: string): Promise<RunExplanation> {
+    return toRunExplanation(
+      await firstValueFrom(this.http.get<RunExplanationDto>(`${API}/runs/${runId}/explanation`)),
+    );
+  }
+
   async assignments(runId: string): Promise<readonly RunAssignment[]> {
     const res = await firstValueFrom(
       this.http.get<ItemsDto<RunAssignmentDto>>(`${API}/runs/${runId}/assignments`),
@@ -273,5 +486,33 @@ export class HttpMetricsRepository extends MetricsRepository {
         responseType: 'text',
       }),
     );
+  }
+}
+
+/** Rule A's configuration. Admin only; the server rejects a resident token with 403. */
+@Injectable()
+export class HttpAllocationConfigRepository extends AllocationConfigRepository {
+  private readonly http = inject(HttpClient);
+
+  async current(): Promise<AllocationConfigView> {
+    return firstValueFrom(
+      this.http.get<AllocationConfigViewDto>(`${API}/config/allocation`),
+    );
+  }
+
+  async patch(patch: AllocationConfigPatch): Promise<AllocationConfigView> {
+    return firstValueFrom(
+      this.http.patch<AllocationConfigViewDto>(`${API}/config/allocation`, patch),
+    );
+  }
+
+  async history(limit: number): Promise<readonly AllocationConfigVersion[]> {
+    const res = await firstValueFrom(
+      this.http.get<{ items: AllocationConfigVersionDto[] }>(
+        `${API}/config/allocation/history`,
+        { params: { limit } },
+      ),
+    );
+    return (res.items ?? []).map(toConfigVersion);
   }
 }

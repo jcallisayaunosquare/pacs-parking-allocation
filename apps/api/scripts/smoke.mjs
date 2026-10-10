@@ -10,7 +10,7 @@
  *
  * Env: AWS_PROFILE (default hotel), AWS_REGION (default us-east-2), STAGE (default dev).
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
@@ -372,8 +372,18 @@ async function main() {
 
     if (run.json?.runId) {
       const detail = await call('GET', `/runs/${run.json.runId}`);
+      /*
+       * The seed is a hex string, not a number. And checking only that some seed came
+       * back would pass on a run that committed to one seed and then drew with another,
+       * which is the single thing the commitment exists to rule out - so the commitment
+       * published before the candidate list was read has to hash back to it.
+       */
+      const seedHex = detail.json?.randomSeedHex;
       check('GET /runs/{id} exposes the seed for audit',
-        detail.status === 200 && typeof detail.json?.randomSeed === 'number');
+        detail.status === 200 && typeof seedHex === 'string' && /^[0-9a-f]{2,}$/.test(seedHex));
+      check('the published commitment hashes back to that seed',
+        typeof seedHex === 'string' &&
+          createHash('sha256').update(seedHex).digest('hex') === detail.json?.seedCommitmentHex);
     }
 
     const report = await call('GET', `/reports/quarterly/${cycleId}?format=csv`);

@@ -1,0 +1,44 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/styles.scss"
+        ],
+        "createdAt": "2026-10-09T16:44:39.697Z",
+        "reason": "model decided: the only side borders in this file are .msg/.msg--bad/.msg--warn (L756-770), an inline message strip with no radius, no shadow and no card around it; the 3px rule is the severity marker that keeps those messages from signalling by colour alone, which WCAG 1.4.1 requires here"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/app/features/gate/gate-page.ts"
+        ],
+        "createdAt": "2026-10-09T20:39:24.231Z",
+        "reason": "the only side border in this file is .stage__e, an inline alert strip with no background, no radius, no shadow and no card around it; the 3px rule is the severity marker that keeps the message from signalling by colour alone (WCAG 1.4.1), same construction and same reason already sanctioned for src/styles.scss, and the idiom is shared/ui/view-state.ts and status-pill.ts"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/app/features/gate/gate-page.ts"
+        ],
+        "createdAt": "2026-10-10T01:08:47.462Z",
+        "reason": "the only img in this file is the uploaded photograph preview; its src is bound to an object URL held in a signal and the tag only renders inside the @if that proves the URL exists, so it can never paint a broken-image box - the detector cannot see a src that does not exist in the source"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/app/features/plates/plate-review-dialog.ts"
+        ],
+        "createdAt": "2026-10-10T01:15:11.789Z",
+        "reason": "model decided: the only side border here is .cand, a candidate chip BUTTON with a full 1px border whose left edge thickens to 3px as its selected-state marker, reinforced by a background change so it does not signal by colour alone; no card, no radius, no shadow. Same hairline idiom already sanctioned in styles.scss and gate-page.ts. Pre-existing code, not authored this session"
+      }
+    ]
+  }
+}

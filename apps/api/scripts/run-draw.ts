@@ -1,19 +1,20 @@
 /**
  * End-to-end check of the allocation path against a real database.
  *
- * Wires the real Kysely repositories to the real use case — no mocks, no Lambda — so
+ * Wires the real Kysely repositories to the real use case - no mocks, no Lambda - so
  * the things only Postgres can prove are actually proven: the partial unique index
  * holding the run lock, the single transaction, the append-only history grant, and
- * idempotent replay. This is the §27 integration layer, runnable by hand:
+ * idempotent replay. This is the section 27 integration layer, runnable by hand:
  *
  *   pnpm --filter @pacs/api exec tsx scripts/run-draw.ts
  */
+import { createHash } from 'node:crypto';
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 import type { Database } from '../src/shared/db/schema';
 import { KyselyAllocationRepository } from '../src/modules/allocation/infrastructure/kysely-allocation.repository';
 import { ExecuteRun } from '../src/modules/allocation/application/execute-run';
-import { WeightedLotteryDraw } from '../src/modules/allocation/domain/weighted-lottery-draw';
+import { KyselyAllocationConfigProvider } from '../src/modules/allocation/infrastructure/kysely-allocation-config.provider';
 import { cryptoSeedSource, systemClock } from '../src/shared/clock';
 import { InMemoryCache } from '../src/shared/cache/dynamodb-cache';
 
@@ -34,7 +35,7 @@ const db = new Kysely<Database>({
 });
 
 const check = (label: string, pass: boolean, extra = ''): boolean => {
-  console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${extra ? '  — ' + extra : ''}`);
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}${extra ? '  - ' + extra : ''}`);
   return pass;
 };
 
@@ -51,6 +52,16 @@ async function main(): Promise<void> {
   await db.deleteFrom('allocation_history').where('cycle_id', '=', cycle.id).execute();
   await db.deleteFrom('waitlist_entry').where('cycle_id', '=', cycle.id).execute();
   await db.deleteFrom('spot_assignment').where('cycle_id', '=', cycle.id).execute();
+  await db
+    .deleteFrom('allocation_run_candidate')
+    .where((eb) =>
+      eb(
+        'run_id',
+        'in',
+        eb.selectFrom('allocation_run').select('id').where('cycle_id', '=', cycle.id),
+      ),
+    )
+    .execute();
   await db.deleteFrom('allocation_run').where('cycle_id', '=', cycle.id).execute();
   await db.deleteFrom('event_outbox').execute();
   await db
@@ -85,7 +96,7 @@ async function main(): Promise<void> {
   const repo = new KyselyAllocationRepository(db);
   const executeRun = new ExecuteRun(
     repo,
-    new WeightedLotteryDraw(),
+    new KyselyAllocationConfigProvider(db),
     systemClock,
     cryptoSeedSource,
     new InMemoryCache(),
@@ -123,7 +134,7 @@ async function main(): Promise<void> {
     check(
       'NFR-01: the run itself completes inside 2 s',
       serverMs >= 0 && serverMs < 2000,
-      `${serverMs} ms server-side · ${elapsed} ms including the round trip from here`,
+      `${serverMs} ms server-side - ${elapsed} ms including the round trip from here`,
     ),
   );
 
@@ -195,22 +206,44 @@ async function main(): Promise<void> {
     check(
       'accessibility pre-assignment honoured',
       accessible.length === 2 && accessible.every((a) => a.type === 'ACCESSIBLE'),
-      accessible.map((a) => `${a.name}→${a.code}`).join(', '),
+      accessible.map((a) => `${a.name}->${a.code}`).join(', '),
     ),
   );
 
-  // Fairness: winners reset to 0, losers incremented.
-  const winnerScores = await db
-    .selectFrom('fairness_state as fs')
-    .innerJoin('spot_assignment as sa', 'sa.resident_id', 'fs.resident_id')
-    .select('fs.score')
-    .where('sa.cycle_id', '=', cycle.id)
+  // The contestable record: one row per candidate, ranks contiguous from 1, and the
+  // ordering actually monotone in the effective waiting time the run computed.
+  const candidates = await db
+    .selectFrom('allocation_run_candidate')
+    .selectAll()
+    .where('run_id', '=', r.runId)
+    .orderBy('final_rank')
     .execute();
+
   results.push(
     check(
-      'every winner score reset to 0',
-      winnerScores.length === expectedAssigned && winnerScores.every((w) => Number(w.score) === 0),
-      `${winnerScores.length} of ${expectedAssigned}`,
+      'one candidate key row per entrant',
+      candidates.length === entrantCount,
+      `${candidates.length} rows`,
+    ),
+  );
+  results.push(
+    check(
+      'ranks are contiguous from 1',
+      candidates.every((c, i) => c.final_rank === i + 1),
+    ),
+  );
+  results.push(
+    check(
+      'ranking is monotone in effective waiting time',
+      candidates.every(
+        (c, i) => i === 0 || Number(candidates[i - 1]!.effective_wait_quanta) >= Number(c.effective_wait_quanta),
+      ),
+    ),
+  );
+  results.push(
+    check(
+      'commit-reveal: sha256(seed) matches the published commitment',
+      createHash('sha256').update(r.randomSeedHex).digest('hex') === r.seedCommitmentHex,
     ),
   );
 
@@ -230,29 +263,21 @@ async function main(): Promise<void> {
   );
 
   // --------------------------------------------------- guard 1: the run lock
-  await db
-    .insertInto('allocation_run')
-    .values({
-      cycle_id: cycle.id,
-      state: 'RUNNING',
-      random_seed: '1',
-      algorithm_version: 'test',
-      idempotency_key: `lock-probe-${Date.now()}`,
-    })
-    .execute();
+  const probe = (n: number) => ({
+    cycle_id: cycle.id,
+    state: 'RUNNING' as const,
+    random_seed: Buffer.alloc(32, n),
+    seed_commitment: createHash('sha256').update(Buffer.alloc(32, n)).digest(),
+    config_version: 1,
+    algorithm_version: 'test',
+    idempotency_key: `lock-probe-${n}-${Date.now()}`,
+  });
+
+  await db.insertInto('allocation_run').values(probe(1)).execute();
 
   let lockRejected = false;
   try {
-    await db
-      .insertInto('allocation_run')
-      .values({
-        cycle_id: cycle.id,
-        state: 'RUNNING',
-        random_seed: '2',
-        algorithm_version: 'test',
-        idempotency_key: `lock-probe-2-${Date.now()}`,
-      })
-      .execute();
+    await db.insertInto('allocation_run').values(probe(2)).execute();
   } catch (e) {
     lockRejected = (e as { constraint?: string }).constraint === 'uq_single_running_run';
   }

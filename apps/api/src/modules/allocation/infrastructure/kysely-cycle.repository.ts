@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../../../shared/db/schema';
-import type { CycleState } from '../domain/types';
+import { sql } from 'kysely';
+import type { CycleState, TerminationReason } from '../domain/types';
 import type {
   AssignmentRepository,
   CycleRecord,
@@ -82,12 +83,67 @@ export class KyselyCycleRepository implements CycleRepository {
       .executeTakeFirst();
     return r ? toCycle(r as never) : null;
   }
+
+  async findById(cycleId: string): Promise<CycleRecord | null> {
+    const r = await this.db
+      .selectFrom('allocation_cycle')
+      .selectAll()
+      .where('id', '=', cycleId)
+      .executeTakeFirst();
+    return r ? toCycle(r as never) : null;
+  }
+
+  async rename(cycleId: string, label: string): Promise<CycleRecord | null> {
+    const r = await this.db
+      .updateTable('allocation_cycle')
+      .set({ label })
+      .where('id', '=', cycleId)
+      .returningAll()
+      .executeTakeFirst();
+    return r ? toCycle(r as never) : null;
+  }
+
+  /**
+   * What the period has produced. Counted rather than existence-checked, because the
+   * number is what the refusal message says back to the administrator.
+   */
+  async consequences(cycleId: string): Promise<{ hasRun: boolean; assignments: number }> {
+    const [run, assigned] = await Promise.all([
+      this.db
+        .selectFrom('allocation_run')
+        .select('id')
+        .where('cycle_id', '=', cycleId)
+        .executeTakeFirst(),
+      this.db
+        .selectFrom('spot_assignment')
+        .select(({ fn }) => fn.countAll<string>().as('n'))
+        .where('cycle_id', '=', cycleId)
+        .executeTakeFirst(),
+    ]);
+    return { hasRun: run !== undefined, assignments: Number(assigned?.n ?? 0) };
+  }
+
+  /**
+   * A real delete, not a soft one, and only ever called for a period the domain has
+   * already ruled has no history. Registrations go with it: a registration for a period
+   * that never drew records nothing anybody can contest.
+   */
+  async remove(cycleId: string): Promise<boolean> {
+    return this.db.transaction().execute(async (trx) => {
+      await trx.deleteFrom('raffle_registration').where('cycle_id', '=', cycleId).execute();
+      const r = await trx
+        .deleteFrom('allocation_cycle')
+        .where('id', '=', cycleId)
+        .executeTakeFirst();
+      return Number(r.numDeletedRows ?? 0) > 0;
+    });
+  }
 }
 
 export class KyselyRegistrationRepository implements RegistrationRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
-  /** Idempotent: a second POST un-withdraws rather than erroring (§16). */
+  /** Idempotent: a second POST un-withdraws rather than erroring (section 16). */
   async register(cycleId: string, residentId: string): Promise<{ created: boolean }> {
     const r = await this.db
       .insertInto('raffle_registration')
@@ -166,14 +222,29 @@ export class KyselyAssignmentRepository implements AssignmentRepository {
   }
 
   /**
-   * Release and promote in one transaction: the released spot goes to the waitlist head,
+   * Release and promote in one transaction: the released bay goes to the waitlist head,
    * so there is no window in which the bay is unassigned but the waitlist is unchanged.
+   *
+   * benefit_ended_at and counts_as_served come from the domain's termination policy, not
+   * from this method: the repository records the decision, it does not make it. Writing
+   * benefit_ended_at here *is* rule C's "receiving an allocation resets waiting time" -
+   * no counter is touched, because there is no counter.
    */
-  async release(assignmentId: string, at: Date): Promise<{ promotedResidentId: string | null }> {
+  async release(
+    assignmentId: string,
+    at: Date,
+    termination: { benefitEndedAt: Date; countsAsServed: boolean; reason: TerminationReason },
+  ): Promise<{ promotedResidentId: string | null }> {
     return this.db.transaction().execute(async (trx) => {
       const released = await trx
         .updateTable('spot_assignment')
-        .set({ state: 'RELEASED', released_at: at })
+        .set({
+          state: 'RELEASED',
+          released_at: at,
+          benefit_ended_at: termination.benefitEndedAt,
+          counts_as_served: termination.countsAsServed,
+          termination_reason: termination.reason,
+        })
         .where('id', '=', assignmentId)
         .where('state', '=', 'ACTIVE')
         .returningAll()
@@ -238,12 +309,22 @@ export class KyselyAssignmentRepository implements AssignmentRepository {
     });
   }
 
-  /** UC-14 — expire assignments whose cycle has ended, and close those cycles. */
+  /**
+   * UC-14 - expire assignments whose cycle has ended, and close those cycles.
+   *
+   * The benefit ended when the period did, not when the sweeper happened to run, so
+   * benefit_ended_at is valid_until: a late sweep must not cost the resident waiting time.
+   */
   async expireDue(now: Date): Promise<number> {
     return this.db.transaction().execute(async (trx) => {
       const res = await trx
         .updateTable('spot_assignment')
-        .set({ state: 'EXPIRED' })
+        .set({
+          state: 'EXPIRED',
+          benefit_ended_at: sql`valid_until`,
+          counts_as_served: true,
+          termination_reason: 'EXPIRED',
+        })
         .where('state', '=', 'ACTIVE')
         .where('valid_until', '<', now)
         .executeTakeFirst();

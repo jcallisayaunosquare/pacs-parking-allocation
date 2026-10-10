@@ -1,6 +1,6 @@
 import { inject } from '@angular/core';
 import type { HttpInterceptorFn } from '@angular/common/http';
-import { OidcSecurityService } from 'angular-auth-oidc-client';
+import { CognitoService } from '../auth/cognito.service';
 import { from, switchMap, tap } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
@@ -12,13 +12,13 @@ import { environment } from '../../../environments/environment';
  * when nobody is signed in.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const oidc = inject(OidcSecurityService);
+  const cognito = inject(CognitoService);
 
   const isOwnApi = req.url.startsWith(environment.apiBaseUrl);
   const isPublic = req.url.endsWith('/health');
   if (!isOwnApi || isPublic) return next(req);
 
-  return from(oidc.getAccessToken()).pipe(
+  return from(cognito.accessToken()).pipe(
     switchMap((token) =>
       next(
         token

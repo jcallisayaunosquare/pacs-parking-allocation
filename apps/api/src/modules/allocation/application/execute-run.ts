@@ -1,14 +1,24 @@
 import { fail, RunLockHeldError } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock, SeedSource } from '../../../shared/clock';
-import { applyOutcome, initialFairnessState, type FairnessState } from '../../fairness/domain/fairness';
 import { isRunnable } from '../domain/cycle';
-import type { DrawStrategy } from '../domain/types';
+import {
+  allocate,
+  ALGORITHM_VERSION,
+  inputHash,
+  resultHash,
+  seedCommitment,
+  type AllocationInput,
+} from '../domain/allocate';
+import { quantaToHours } from '../domain/priority-key';
 import type {
+  AllocationConfigProvider,
   AllocationRepository,
   CachePort,
   DomainEvent,
   HistoryRow,
+  RunCandidateRow,
+  RunRecord,
 } from './ports';
 
 export interface ExecuteRunCommand {
@@ -20,7 +30,13 @@ export interface RunResult {
   readonly runId: string;
   readonly state: 'COMPLETED' | 'COMPLETED_EMPTY';
   readonly algorithmVersion: string;
-  readonly randomSeed: number;
+  /** Exposed deliberately: the seed plus the commitment is what makes the run auditable. */
+  readonly randomSeedHex: string;
+  readonly seedCommitmentHex: string;
+  readonly decidedAt: string;
+  readonly configVersion: number;
+  readonly inputHashHex: string | null;
+  readonly resultHashHex: string | null;
   readonly entrants: number;
   readonly spots: number;
   readonly assigned: number;
@@ -30,23 +46,28 @@ export interface RunResult {
 }
 
 /**
- * UC-05 — execute an allocation run. The flow of Figure 12.1, in order:
- * idempotency check → lock → state check → snapshot → draw (pure) → one transaction.
+ * UC-05 - execute an allocation run:
+ * idempotency check -> config -> lock and seed -> state check -> snapshot -> allocate (pure) ->
+ * one transaction.
  *
- * Note where the transaction begins: after all computation. The draw is in-memory and
- * fast, so the database is held open only for the writes (§12).
+ * Note where the transaction begins: after all computation. The decision is in-memory,
+ * integer-only and sub-millisecond, so the database is held open only for the writes.
+ *
+ * Note also what is *not* here. The fairness policy is a pure domain function; this class
+ * owns idempotency, the lock, the cycle state check, the snapshot, the single transaction
+ * and cache invalidation. Swapping the policy cannot touch any of that.
  */
 export class ExecuteRun {
   constructor(
     private readonly repo: AllocationRepository,
-    private readonly draw: DrawStrategy,
+    private readonly config: AllocationConfigProvider,
     private readonly clock: Clock,
     private readonly seeds: SeedSource,
     private readonly cache: CachePort,
   ) {}
 
   async execute(cmd: ExecuteRunCommand): Promise<Result<RunResult>> {
-    // ------------------------------------------------- idempotency (§12, §16)
+    // ------------------------------------------------- idempotency (section 12, section 16)
     const replay = await this.repo.findRunByIdempotencyKey(cmd.idempotencyKey);
     if (replay) {
       if (replay.state === 'FAILED') {
@@ -64,19 +85,27 @@ export class ExecuteRun {
       );
     }
 
-    // An inventory error must not cost residents their fairness scores (§12 edge case).
+    // An inventory error must not produce a run row at all: a spurious run would strip
+    // first-time-participant status from everyone in it (edge case E-4).
     if ((await this.repo.countActiveSpots()) === 0) {
       return fail('NO_SPOTS_AVAILABLE', 'There are no active parking spots to allocate.');
     }
 
-    // ------------------------------------------------------- lock (§12 guard 1)
-    const seed = this.seeds.next();
-    let run;
+    const config = await this.config.current();
+
+    // --------------------------------- lock, seed and commitment (section 12 guard 1)
+    // The seed is drawn and persisted before the candidate list is read, so it cannot be
+    // chosen with knowledge of who is competing, and the commitment makes re-rolling for
+    // a nicer result a hash preimage problem rather than an operational one.
+    const seedHex = this.seeds.next();
+    let run: RunRecord;
     try {
       run = await this.repo.openRun({
         cycleId: cycle.id,
-        seed,
-        algorithmVersion: this.draw.version,
+        seedHex,
+        seedCommitmentHex: seedCommitment(seedHex),
+        configVersion: config.version,
+        algorithmVersion: ALGORITHM_VERSION,
         idempotencyKey: cmd.idempotencyKey,
       });
     } catch (e) {
@@ -87,9 +116,13 @@ export class ExecuteRun {
     }
 
     try {
-      const snapshot = await this.repo.snapshotInputs(cycle.id);
+      // One frozen instant for the whole run. Never Date.now() inside the loop: two
+      // candidates' waiting times computed microseconds apart would make hour-bucket
+      // membership a race, and no replay could reproduce it.
+      const decidedAt = run.decidedAt;
+      const snapshot = await this.repo.snapshotInputs(cycle.id, decidedAt);
 
-      if (snapshot.entrants.length === 0) {
+      if (snapshot.candidates.length === 0) {
         await this.repo.markRunCompletedEmpty(run.id, [
           {
             eventType: 'AllocationCompletedEmpty',
@@ -109,41 +142,61 @@ export class ExecuteRun {
         });
       }
 
-      // ------------------------------------------------- the draw: pure, in-memory
-      const result = this.draw.draw(snapshot.entrants, snapshot.spots, seed);
+      // -------------------------------------- the decision: pure, in-memory
+      const input: AllocationInput = {
+        runId: run.id,
+        decidedAt,
+        seedHex,
+        config,
+        candidates: snapshot.candidates,
+        spots: snapshot.spots,
+      };
+      const result = allocate(input);
+      const inputHashHex = inputHash(input);
+      const resultHashHex = resultHash(result);
 
-      const assignedIds = new Set(result.assignments.map((a) => a.residentId));
+      const spotByResident = new Map(result.allocations.map((a) => [a.residentId, a]));
+      const waitlistByResident = new Map(result.waitlist.map((w) => [w.residentId, w.position]));
+
+      // The contestable record: every key as computed, in final rank order.
+      const candidateRows: RunCandidateRow[] = result.keys.map((k, i) => {
+        const won = spotByResident.get(k.residentId);
+        return {
+          residentId: k.residentId,
+          anchorAt: k.anchorAt,
+          rawWaitQuanta: k.rawWaitQuanta,
+          effectiveWaitQuanta: k.effectiveWaitQuanta,
+          biasApplied: k.biasApplied,
+          firstTime: k.firstTimeParticipant,
+          servedCount: k.servedCount,
+          raffleToken: k.raffleToken.toString(),
+          finalRank: i + 1,
+          pool: won?.pool ?? null,
+          outcome: won ? ('ASSIGNED' as const) : ('WAITLISTED' as const),
+          spotId: won?.spotId ?? null,
+        };
+      });
+
       const history: HistoryRow[] = [
-        ...result.assignments.map((a) => ({
+        ...result.allocations.map((a) => ({
           residentId: a.residentId,
           spotId: a.spotId,
           result: 'ASSIGNED' as const,
-          fairnessScoreAtDraw: a.fairnessScoreAtDraw,
           waitlistPosition: null,
         })),
         ...result.waitlist.map((w) => ({
           residentId: w.residentId,
           spotId: null,
           result: 'WAITLISTED' as const,
-          fairnessScoreAtDraw: w.fairnessScoreAtDraw,
           waitlistPosition: w.position,
         })),
-        ...snapshot.skippedResidentIds.map((id) => ({
-          residentId: id,
+        ...snapshot.skipped.map((s) => ({
+          residentId: s.residentId,
           spotId: null,
           result: 'SKIPPED' as const,
-          fairnessScoreAtDraw: 0,
           waitlistPosition: null,
         })),
       ];
-
-      const fairness: FairnessState[] = snapshot.entrants.map((e) => {
-        const before: FairnessState = {
-          ...initialFairnessState(e.residentId),
-          score: e.fairnessScore,
-        };
-        return applyOutcome(before, assignedIds.has(e.residentId) ? 'ASSIGNED' : 'WAITLISTED', cycle.id);
-      });
 
       const events: DomainEvent[] = [
         {
@@ -153,23 +206,33 @@ export class ExecuteRun {
           payload: {
             cycleId: cycle.id,
             cycleLabel: cycle.label,
-            entrants: snapshot.entrants.length,
-            assigned: result.assignments.length,
+            entrants: snapshot.candidates.length,
+            assigned: result.allocations.length,
             waitlisted: result.waitlist.length,
             unmetAccessibilityNeeds: result.unmetAccessibilityNeeds,
+            unusedSpots: result.unusedSpotIds.length,
+            skipped: snapshot.skipped.map((s) => ({ residentId: s.residentId, reason: s.reason })),
           },
         },
-        ...result.assignments.map((a) => ({
+        ...result.allocations.map((a) => ({
           eventType: 'SpotAssigned',
           aggregateType: 'SpotAssignment',
           aggregateId: a.residentId,
-          payload: { cycleId: cycle.id, residentId: a.residentId, spotId: a.spotId },
+          payload: { cycleId: cycle.id, residentId: a.residentId, spotId: a.spotId, pool: a.pool },
         })),
         ...result.waitlist.map((w) => ({
           eventType: 'ResidentWaitlisted',
           aggregateType: 'WaitlistEntry',
           aggregateId: w.residentId,
-          payload: { cycleId: cycle.id, residentId: w.residentId, position: w.position },
+          payload: {
+            cycleId: cycle.id,
+            residentId: w.residentId,
+            position: w.position,
+            effectiveWaitHours: quantaToHours(
+              result.keys.find((k) => k.residentId === w.residentId)?.effectiveWaitQuanta ?? 0,
+              config,
+            ),
+          },
         })),
       ];
 
@@ -179,12 +242,14 @@ export class ExecuteRun {
         cycleId: cycle.id,
         validFrom: cycle.startsOn,
         validUntil: cycle.endsOn,
-        assignments: result.assignments.map((a) => ({ residentId: a.residentId, spotId: a.spotId })),
+        assignments: result.allocations.map((a) => ({ residentId: a.residentId, spotId: a.spotId })),
         waitlist: result.waitlist.map((w) => ({ residentId: w.residentId, position: w.position })),
         history,
-        fairness,
-        entrantsCount: snapshot.entrants.length,
+        candidates: candidateRows,
+        entrantsCount: snapshot.candidates.length,
         spotsCount: snapshot.spots.length,
+        inputHashHex,
+        resultHashHex,
         events,
       });
 
@@ -195,12 +260,17 @@ export class ExecuteRun {
       const finished = this.clock.now();
       return ok({
         runId: run.id,
-        state: 'COMPLETED',
+        state: 'COMPLETED' as const,
         algorithmVersion: result.algorithmVersion,
-        randomSeed: Number(seed),
-        entrants: snapshot.entrants.length,
+        randomSeedHex: seedHex,
+        seedCommitmentHex: run.seedCommitmentHex,
+        decidedAt: decidedAt.toISOString(),
+        configVersion: config.version,
+        inputHashHex,
+        resultHashHex,
+        entrants: snapshot.candidates.length,
         spots: snapshot.spots.length,
-        assigned: result.assignments.length,
+        assigned: result.allocations.length,
         waitlisted: result.waitlist.length,
         startedAt: run.startedAt.toISOString(),
         finishedAt: finished.toISOString(),
@@ -212,12 +282,18 @@ export class ExecuteRun {
     }
   }
 
-  private present(run: { id: string; state: string; algorithmVersion: string; randomSeed: bigint; entrantsCount: number; spotsCount: number; assignedCount: number; startedAt: Date; finishedAt: Date | null }, waitlisted: number): RunResult {
+  /** Waitlisted is derived rather than stored: entrants minus winners, never negative. */
+  private present(run: RunRecord, waitlisted: number): RunResult {
     return {
       runId: run.id,
       state: run.state === 'COMPLETED_EMPTY' ? 'COMPLETED_EMPTY' : 'COMPLETED',
       algorithmVersion: run.algorithmVersion,
-      randomSeed: Number(run.randomSeed),
+      randomSeedHex: run.randomSeedHex,
+      seedCommitmentHex: run.seedCommitmentHex,
+      decidedAt: run.decidedAt.toISOString(),
+      configVersion: run.configVersion,
+      inputHashHex: run.inputHashHex,
+      resultHashHex: run.resultHashHex,
       entrants: run.entrantsCount,
       spots: run.spotsCount,
       assigned: run.assignedCount,

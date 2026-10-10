@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { ConfirmService } from '../../shared/ui/confirm';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -8,13 +9,20 @@ import { MatPaginatorIntl, MatPaginatorModule, type PageEvent } from '@angular/m
 import { MatSelectModule } from '@angular/material/select';
 import { MatSortModule, type Sort } from '@angular/material/sort';
 import { MatTableModule } from '@angular/material/table';
+import { MatMenuModule } from '@angular/material/menu';
+import { MatIconModule } from '@angular/material/icon';
 import { ResidentsFacade } from '../../application/admin.facades';
 import type { Resident } from '../../domain/models';
 import type { ResidentSortField } from '../../domain/repositories';
 import { KeysetPaginatorIntl } from '../../shared/ui/keyset-paginator-intl';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
-import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './residents-dialogs';
+import {
+  AddResidentDialog,
+  EditResidentDialog,
+  EligibilityDialog,
+  VehiclesDialog,
+} from './residents-dialogs';
 
 /**
  * Admin — the resident register. Sort, filter, page, edit, set eligibility (§17).
@@ -41,6 +49,8 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
     MatSelectModule,
     MatSortModule,
     MatTableModule,
+    MatMenuModule,
+    MatIconModule,
     StatusPill,
     ViewStateHost,
   ],
@@ -147,13 +157,30 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
           </td>
         </ng-container>
 
+        <!--
+          The bay a resident holds right now. It earns a column because it is the one
+          fact that blocks a removal, and an administrator scanning the register for
+          someone to take off it should see the blocker in the row rather than meet it
+          in a dialog.
+        -->
+        <ng-container matColumnDef="bay">
+          <th mat-header-cell *matHeaderCellDef>Bay held</th>
+          <td mat-cell *matCellDef="let r" data-label="Bay held">
+            @if (r.currentSpotCode) {
+              <span class="code stencil">{{ r.currentSpotCode }}</span>
+            } @else {
+              <span class="dim">{{ dash }}</span>
+            }
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="signin">
           <th mat-header-cell *matHeaderCellDef>Sign-in</th>
           <td mat-cell *matCellDef="let r" data-label="Sign-in">
             @if (r.externalSubject) {
               <app-status-pill label="Linked" tone="held" />
             } @else {
-              <app-status-pill label="Not signed in yet" tone="waiting" />
+              <app-status-pill label="Not signed in yet" tone="idle" />
             }
           </td>
         </ng-container>
@@ -161,8 +188,31 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
           <td mat-cell *matCellDef="let r" class="acts">
-            <button matButton type="button" (click)="openEdit(r)">Edit</button>
-            <button matButton type="button" (click)="openEligibility(r)">Eligibility</button>
+            <!--
+              One trigger per row instead of three buttons, so a wide register reads as
+              rows of people rather than rows of controls. The menu carries the accessible
+              name of the person it acts on, because "more options" twenty times over tells
+              a screen-reader user nothing about which row they are on.
+            -->
+            <button
+              matIconButton
+              type="button"
+              [matMenuTriggerFor]="rowMenu"
+              [attr.aria-label]="'Actions for ' + r.fullName"
+            >
+<mat-icon>more_vert</mat-icon>
+            </button>
+
+            <mat-menu #rowMenu="matMenu">
+              <button mat-menu-item type="button" (click)="openEdit(r)">Edit</button>
+              <button mat-menu-item type="button" (click)="openEligibility(r)">
+                Eligibility
+              </button>
+              <button mat-menu-item type="button" (click)="openVehicles(r)">Vehicles</button>
+              <button mat-menu-item type="button" class="danger" (click)="remove(r)">
+                Remove
+              </button>
+            </mat-menu>
           </td>
         </ng-container>
 
@@ -181,8 +231,17 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
   `,
   styles: [
     `
-      :host {
-        display: flex;
+      /* The destructive item, so it does not read like the two above it. */
+      .danger {
+        color: var(--revoked);
+      }
+      :host {        /* This screen's measure. The shell is full-bleed; pages own their width. */
+        width: 100%;
+        max-width: 88rem;
+        margin: 0 auto;
+        padding: var(--sp-6) var(--sp-5) var(--sp-8);
+
+        /* A register needs columns, not a reading measure. */        display: flex;
         flex-direction: column;
         gap: var(--sp-4);
       }
@@ -219,8 +278,81 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
         font-size: var(--t-fine);
       }
 
+      /*
+       * The register, set as a painted schedule rather than a Material data grid. Material
+       * ships its own surface, divider and hover colours; left alone they sit on top of the
+       * concrete palette and read as a different product. Every one is repointed at a token.
+       */
       table {
         width: 100%;
+        --mat-table-background-color: transparent;
+        --mat-table-row-item-outline-color: var(--rule-soft);
+        --mat-table-header-headline-color: var(--steel-soft);
+        --mat-table-row-item-label-text-color: var(--steel);
+        --mat-table-header-headline-size: var(--t-fine);
+        --mat-table-row-item-label-text-size: var(--t-small);
+        --mat-table-header-container-height: 3rem;
+        --mat-table-row-item-container-height: 3.5rem;
+      }
+
+      /* The header captions the columns; it is not a band of chrome. */
+      th.mat-mdc-header-cell {
+        border-bottom: 2px solid var(--steel);
+        font-weight: 600;
+        background: transparent;
+      }
+
+      td.mat-mdc-cell {
+        border-bottom-color: var(--rule-soft);
+      }
+
+      tr.mat-mdc-row {
+        transition: background-color 140ms ease;
+      }
+
+      /*
+       * Gated, or a touch device keeps the highlight on the last row tapped and the
+       * register looks like it has a selection it does not have. Enter is instant so the
+       * row answers the pointer; leaving fades, which is the quieter half.
+       */
+      @media (hover: hover) and (pointer: fine) {
+        tr.mat-mdc-row:hover {
+          background: var(--concrete-deep);
+          transition-duration: 0ms;
+        }
+      }
+
+      /*
+       * Keyboard position is marked with the painted line, the same mark the lot map uses
+       * for the bay that is yours. A background tint alone is too quiet to find by tabbing.
+       */
+      tr.mat-mdc-row:focus-within {
+        background: var(--concrete-deep);
+        box-shadow: inset 3px 0 0 var(--bay-line);
+        transition-duration: 0ms;
+      }
+
+      /*
+       * The overflow trigger is chrome: quiet until the row is under the pointer, and
+       * always solid for the keyboard, which cannot hover to discover it.
+       */
+      .acts button {
+        opacity: 0.55;
+        transition: opacity 140ms ease;
+      }
+
+      tr.mat-mdc-row:hover .acts button,
+      tr.mat-mdc-row:focus-within .acts button,
+      .acts button:focus-visible {
+        opacity: 1;
+        transition-duration: 0ms;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        tr.mat-mdc-row,
+        .acts button {
+          transition: none;
+        }
       }
       .name {
         font-weight: 600;
@@ -260,8 +392,21 @@ import { AddResidentDialog, EditResidentDialog, EligibilityDialog } from './resi
 export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
   private readonly dialog = inject(MatDialog);
+  private readonly confirm = inject(ConfirmService);
 
-  readonly columns = ['name', 'unit', 'email', 'eligibility', 'accessible', 'signin', 'actions'];
+  readonly columns = [
+    'name',
+    'unit',
+    'email',
+    'eligibility',
+    'bay',
+    'accessible',
+    'signin',
+    'actions',
+  ];
+
+  /** Kept as an escape so the source file stays ASCII whatever opens it. */
+  readonly dash = '\u2014';
 
   /**
    * What `MatPaginator` is told instead of a row count.
@@ -311,11 +456,63 @@ export default class ResidentsPage {
     });
   }
 
+  /**
+   * UC: removing a resident from the register. The server does a soft delete, because
+   * rule D says allocation history is never reset - a person who leaves the building
+   * still has to appear in the record of past draws, or those draws stop being
+   * explainable. So this takes them out of the register and out of every future draw,
+   * and leaves what already happened alone. It is called Remove rather than Delete,
+   * because Delete would promise something the system deliberately does not do.
+   */
+  async remove(r: Resident): Promise<void> {
+    // A resident holding a bay cannot be removed - the server refuses it. Saying so here
+    // turns a refusal the administrator would have met after pressing into one they meet
+    // before, with the bay named and the fix stated.
+    if (r.currentSpotCode) {
+      await this.confirm.ask({
+        title: `${r.fullName} holds bay ${r.currentSpotCode}`,
+        body:
+          'A resident holding a bay cannot be removed from the register, because the bay ' +
+          'would stay assigned to nobody. Release the bay first, on The lot, and then ' +
+          'remove them.',
+        confirmLabel: 'Close',
+        cancelLabel: '',
+      });
+      return;
+    }
+
+    const ok = await this.confirm.ask({
+      title: `Remove ${r.fullName}?`,
+      body:
+        `Unit ${r.unitNumber} comes off the register and out of every future draw. ` +
+        'Their past results are kept, because allocation history is never reset - a draw ' +
+        'they were in has to stay explainable.',
+      confirmLabel: 'Remove them',
+      cancelLabel: 'Keep them',
+      danger: true,
+    });
+    if (ok) await this.facade.deactivate(r.id);
+  }
+
   openEligibility(r: Resident): void {
     this.dialog.open(EligibilityDialog, {
       data: r,
       width: '32rem',
       maxWidth: 'calc(100vw - 2rem)',
+    });
+  }
+
+  /**
+   * The resident's vehicles. Wider than the other dialogs because it holds a table as
+   * well as a form, and a plate column that wraps is a plate column nobody can read
+   * against what a camera produced.
+   */
+  openVehicles(r: Resident): void {
+    this.dialog.open(VehiclesDialog, {
+      data: r,
+      width: '44rem',
+      maxWidth: 'calc(100vw - 2rem)',
+      autoFocus: 'first-tabbable',
     });
   }
 }

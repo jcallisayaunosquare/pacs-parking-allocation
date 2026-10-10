@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAdmin, isResident, principalFromClaims } from './principal';
+import { hasResidentSurface, isAdmin, isResident, principalFromClaims } from './principal';
 
 describe('principalFromClaims', () => {
   it('returns null without a subject', () => {
@@ -42,5 +42,28 @@ describe('principalFromClaims', () => {
   it('never takes the resident id from anywhere but the claim', () => {
     const p = principalFromClaims({ sub: 'abc', residentId: 'spoofed' })!;
     expect(p.residentId).toBeNull();
+  });
+});
+
+describe('hasResidentSurface', () => {
+  it('is true for a resident', () => {
+    const p = principalFromClaims({ sub: 'abc', 'cognito:groups': ['RESIDENT'] })!;
+    expect(hasResidentSurface(p)).toBe(true);
+  });
+
+  it('is false for an administrator', () => {
+    const p = principalFromClaims({ sub: 'abc', 'cognito:groups': ['ADMIN'] })!;
+    expect(hasResidentSurface(p)).toBe(false);
+  });
+
+  /*
+   * The case the defect was actually about: one person in a small building who is both.
+   * A route's `roles` list is an OR, so `['RESIDENT']` would have admitted them. The
+   * admin role wins, and the resident surface is not theirs.
+   */
+  it('is false for an account that is both, because the admin role wins', () => {
+    const p = principalFromClaims({ sub: 'abc', 'cognito:groups': ['ADMIN', 'RESIDENT'] })!;
+    expect(isResident(p)).toBe(true);
+    expect(hasResidentSurface(p)).toBe(false);
   });
 });

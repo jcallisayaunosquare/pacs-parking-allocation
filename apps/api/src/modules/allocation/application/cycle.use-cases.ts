@@ -1,15 +1,26 @@
 import { fail } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock } from '../../../shared/clock';
-import { canTransitionCycle, isRegistrationOpen, quarterLabel } from '../domain/cycle';
+import {
+  canTransitionCycle,
+  cycleRemovalBlocker,
+  isRegistrationOpen,
+  periodEnd,
+  periodLabel,
+} from '../domain/cycle';
+import { terminationPolicy } from '../domain/termination-policy';
 import type {
+  AllocationConfigProvider,
   AssignmentRepository,
   CachePort,
   CycleRecord,
   CycleRepository,
   RegistrationRepository,
 } from './ports';
-import type { ResidentRepository } from '../../residents/application/resident.use-cases';
+import {
+  ADMIN_NOT_ELIGIBLE_REASON,
+  type ResidentRepository,
+} from '../../residents/application/resident.use-cases';
 
 export class CycleUseCases {
   constructor(
@@ -17,6 +28,7 @@ export class CycleUseCases {
     private readonly registrations: RegistrationRepository,
     private readonly residents: ResidentRepository,
     private readonly assignments: AssignmentRepository,
+    private readonly config: AllocationConfigProvider,
     private readonly clock: Clock,
     private readonly cache: CachePort,
   ) {}
@@ -25,15 +37,68 @@ export class CycleUseCases {
     return ok(await this.cycles.list());
   }
 
-  /** UC-04 — create a cycle. The label is derived so two admins cannot disagree about it. */
+  /**
+   * Renaming a period. The only field an administrator may change after creation.
+   *
+   * The dates are deliberately not editable: a period's boundary is stamped onto every
+   * assignment it made and onto the run that made them, so moving it would silently
+   * rewrite when a resident's bay ended and therefore when their waiting time restarted.
+   * A name carries no such weight - it is how people refer to the period, not how the
+   * rule reads it.
+   */
+  async rename(cycleId: string, label: string): Promise<Result<CycleRecord>> {
+    const trimmed = label.trim();
+    if (trimmed.length === 0) {
+      return fail('VALIDATION_FAILED', 'A period needs a name.', [
+        { field: 'label', issue: 'must not be empty' },
+      ]);
+    }
+    const saved = await this.cycles.rename(cycleId, trimmed);
+    if (!saved) return fail('NOT_FOUND', 'No such period.');
+    await this.cache.invalidate('dashboard:').catch(() => undefined);
+    return ok(saved);
+  }
+
+  /**
+   * Removing a period. The domain decides whether it may go; this reads the facts the
+   * decision needs and reports the domain's own words back when the answer is no.
+   */
+  async remove(cycleId: string): Promise<Result<{ removed: true }>> {
+    const cycle = await this.cycles.findById(cycleId);
+    if (!cycle) return fail('NOT_FOUND', 'No such period.');
+
+    const consequences = await this.cycles.consequences(cycleId);
+    const blocker = cycleRemovalBlocker({ state: cycle.state, ...consequences });
+    // INVALID_CYCLE_STATE, not a generic conflict: what refuses the removal is the
+    // state the period has reached, which is exactly what this code means (422).
+    if (blocker) return fail('INVALID_CYCLE_STATE', blocker);
+
+    const removed = await this.cycles.remove(cycleId);
+    if (!removed) return fail('NOT_FOUND', 'No such period.');
+
+    await this.cache.invalidate('dashboard:').catch(() => undefined);
+    return ok({ removed: true as const });
+  }
+
+  /**
+   * UC-04 - create a cycle.
+   *
+   * `endsOn` is optional: left out, it is computed from the configured allocation
+   * duration with end-of-month clamping, and the label carries that duration rather than
+   * a quarter number. Both are then *persisted*, so a later change to the duration
+   * applies to the next cycle and can never move the boundary of this one (E-6, E-9).
+   */
   async create(input: {
     startsOn: Date;
-    endsOn: Date;
+    endsOn?: Date;
     registrationOpensAt: Date;
     registrationClosesAt: Date;
     label?: string;
   }): Promise<Result<CycleRecord>> {
-    if (input.endsOn <= input.startsOn) {
+    const { allocationDurationMonths } = await this.config.current();
+    const endsOn = input.endsOn ?? periodEnd(input.startsOn, allocationDurationMonths);
+
+    if (endsOn <= input.startsOn) {
       return fail('VALIDATION_FAILED', 'The cycle must end after it starts.', [
         { field: 'endsOn', issue: 'must be after startsOn' },
       ]);
@@ -45,9 +110,9 @@ export class CycleUseCases {
     }
     return ok(
       await this.cycles.create({
-        label: input.label ?? quarterLabel(input.startsOn),
+        label: input.label ?? periodLabel(input.startsOn, allocationDurationMonths),
         startsOn: input.startsOn,
-        endsOn: input.endsOn,
+        endsOn,
         registrationOpensAt: input.registrationOpensAt,
         registrationClosesAt: input.registrationClosesAt,
       }),
@@ -58,7 +123,7 @@ export class CycleUseCases {
     return this.transition(cycleId, 'REGISTRATION_OPEN');
   }
 
-  /** Normally the scheduler's job; exposed for the admin override of §16. */
+  /** Normally the scheduler's job; exposed for the admin override of section 16. */
   async closeRegistration(cycleId: string): Promise<Result<CycleRecord>> {
     return this.transition(cycleId, 'REGISTRATION_CLOSED');
   }
@@ -81,8 +146,23 @@ export class CycleUseCases {
     return this.transition(cycleId, to);
   }
 
-  /** UC-08 — enter the raffle. Idempotent: registering twice is not an error (§16). */
-  async register(cycleId: string, residentId: string): Promise<Result<{ registered: true }>> {
+  /**
+   * UC-08 - enter the raffle. Idempotent: registering twice is not an error (section 16).
+   *
+   * `actorIsAdmin` is the ADMIN role on the *verified token*, which is a second and
+   * independent source of the same fact as `resident.is_admin` below. They can disagree:
+   * an account added to the Cognito ADMIN group whose register row was never flagged used
+   * to pass every check here and go on to be ranked as a candidate. Both are refused, and
+   * neither is trusted alone — the register row because an operator edits it, the token
+   * because it is the thing that actually grants the administrator their powers.
+   */
+  async register(
+    cycleId: string,
+    residentId: string,
+    actorIsAdmin = false,
+  ): Promise<Result<{ registered: true }>> {
+    if (actorIsAdmin) return fail('FORBIDDEN', ADMIN_NOT_ELIGIBLE_REASON);
+
     const cycle = (await this.cycles.list()).find((c) => c.id === cycleId);
     if (!cycle) return fail('NOT_FOUND', 'Cycle not found.');
     if (!isRegistrationOpen(cycle.state)) {
@@ -92,6 +172,11 @@ export class CycleUseCases {
     const resident = await this.residents.findById(residentId);
     if (!resident || resident.deactivatedAt !== null) {
       return fail('NOT_FOUND', 'Resident not found.');
+    }
+    // Separation of duties, and it is refused here as well as excluded at snapshot time:
+    // the administrator operates the raffle, so an administrator account never enters it.
+    if (resident.isAdmin) {
+      return fail('FORBIDDEN', ADMIN_NOT_ELIGIBLE_REASON);
     }
     if (!resident.isEligible) {
       return fail(
@@ -105,7 +190,7 @@ export class CycleUseCases {
     return ok({ registered: true } as const);
   }
 
-  /** Withdrawal is only possible while registration is still open (§16). */
+  /** Withdrawal is only possible while registration is still open (section 16). */
   async withdraw(cycleId: string, residentId: string): Promise<Result<{ withdrawn: true }>> {
     const cycle = (await this.cycles.list()).find((c) => c.id === cycleId);
     if (!cycle) return fail('NOT_FOUND', 'Cycle not found.');
@@ -118,12 +203,28 @@ export class CycleUseCases {
     return ok({ withdrawn: true } as const);
   }
 
-  /** UC-11 — give up a spot; the waitlist head is promoted in the same transaction. */
+  /**
+   * UC-11 - give up a bay; the waitlist head is promoted in the same transaction.
+   *
+   * The termination is decided by the pure domain policy and passed to the repository, so
+   * whether this counted as an allocation is one testable function rather than a rule
+   * spread across SQL. A release counts as served and the anchor moves to the release
+   * instant: you trade parking days for waiting days, one for one.
+   */
   async releaseAssignment(residentId: string): Promise<Result<{ promotedResidentId: string | null }>> {
     const current = await this.assignments.findActiveForResident(residentId);
     if (!current) return fail('NOT_FOUND', 'You do not currently hold a parking spot.');
 
-    const { promotedResidentId } = await this.assignments.release(current.id, this.clock.now());
+    const at = this.clock.now();
+    const { declineGraceHours } = await this.config.current();
+    const termination = terminationPolicy({
+      reason: 'RELEASED',
+      at,
+      validFrom: current.validFrom,
+      declineGraceHours,
+    });
+
+    const { promotedResidentId } = await this.assignments.release(current.id, at, termination);
 
     await this.cache.invalidate(`dashboard:${residentId}`).catch(() => undefined);
     if (promotedResidentId) {

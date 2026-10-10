@@ -1,5 +1,5 @@
 import { Injectable, computed, inject, resource, signal } from '@angular/core';
-import type { ApiError, ParkingSpot, SpotType } from '../domain/models';
+import type { ApiError, ParkingSpot, SpotType, VehicleDraft } from '../domain/models';
 import type { ResidentSortField, SortDirection } from '../domain/repositories';
 import {
   CycleRepository,
@@ -7,9 +7,10 @@ import {
   ResidentRepository,
   RunRepository,
   SpotRepository,
+  VehicleRepository,
 } from '../domain/repositories';
 import { toApiError } from '../core/http/api-error';
-import { viewState } from './async-state';
+import { peek, viewState } from './async-state';
 
 /**
  * Admin facades. Same shape throughout: a `resource` per list, signals for UI-visible
@@ -68,8 +69,8 @@ export class ResidentsFacade {
   private readonly _error = signal<ApiError | null>(null);
 
   readonly state = viewState(this.page, (p) => p.items.length === 0);
-  readonly residents = computed(() => this.page.value()?.items ?? []);
-  readonly nextCursor = computed(() => this.page.value()?.nextCursor ?? null);
+  readonly residents = computed(() => peek(this.page)?.items ?? []);
+  readonly nextCursor = computed(() => peek(this.page)?.nextCursor ?? null);
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
 
@@ -185,6 +186,84 @@ export class ResidentsFacade {
   }
 }
 
+/**
+ * One resident's vehicles.
+ *
+ * Not `providedIn: 'root'`: the state is "the vehicles of the resident currently being
+ * worked on", so it is provided by the dialog that does the working and dies with it.
+ * A root-scoped version would keep the previous resident's cars in memory and show them
+ * for a frame the next time the dialog opens, which reads as the wrong person's car.
+ *
+ * `residentId` is a signal the resource reads, so setting it loads — the same
+ * stale-while-revalidate shape as every other facade here.
+ */
+@Injectable()
+export class VehiclesFacade {
+  private readonly repo = inject(VehicleRepository);
+
+  private readonly _residentId = signal<string | null>(null);
+  readonly residentId = this._residentId.asReadonly();
+
+  private readonly list = resource({
+    params: () => ({ residentId: this._residentId() }),
+    loader: ({ params }) =>
+      params.residentId ? this.repo.list(params.residentId) : Promise.resolve([]),
+  });
+
+  private readonly _busy = signal(false);
+  private readonly _error = signal<ApiError | null>(null);
+
+  readonly state = viewState(this.list, (v) => v.length === 0);
+  readonly vehicles = computed(() => peek(this.list) ?? []);
+  readonly busy = this._busy.asReadonly();
+  readonly error = this._error.asReadonly();
+
+  for(residentId: string): void {
+    this._residentId.set(residentId);
+  }
+
+  refresh(): void {
+    this.list.reload();
+  }
+
+  private async mutate<T>(fn: (residentId: string) => Promise<T>): Promise<T | null> {
+    const id = this._residentId();
+    if (!id) return null;
+    this._error.set(null);
+    this._busy.set(true);
+    try {
+      const r = await fn(id);
+      this.list.reload();
+      return r;
+    } catch (e) {
+      this._error.set(toApiError(e));
+      return null;
+    } finally {
+      this._busy.set(false);
+    }
+  }
+
+  add(input: VehicleDraft) {
+    return this.mutate((id) => this.repo.add(id, input));
+  }
+
+  update(vehicleId: string, patch: Partial<VehicleDraft>) {
+    return this.mutate((id) => this.repo.update(id, vehicleId, patch));
+  }
+
+  /**
+   * Removal is a deactivation server-side: the row stays so a past gate reading still
+   * resolves to a car, and the plate is freed for whoever owns the car next.
+   */
+  remove(vehicleId: string) {
+    return this.mutate((id) => this.repo.remove(id, vehicleId));
+  }
+
+  dismissError(): void {
+    this._error.set(null);
+  }
+}
+
 @Injectable({ providedIn: 'root' })
 export class SpotsFacade {
   private readonly repo = inject(SpotRepository);
@@ -205,7 +284,7 @@ export class SpotsFacade {
   private readonly _error = signal<ApiError | null>(null);
 
   readonly state = viewState(this.list, (s) => s.length === 0);
-  readonly spots = computed(() => this.list.value() ?? []);
+  readonly spots = computed(() => peek(this.list) ?? []);
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
 
@@ -271,7 +350,7 @@ export class CyclesFacade {
   private readonly _lastRun = signal<import('../domain/models').RunResult | null>(null);
 
   readonly state = viewState(this.list, (c) => c.length === 0);
-  readonly allCycles = computed(() => this.list.value() ?? []);
+  readonly allCycles = computed(() => peek(this.list) ?? []);
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
   readonly lastRun = this._lastRun.asReadonly();
@@ -304,11 +383,20 @@ export class CyclesFacade {
   create(input: {
     label?: string;
     startsOn: string;
-    endsOn: string;
+    /** Omitted means the server derives it from Period length in the allocation rules. */
+    endsOn?: string;
     registrationOpensAt: string;
     registrationClosesAt: string;
   }) {
     return this.mutate(() => this.cycles.create(input));
+  }
+
+  rename(id: string, label: string) {
+    return this.mutate(() => this.cycles.rename(id, label));
+  }
+
+  remove(id: string) {
+    return this.mutate(() => this.cycles.remove(id));
   }
 
   openRegistration(id: string) {
@@ -355,13 +443,19 @@ export class MetricsFacade {
   private readonly metrics = resource({ loader: () => this.repo.fairness() });
 
   readonly state = viewState(this.metrics, (m) => m.residents === 0);
-  readonly value = computed(() => this.metrics.value() ?? null);
+  readonly value = computed(() => peek(this.metrics) ?? null);
 
   /** Bars for the distribution chart, normalised so the tallest is 100%. */
   readonly distribution = computed(() => {
-    const d = this.metrics.value()?.distribution ?? [];
-    const max = Math.max(1, ...d.map((x) => x.residents));
-    return d.map((x) => ({ ...x, percent: Math.round((x.residents / max) * 100) }));
+    // A row the server did not fill is dropped rather than drawn as a zero-length bar:
+    // a chart has to be read at a glance, and an absent row read as "nobody" is a lie.
+    const d = peek(this.metrics)?.distribution ?? [];
+    const rows = d.filter(
+      (x): x is { servedCount: number; residents: number } =>
+        x.servedCount !== null && x.residents !== null,
+    );
+    const max = Math.max(1, ...rows.map((x) => x.residents));
+    return rows.map((x) => ({ ...x, percent: Math.round((x.residents / max) * 100) }));
   });
 
   refresh(): void {

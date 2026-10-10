@@ -15,12 +15,21 @@ export type WaitlistState = 'WAITING' | 'PROMOTED' | 'LAPSED';
 
 export type DrawOutcome = 'ASSIGNED' | 'WAITLISTED' | 'SKIPPED';
 
-/** One participant in a draw, as snapshotted when the run started (§12). */
-export interface Entrant {
+/** The passes a run makes: restricted pools first, then everything else (BR-07). */
+export type PoolName = 'ACCESSIBLE' | 'EV' | 'STANDARD';
+
+/** Why an assignment ended. Feeds the termination policy, never the ranking query. */
+export type TerminationReason = 'EXPIRED' | 'RELEASED' | 'REVOKED' | 'DECLINED' | 'CANCELLED';
+
+/**
+ * Why a registered resident was not a candidate. Recorded as SKIPPED, with the anchor
+ * untouched: a resident is neither rewarded nor punished for a run they were not in.
+ */
+export type SkipReason = 'NOT_ELIGIBLE' | 'DEACTIVATED' | 'ADMIN_ACCOUNT' | 'HOLDS_ACTIVE_SPOT';
+
+export interface SkippedCandidate {
   readonly residentId: string;
-  /** fairness_state.score at snapshot time. Weight is score + 1. */
-  readonly fairnessScore: number;
-  readonly needsAccessibleSpot: boolean;
+  readonly reason: SkipReason;
 }
 
 export interface DrawableSpot {
@@ -29,35 +38,12 @@ export interface DrawableSpot {
   readonly type: SpotType;
 }
 
-export interface DrawAssignment {
-  readonly residentId: string;
-  readonly spotId: string;
-  readonly fairnessScoreAtDraw: number;
-  /** True when pass 1 matched an ACCESSIBLE spot to a resident who needs one. */
-  readonly viaAccessibilityPreAssignment: boolean;
-}
-
-export interface DrawWaitlistEntry {
-  readonly residentId: string;
-  readonly position: number;
-  readonly fairnessScoreAtDraw: number;
-}
-
-export interface DrawResult {
-  readonly algorithmVersion: string;
-  readonly seed: bigint;
-  readonly assignments: readonly DrawAssignment[];
-  readonly waitlist: readonly DrawWaitlistEntry[];
-  /** Residents who need an accessible spot but none was available (§12 edge case). */
-  readonly unmetAccessibilityNeeds: readonly string[];
-}
-
 /**
- * The draw is a strategy because the weighting policy is a business decision, not an
- * engineering one — open question Q-03 (cap the weight? super-linear growth?) can be
- * answered later without touching the use case (§12).
+ * Bay status is derived, never stored: there is no RESERVED state and no status column to
+ * drift out of step with the assignments. OUT_OF_SERVICE when the bay is deactivated,
+ * HELD while an ACTIVE assignment exists, FREE otherwise.
  */
-export interface DrawStrategy {
-  readonly version: string;
-  draw(entrants: readonly Entrant[], spots: readonly DrawableSpot[], seed: bigint): DrawResult;
-}
+export type BayStatus = 'OUT_OF_SERVICE' | 'HELD' | 'FREE';
+
+export const bayStatus = (bay: { isActive: boolean; hasActiveAssignment: boolean }): BayStatus =>
+  !bay.isActive ? 'OUT_OF_SERVICE' : bay.hasActiveAssignment ? 'HELD' : 'FREE';

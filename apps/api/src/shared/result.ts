@@ -29,6 +29,12 @@ export type DomainFailureCode =
   | 'REGISTRATION_CLOSED'
   | 'SPOT_IN_USE'
   | 'ALREADY_REGISTERED'
+  /**
+   * Two administrators opened the same doubtful read. The second one's write is refused
+   * by `WHERE reviewed_at IS NULL`, so the database decides rather than the application -
+   * the same kind of guard as the partial unique index behind the draw lock.
+   */
+  | 'PLATE_READ_ALREADY_REVIEWED'
   | 'INVALID_CYCLE_STATE'
   | 'NO_SPOTS_AVAILABLE'
   | 'INTERNAL_ERROR';

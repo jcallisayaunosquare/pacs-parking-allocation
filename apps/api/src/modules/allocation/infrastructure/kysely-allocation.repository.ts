@@ -1,7 +1,8 @@
 import { sql, type Kysely } from 'kysely';
 import { InfrastructureError, RunLockHeldError } from '../../../shared/errors';
 import type { Database } from '../../../shared/db/schema';
-import type { CycleState } from '../domain/types';
+import type { CycleState, SkipReason, SkippedCandidate } from '../domain/types';
+import type { Candidate } from '../domain/priority-key';
 import type {
   AllocationRepository,
   CycleRecord,
@@ -35,11 +36,18 @@ const toCycle = (r: {
   registrationClosesAt: new Date(r.registration_closes_at),
 });
 
+const hex = (b: Buffer | null): string | null => (b === null ? null : b.toString('hex'));
+
 const toRun = (r: {
   id: string;
   cycle_id: string;
   state: RunRecord['state'];
-  random_seed: string;
+  random_seed: Buffer;
+  seed_commitment: Buffer;
+  decided_at: Date;
+  config_version: number;
+  input_hash: Buffer | null;
+  result_hash: Buffer | null;
   algorithm_version: string;
   idempotency_key: string;
   entrants_count: number;
@@ -52,7 +60,12 @@ const toRun = (r: {
   id: r.id,
   cycleId: r.cycle_id,
   state: r.state,
-  randomSeed: BigInt(r.random_seed),
+  randomSeedHex: r.random_seed.toString('hex'),
+  seedCommitmentHex: r.seed_commitment.toString('hex'),
+  decidedAt: new Date(r.decided_at),
+  configVersion: r.config_version,
+  inputHashHex: hex(r.input_hash),
+  resultHashHex: hex(r.result_hash),
   algorithmVersion: r.algorithm_version,
   idempotencyKey: r.idempotency_key,
   entrantsCount: r.entrants_count,
@@ -93,9 +106,29 @@ export class KyselyAllocationRepository implements AllocationRepository {
     return row ? toRun(row as never) : null;
   }
 
+  async listRuns(limit: number): Promise<readonly RunRecord[]> {
+    const rows = await this.db
+      .selectFrom('allocation_run')
+      .selectAll()
+      // Newest first, and by id after that: two runs can share a decided_at when a draw
+      // is retried, and a report whose order is not total reads differently each load.
+      .orderBy('decided_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(limit)
+      .execute();
+    return rows.map((r) => toRun(r as never));
+  }
+
+  /**
+   * decided_at is taken from the database clock, not the Lambda's: it is the single
+   * instant every priority key is computed against, so it must come from one place that
+   * cannot drift between invocations.
+   */
   async openRun(input: {
     cycleId: string;
-    seed: bigint;
+    seedHex: string;
+    seedCommitmentHex: string;
+    configVersion: number;
     algorithmVersion: string;
     idempotencyKey: string;
   }): Promise<RunRecord> {
@@ -105,7 +138,9 @@ export class KyselyAllocationRepository implements AllocationRepository {
         .values({
           cycle_id: input.cycleId,
           state: 'RUNNING',
-          random_seed: input.seed.toString(),
+          random_seed: Buffer.from(input.seedHex, 'hex'),
+          seed_commitment: Buffer.from(input.seedCommitmentHex, 'hex'),
+          config_version: input.configVersion,
           algorithm_version: input.algorithmVersion,
           idempotency_key: input.idempotencyKey,
         })
@@ -113,7 +148,7 @@ export class KyselyAllocationRepository implements AllocationRepository {
         .executeTakeFirstOrThrow();
       return toRun(row as never);
     } catch (e) {
-      // Guard 1 of §12. Both the lock and a replayed key land here; the lock is the
+      // Guard 1 of section 12. Both the lock and a replayed key land here; the lock is the
       // one the caller must see as 409.
       if (isUniqueViolation(e, 'uq_single_running_run')) throw new RunLockHeldError();
       if (isUniqueViolation(e)) throw new RunLockHeldError();
@@ -121,47 +156,120 @@ export class KyselyAllocationRepository implements AllocationRepository {
     }
   }
 
-  async snapshotInputs(cycleId: string): Promise<RunSnapshot> {
-    // One consistent read of everything the draw needs. A resident deactivated after
-    // this point does not affect the run in flight (§11 integrity scenarios).
-    const registered = await this.db
-      .selectFrom('raffle_registration as rr')
-      .innerJoin('resident as r', 'r.id', 'rr.resident_id')
-      .leftJoin('fairness_state as fs', 'fs.resident_id', 'r.id')
-      .select([
-        'r.id as residentId',
-        'r.is_eligible as isEligible',
-        'r.deactivated_at as deactivatedAt',
-        'r.needs_accessible_spot as needsAccessibleSpot',
-        'fs.score as score',
-      ])
-      .where('rr.cycle_id', '=', cycleId)
-      .where('rr.withdrawn', '=', false)
-      .execute();
+  /**
+   * The candidate snapshot. It emits *facts* - anchors, counts, flags - and never a
+   * priority key: duplicating the key formula in SQL and TypeScript would guarantee they
+   * drift, and the drift would be invisible until a resident compared their dashboard to
+   * the run page. The domain sorts; this query does not.
+   *
+   * Read in one REPEATABLE READ transaction, so a registration committed halfway through
+   * cannot produce a candidate list no replay can reproduce.
+   */
+  async snapshotInputs(cycleId: string, decidedAt: Date): Promise<RunSnapshot> {
+    return this.db.transaction().setIsolationLevel('repeatable read').execute(async (trx) => {
+      const registered = await trx
+        .selectFrom('raffle_registration as rr')
+        .innerJoin('resident as r', 'r.id', 'rr.resident_id')
+        .select((eb) => [
+          'r.id as residentId',
+          'r.is_eligible as isEligible',
+          'r.is_admin as isAdmin',
+          'r.deactivated_at as deactivatedAt',
+          'r.needs_accessible_spot as needsAccessibleSpot',
+          'r.has_electric_vehicle as hasElectricVehicle',
+          'r.participation_started_at as participationStartedAt',
+          // Rule C's second branch and rule D's h(r), from the one column that decides
+          // both: counts_as_served. No termination reason is consulted here.
+          eb
+            .selectFrom('spot_assignment as sa')
+            .select(sql<Date | null>`max(sa.benefit_ended_at)`.as('v'))
+            .whereRef('sa.resident_id', '=', 'r.id')
+            .where('sa.counts_as_served', '=', true)
+            .where('sa.benefit_ended_at', 'is not', null)
+            .where('sa.benefit_ended_at', '<=', decidedAt)
+            .as('lastBenefitEndAt'),
+          eb
+            .selectFrom('spot_assignment as sa2')
+            .select(sql<string>`count(*)`.as('v'))
+            .whereRef('sa2.resident_id', '=', 'r.id')
+            .where('sa2.counts_as_served', '=', true)
+            .as('servedCount'),
+          eb
+            .selectFrom('allocation_history as ah')
+            .select(sql<string>`count(distinct ah.run_id)`.as('v'))
+            .whereRef('ah.resident_id', '=', 'r.id')
+            .as('priorParticipations'),
+          // BR-01: a resident still holding a bay at the decision instant is skipped
+          // rather than ranked, so a long-running release promotion cannot double-assign.
+          eb
+            .selectFrom('spot_assignment as sa3')
+            .select(sql<string>`count(*)`.as('v'))
+            .whereRef('sa3.resident_id', '=', 'r.id')
+            .where('sa3.state', '=', 'ACTIVE')
+            .where('sa3.valid_until', '>', decidedAt)
+            .as('activeHoldings'),
+        ])
+        .where('rr.cycle_id', '=', cycleId)
+        .where('rr.withdrawn', '=', false)
+        .execute();
 
-    const eligible = registered.filter((r) => r.isEligible && r.deactivatedAt === null);
-    const skipped = registered.filter((r) => !r.isEligible || r.deactivatedAt !== null);
+      const skipReason = (r: (typeof registered)[number]): SkipReason | null =>
+        r.deactivatedAt !== null
+          ? 'DEACTIVATED'
+          : r.isAdmin
+            ? 'ADMIN_ACCOUNT'
+            : !r.isEligible
+              ? 'NOT_ELIGIBLE'
+              : Number(r.activeHoldings ?? 0) > 0
+                ? 'HOLDS_ACTIVE_SPOT'
+                : null;
 
-    const spots = await this.db
-      .selectFrom('parking_spot')
-      .select(['id as spotId', 'spot_code as spotCode', 'type'])
-      .where('is_active', '=', true)
-      .orderBy('spot_code')
-      .execute();
+      const candidates: Candidate[] = [];
+      const skipped: SkippedCandidate[] = [];
 
-    return {
-      entrants: eligible.map((r) => ({
-        residentId: r.residentId,
-        fairnessScore: r.score === null ? 0 : Number(r.score),
-        needsAccessibleSpot: r.needsAccessibleSpot,
-      })),
-      spots: spots.map((s) => ({ spotId: s.spotId, spotCode: s.spotCode, type: s.type })),
-      skippedResidentIds: skipped.map((r) => r.residentId),
-    };
+      for (const r of registered) {
+        const reason = skipReason(r);
+        if (reason !== null) {
+          skipped.push({ residentId: r.residentId, reason });
+          continue;
+        }
+        candidates.push({
+          residentId: r.residentId,
+          participationStartedAt: new Date(r.participationStartedAt),
+          lastBenefitEndAt: r.lastBenefitEndAt === null ? null : new Date(r.lastBenefitEndAt),
+          servedCount: Number(r.servedCount ?? 0),
+          priorParticipations: Number(r.priorParticipations ?? 0),
+          needsAccessibleSpot: r.needsAccessibleSpot,
+          hasElectricVehicle: r.hasElectricVehicle,
+        });
+      }
+
+      const spots = await trx
+        .selectFrom('parking_spot')
+        .select(['id as spotId', 'spot_code as spotCode', 'type'])
+        .where('is_active', '=', true)
+        .orderBy('spot_code')
+        .execute();
+
+      return {
+        candidates,
+        spots: spots.map((s) => ({ spotId: s.spotId, spotCode: s.spotCode, type: s.type })),
+        skipped,
+      };
+    });
   }
 
   async commitRun(input: Parameters<AllocationRepository['commitRun']>[0]): Promise<void> {
     await this.db.transaction().execute(async (trx) => {
+      // Guard 3: the cycle row is locked for the duration, so a concurrent state change
+      // cannot interleave with the writes that depend on it.
+      await trx
+        .selectFrom('allocation_cycle')
+        .select('id')
+        .where('id', '=', input.cycleId)
+        .forUpdate()
+        .execute();
+
       if (input.assignments.length > 0) {
         await trx
           .insertInto('spot_assignment')
@@ -204,41 +312,33 @@ export class KyselyAllocationRepository implements AllocationRepository {
               resident_id: h.residentId,
               spot_id: h.spotId,
               result: h.result,
-              fairness_score_at_draw: h.fairnessScoreAtDraw,
               waitlist_position: h.waitlistPosition,
             })),
           )
           .execute();
       }
 
-      // One statement, not one per resident. The transaction is held open for the
-      // writes only (§12), and lock hold time must not grow with the building — 500
-      // residents would otherwise mean 500 round-trips inside the transaction.
-      //
-      // The inserted totals are the *deltas* (1 registration, 0 or 1 win), which is
-      // what lets `excluded` serve as the increment on the conflict path.
-      if (input.fairness.length > 0) {
+      // The contestable record. One statement, not one per resident: the transaction is
+      // held open for the writes only, and lock hold time must not grow with the building.
+      if (input.candidates.length > 0) {
         await trx
-          .insertInto('fairness_state')
+          .insertInto('allocation_run_candidate')
           .values(
-            input.fairness.map((f) => ({
-              resident_id: f.residentId,
-              score: f.score,
-              consecutive_misses: f.consecutiveMisses,
-              total_registrations: f.totalRegistrations,
-              total_wins: f.totalWins,
-              last_won_cycle_id: f.lastWonCycleId,
+            input.candidates.map((c) => ({
+              run_id: input.runId,
+              resident_id: c.residentId,
+              anchor_at: c.anchorAt,
+              raw_wait_quanta: c.rawWaitQuanta,
+              effective_wait_quanta: c.effectiveWaitQuanta,
+              bias_applied: c.biasApplied,
+              first_time: c.firstTime,
+              served_count: c.servedCount,
+              raffle_token: c.raffleToken,
+              final_rank: c.finalRank,
+              pool: c.pool,
+              outcome: c.outcome,
+              spot_id: c.spotId,
             })),
-          )
-          .onConflict((oc) =>
-            oc.column('resident_id').doUpdateSet({
-              score: sql`excluded.score`,
-              consecutive_misses: sql`excluded.consecutive_misses`,
-              total_registrations: sql`fairness_state.total_registrations + excluded.total_registrations`,
-              total_wins: sql`fairness_state.total_wins + excluded.total_wins`,
-              last_won_cycle_id: sql`coalesce(excluded.last_won_cycle_id, fairness_state.last_won_cycle_id)`,
-              updated_at: sql`now()`,
-            }),
           )
           .execute();
       }
@@ -251,6 +351,8 @@ export class KyselyAllocationRepository implements AllocationRepository {
           entrants_count: input.entrantsCount,
           spots_count: input.spotsCount,
           assigned_count: input.assignments.length,
+          input_hash: Buffer.from(input.inputHashHex, 'hex'),
+          result_hash: Buffer.from(input.resultHashHex, 'hex'),
         })
         .where('id', '=', input.runId)
         .execute();
