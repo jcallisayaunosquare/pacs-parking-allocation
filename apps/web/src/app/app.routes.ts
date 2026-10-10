@@ -3,8 +3,8 @@ import { adminGuard, authGuard, gateGuard, lotGuard, residentGuard } from './cor
 
 /**
  * The route map of Figure 17.1. Every feature is lazy-loaded, so a resident never
- * downloads the admin screens ? that is what keeps the initial bundle inside the
- * budget in angular.json (?17).
+ * downloads the admin screens — that is what keeps the initial bundle inside the
+ * budget in angular.json (§17).
  *
  * The guards are for usability, not security: they stop someone landing on a page that
  * would only 403. The server is the boundary.

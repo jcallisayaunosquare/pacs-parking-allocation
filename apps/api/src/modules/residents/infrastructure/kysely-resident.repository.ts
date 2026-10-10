@@ -173,7 +173,7 @@ export class KyselyResidentRepository implements ResidentRepository {
      * The held bay, for the page that was actually returned.
      *
      * One extra query rather than a join, and deliberately: the list query above is a
-     * keyset page whose cursor comparison and ordering are tuned around esident alone,
+     * keyset page whose cursor comparison and ordering are tuned around resident alone,
      * and a join would widen that tuple for a column nothing sorts or pages by. One
      * round trip for the whole page is also not N+1 - the ids are already in hand.
      */

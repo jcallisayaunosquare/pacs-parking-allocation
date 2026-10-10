@@ -258,13 +258,15 @@ import {
       .danger {
         color: var(--revoked);
       }
-      :host {        /* This screen's measure. The shell is full-bleed; pages own their width. */
+      :host {
+        /* This screen's measure. The shell is full-bleed; pages own their width. */
         width: 100%;
         max-width: 88rem;
         margin: 0 auto;
         padding: var(--sp-6) var(--sp-5) var(--sp-8);
 
-        /* A register needs columns, not a reading measure. */        display: flex;
+        /* A register needs columns, not a reading measure. */
+        display: flex;
         flex-direction: column;
         gap: var(--sp-4);
       }

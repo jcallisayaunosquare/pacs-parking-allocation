@@ -256,7 +256,8 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
         max-width: 88rem;
         margin: 0 auto;
         padding: var(--sp-6) var(--sp-5) var(--sp-8);
-        /* A register needs columns, not a reading measure. */        display: flex;
+        /* A register needs columns, not a reading measure. */
+        display: flex;
         flex-direction: column;
         gap: var(--sp-6);
       }

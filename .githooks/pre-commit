@@ -42,6 +42,20 @@ for f in $staged; do
         echo "pre-commit: $f holds doubly-encoded UTF-8 (mojibake). Restore it from git."
         fail=1
       fi
+      # A carriage return that is not part of a CRLF pair. This one is not cosmetic: git's
+      # text=auto detection treats a lone CR as a sign of a binary file, so the eol=lf in
+      # .gitattributes stops applying and the file is stored byte for byte - which is how
+      # four admin pages and one repository ended up classified as binary, one of them
+      # with a CR sitting where the "r" of "resident" belonged, in a comment, invisible.
+      # sed splits on LF, so "s/\r$//" strips exactly the CRs that were half of a CRLF
+      # and leaves the lone ones to be counted. Written without $'\r', which is bash
+      # syntax: hooks run under sh, where it degrades to the literal text and the check
+      # silently counts something else.
+      lone=$(LC_ALL=C sed 's/\r$//' "$f" | LC_ALL=C tr -dc '\r' | wc -c | tr -d ' ')
+      if [ "$lone" -ne 0 ]; then
+        echo "pre-commit: $f holds $lone carriage return(s) outside a CRLF pair."
+        fail=1
+      fi
       ;;
   esac
 done
