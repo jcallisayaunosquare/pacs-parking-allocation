@@ -322,6 +322,74 @@ product's screens rather than someone else's. See §8.1.
 
 ## 4. AWS services
 
+Two views of the same account. This one is the map: every service PACS uses, with its own
+mark, and the path a request takes across them. The one after it is the same estate
+annotated — resource names, sizes and the settings that matter — because a logo cannot
+tell you that the bucket is private or that two of the functions sit outside the VPC.
+
+<!-- figure:page -->
+```mermaid
+flowchart TB
+  subgraph browser["The browser"]
+    U["Resident or<br/>administrator"]
+  end
+
+  subgraph edge["Delivery and identity"]
+    CF@{ icon: "logos:aws-cloudfront", form: "square", label: "CloudFront", pos: "b", h: 46 }
+    S3W@{ icon: "logos:aws-s3", form: "square", label: "S3 — Angular bundle", pos: "b", h: 46 }
+    COG@{ icon: "logos:aws-cognito", form: "square", label: "Cognito", pos: "b", h: 46 }
+  end
+
+  subgraph app["Application"]
+    AGW@{ icon: "logos:aws-api-gateway", form: "square", label: "API Gateway", pos: "b", h: 46 }
+    LAM@{ icon: "logos:aws-lambda", form: "square", label: "Lambda ×6", pos: "b", h: 46 }
+  end
+
+  subgraph store["State"]
+    RDS@{ icon: "logos:aws-rds", form: "square", label: "RDS PostgreSQL", pos: "b", h: 46 }
+    DDB@{ icon: "logos:aws-dynamodb", form: "square", label: "DynamoDB — cache, events", pos: "b", h: 46 }
+    S3C@{ icon: "logos:aws-s3", form: "square", label: "S3 — captures", pos: "b", h: 46 }
+  end
+
+  subgraph gate["The gate"]
+    CAM["Camera<br/><i>CAMERA account</i>"]
+    REK["Rekognition<br/>DetectText"]
+    SES@{ icon: "logos:aws-ses", form: "square", label: "SES", pos: "b", h: 46 }
+  end
+
+  subgraph ops["Operations"]
+    CW@{ icon: "logos:aws-cloudwatch", form: "square", label: "CloudWatch, X-Ray", pos: "b", h: 46 }
+    SEC@{ icon: "logos:aws-secrets-manager", form: "square", label: "Secrets Manager", pos: "b", h: 46 }
+  end
+
+  subgraph ship["Delivery"]
+    direction LR
+    GHA["GitHub Actions<br/><i>checks only</i>"] -. "gates the merge" .-> CP
+    CP@{ icon: "logos:aws-codepipeline", form: "square", label: "CodePipeline", pos: "b", h: 46 }
+    CP --> CB@{ icon: "logos:aws-codebuild", form: "square", label: "CodeBuild ×3", pos: "b", h: 46 }
+    CB --> CFN@{ icon: "logos:aws-cloudformation", form: "square", label: "CloudFormation", pos: "b", h: 46 }
+  end
+
+  %% The spine, top to bottom: a request from the browser down to the state it touches.
+  U --> CF --> S3W
+  U -. "sign in" .-> COG
+  CF --> AGW
+  COG -. "verifies the token" .-> AGW
+  CAM -- "a frame" --> AGW
+  AGW --> LAM
+  LAM --> RDS
+  LAM --> DDB
+  LAM --> S3C
+  LAM --> REK
+  LAM --> SES
+  LAM --> CW
+  LAM -. "read at deploy" .-> SEC
+  CFN -. "creates and updates" .-> LAM
+```
+
+Rekognition and the camera carry no mark: the `logos` icon set has no Rekognition glyph, and
+the camera is a device rather than a service. Everything else is the vendor's own.
+
 <!-- figure:page -->
 ```mermaid
 flowchart TB

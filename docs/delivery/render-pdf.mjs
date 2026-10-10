@@ -62,10 +62,58 @@ body = body.replace(/<p>MERMAIDPLACEHOLDER(\d+)ENDPLACEHOLDER<\/p>/g, (_m, i) =>
   const { body: src, mode } = diagrams[Number(i)];
   const text = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const figure = `<pre class="mermaid">${text}</pre>`;
-  return mode ? `<div class="figure figure--${mode}">${figure}</div>` : figure;
+  if (!mode) return figure;
+  return `<div class="figure figure--${mode}">${figure}</div>`;
 });
 
+/*
+ * A figure that gets its own page takes its heading with it.
+ *
+ * The heading says `break-after: avoid` and the figure said `break-before: page`, and a
+ * forced break beats an avoidance every time: the heading was left behind as the last
+ * line of the previous page - often the only line on it - and the diagram began the next.
+ * Moving the heading inside the container means the break happens before the pair rather
+ * than between them, and the caption that follows comes too, so a figure page reads as
+ * one thing.
+ */
+body = body.replace(
+  /(<h([2-4])[^>]*>[\s\S]*?<\/h\2>)\s*(<div class="figure figure--(?:wide|page)">[\s\S]*?<\/div>)/g,
+  (_m, heading, _level, container) =>
+    container.replace(/^(<div class="figure[^"]*">)/, (open) => open + heading),
+);
+
 const title = (source.match(/^#\s+(.+)$/m) ?? [, path.basename(input)])[1];
+
+/*
+ * The icon pack, cut down to the icons this document actually names.
+ *
+ * The whole `logos` collection is 7 MB of JSON. Inlining it works and makes every render
+ * slower for nothing, so this takes the `logos:name` references out of the source and
+ * ships those. An absent icon is reported here rather than drawn as an empty box, which
+ * is what mermaid does with one it cannot resolve.
+ */
+const iconPackJson = await (async () => {
+  const wanted = [...new Set([...source.matchAll(/logos:([a-z0-9-]+)/g)].map((m) => m[1]))];
+  if (wanted.length === 0) return 'null';
+  let pack;
+  try {
+    pack = JSON.parse(await readFile(require.resolve('@iconify-json/logos/icons.json'), 'utf8'));
+  } catch {
+    console.error('this document uses logos: icons but @iconify-json/logos is not installed');
+    process.exit(1);
+  }
+  const icons = {};
+  const missing = [];
+  for (const name of wanted) {
+    if (pack.icons[name]) icons[name] = pack.icons[name];
+    else missing.push(name);
+  }
+  if (missing.length > 0) {
+    console.error(`no such icon in the logos pack: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  return JSON.stringify({ ...pack, icons });
+})();
 
 const html = `<!doctype html>
 <html lang="en-GB">
@@ -75,7 +123,12 @@ const html = `<!doctype html>
 <style>
   @page { size: A4; margin: 18mm 16mm 20mm; }
   /* A figure too large for the text measure gets a page of its own and narrow margins.
-     Landscape when it is wider than it is tall; portrait when it is not. */
+     Landscape when it is wider than it is tall; portrait when it is not.
+
+     Rotating the wide ones onto portrait pages instead was tried, to be rid of the mixed
+     page sizes: a transform does not affect layout, the reserved box did not hold, and
+     the prose printed over the figures. Measured, not guessed - the document collapsed
+     from 55 pages to 18 with twice the marks on each. Reverted. */
   @page wide { size: A4 landscape; margin: 12mm 12mm 14mm; }
   @page tall { size: A4; margin: 12mm 12mm 14mm; }
   :root {
@@ -168,20 +221,47 @@ const html = `<!doctype html>
   /* A full-page figure. The height cap is what stops a tall diagram overflowing the
      page it was given: without it the SVG keeps its aspect ratio against the width
      alone and the bottom simply disappears. */
-  .figure { break-before: page; break-after: page; }
+  /* break-after is deliberately absent. It forced whatever followed onto a page of its
+     own, which with two figures in a row produced a page holding nothing but white. The
+     break before is enough: the figure starts a page, and the prose after it fills the
+     rest rather than waiting for the next one. */
+  /* A figure is kept whole and, when it has a page of its own, takes its heading with
+     it: the heading is moved inside this container, so the forced break happens before
+     the pair instead of between them. A title stranded at the foot of the previous page
+     was the symptom. */
+  .figure {
+    break-before: page;
+    break-inside: avoid;
+  }
   .figure pre.mermaid { margin: 0; }
+  .figure > h2,
+  .figure > h3,
+  .figure > h4 {
+    margin-top: 0;
+    margin-bottom: 0.5em;
+  }
   .figure--wide { page: wide; }
-  .figure--wide pre.mermaid svg { max-height: 178mm; }
+  /* Room for the heading, which was not on these pages when the caps were chosen. */
+  .figure--wide pre.mermaid svg { max-height: 168mm; }
   .figure--page { page: tall; }
-  .figure--page pre.mermaid svg { max-height: 265mm; }
+  .figure--page pre.mermaid svg { max-height: 252mm; }
 </style>
 </head>
 <body>
 ${body}
 <script>${mermaidJs}</script>
+<script>window.__iconPack = ${iconPackJson};</script>
 <script>
   window.__mermaidDone = false;
   window.__mermaidError = null;
+  /*
+   * The service logos. Registered before initialize, because mermaid resolves an icon
+   * shape while it parses and an icon registered late renders as an empty box with no
+   * error - which is worse than a missing figure, since it ships looking deliberate.
+   */
+  if (window.__iconPack && mermaid.registerIconPacks) {
+    mermaid.registerIconPacks([{ name: 'logos', icons: window.__iconPack }]);
+  }
   mermaid.initialize({
     startOnLoad: false,
     theme: 'neutral',
@@ -266,7 +346,7 @@ await page.goto('file:///' + path.resolve(htmlPath).replace(/\\/g, '/'), {
 await page.waitForFunction('window.__mermaidDone === true', null, { timeout: 120_000 });
 
 const error = await page.evaluate('window.__mermaidError');
-const rendered = await page.evaluate("document.querySelectorAll('pre.mermaid svg').length");
+const rendered = await page.evaluate("document.querySelectorAll('pre.mermaid > svg').length");
 const expected = diagrams.length;
 
 await page.pdf({
