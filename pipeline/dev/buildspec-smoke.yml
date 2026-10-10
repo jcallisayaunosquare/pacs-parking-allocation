@@ -8,11 +8,25 @@ version: 0.2
 # whether a frame put in an S3 bucket comes back out as a recognised plate. These two
 # suites exercise exactly that, over real HTTP with a real token.
 #
-# They leave a little behind, and it is worth knowing: smoke.mjs creates a cycle, a bay
-# and a resident, and without DATABASE_URL it cannot remove them afterwards. Running it
-# on every deploy accumulates them in the dev register - it has already put periods
-# with names like 2235-Q1 in front of an administrator. Giving this project a
-# DATABASE_URL, so the suite can tidy up after itself, is the fix.
+# What they leave behind, and what has been done about it.
+#
+# The Cognito users are now removed on every run, here included: deleting one needs an
+# IAM permission and nothing else. That cleanup used to sit behind an early return for a
+# missing DATABASE_URL, so this stage had never once run it, and nineteen test accounts
+# had collected in the pool.
+#
+# The rows are the part still outstanding. smoke.mjs creates a cycle, a bay and a
+# resident, and removing those means reaching the database - which this project cannot
+# do: hotel-db's security group admits 5432 from one address, and CodeBuild's change
+# every run. So the periods it creates still accumulate in the dev register, and one of
+# them has already been in front of an administrator as 2235-Q1.
+#
+# Note that handing this project a DATABASE_URL would not be enough on its own, which an
+# earlier version of this comment claimed: the credential is not what is missing, the
+# route is. The options are a build inside the VPC (a NAT gateway or endpoints), an
+# ephemeral database per run, or moving the state-creating checks off the deployed
+# environment altogether. Until one is chosen, apps/api/scripts/clean-smoke-data.mjs
+# clears them from a machine the security group admits.
 
 env:
   variables:

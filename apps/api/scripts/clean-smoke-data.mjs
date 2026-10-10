@@ -1,5 +1,6 @@
 /**
- * Remove what the smoke suites leave behind in the dev database.
+ * Remove what the smoke suites leave behind: the rows in the dev database, and the
+ * accounts in the Cognito user pool.
  *
  *   node scripts/clean-smoke-data.mjs            # show what would go
  *   node scripts/clean-smoke-data.mjs --apply    # remove it
@@ -25,6 +26,35 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import pg from 'pg';
+import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
+import {
+  AdminDeleteUserCommand,
+  CognitoIdentityProviderClient,
+  ListUsersCommand,
+} from '@aws-sdk/client-cognito-identity-provider';
+
+const REGION = process.env.AWS_REGION ?? 'us-east-2';
+const STAGE = process.env.STAGE ?? 'dev';
+
+/**
+ * The accounts a suite leaves in the user pool.
+ *
+ * They are not all created by the scripts: a resident created over the API is given a
+ * Cognito account by `integrations`, from the pacs-events stream. So the pool collects
+ * rows the database patterns above describe, plus the operator accounts the suites make
+ * for themselves, which no database row ever mentions.
+ *
+ * Kept here with the SQL rather than in a second script, because "remove what the suites
+ * left" is one job: splitting it is how nineteen accounts went unnoticed while the rows
+ * were being tidied by hand.
+ */
+const USER_PATTERNS = [
+  /^smoke-resident-\d+@example\.test$/,
+  /^plates-resident-\d+@example\.test$/,
+  /^pacs-resident-\d+@example\.test$/,
+  /^pacs-plates-\d+@example\.test$/,
+  /^pw-admin-\d+@example\.test$/,
+];
 
 const APPLY = process.argv.includes('--apply');
 
@@ -54,6 +84,48 @@ const PATTERNS = {
     sql: "email like 'smoke-resident-%@example.test' or email like 'plates-resident-%@example.test'",
     what: 'residents created by a suite',
   },
+};
+
+/**
+ * The suite accounts in the pool, by the patterns above.
+ *
+ * The pool id comes from the stack output rather than an environment variable, for the
+ * same reason create-gate-user.mjs reads it there: one less thing to get wrong, and it
+ * cannot point at the production pool by accident.
+ *
+ * Returns an empty list rather than failing when AWS is unreachable or the credentials
+ * are missing - the database half of this clean-up is still worth doing, and it says so.
+ */
+const listSuiteUsers = async () => {
+  try {
+    const cfn = new CloudFormationClient({ region: REGION });
+    const out = await cfn.send(new DescribeStacksCommand({ StackName: `pacs-api-${STAGE}` }));
+    const poolId = (out.Stacks?.[0]?.Outputs ?? []).find((o) => o.OutputKey === 'UserPoolId')
+      ?.OutputValue;
+    if (!poolId) {
+      console.log('\nThe stack has no UserPoolId output, so no accounts were examined.');
+      return [];
+    }
+    const cognito = new CognitoIdentityProviderClient({ region: REGION });
+    const found = [];
+    let token;
+    do {
+      const page = await cognito.send(
+        new ListUsersCommand({ UserPoolId: poolId, Limit: 60, PaginationToken: token }),
+      );
+      for (const u of page.Users ?? []) {
+        const email = u.Attributes?.find((a) => a.Name === 'email')?.Value;
+        if (email && USER_PATTERNS.some((p) => p.test(email))) {
+          found.push({ email, username: u.Username, poolId });
+        }
+      }
+      token = page.PaginationToken;
+    } while (token);
+    return found;
+  } catch (e) {
+    console.log(`\nCould not read the user pool (${e.message}); no accounts were examined.`);
+    return [];
+  }
 };
 
 const client = new pg.Client({
@@ -90,6 +162,10 @@ try {
   for (const s of spots) console.log(`  ${s.label}`);
   console.log(`${residents.length} ${PATTERNS.residents.what}`);
   for (const r of residents) console.log(`  ${r.label}`);
+
+  const users = await listSuiteUsers();
+  console.log(`${users.length} Cognito account(s) created by a suite`);
+  for (const u of users) console.log(`  ${u.email}`);
 
   if (!APPLY) {
     console.log('\nDry run. Pass --apply to remove them.');
@@ -151,6 +227,28 @@ try {
 
   await client.query('commit');
   console.log('\nRemoved. Bays were retired rather than deleted, since history may name them.');
+
+  /*
+   * The accounts, after the commit rather than inside it.
+   *
+   * Cognito is not in the transaction and cannot be rolled back, so the rows are made
+   * safe first. If an account then fails to delete it is said plainly and the next one is
+   * still attempted: a pool with one account left over is a smaller problem than a run
+   * that stops at the first error and leaves the rest.
+   */
+  let failed = 0;
+  const cognito = users.length > 0 ? new CognitoIdentityProviderClient({ region: REGION }) : null;
+  for (const u of users) {
+    try {
+      await cognito.send(new AdminDeleteUserCommand({ UserPoolId: u.poolId, Username: u.username }));
+    } catch (e) {
+      console.log(`  could not remove ${u.email}: ${e.message}`);
+      failed++;
+    }
+  }
+  if (users.length > 0) {
+    console.log(`Removed ${users.length - failed} of ${users.length} Cognito account(s).`);
+  }
 } catch (e) {
   await client.query('rollback').catch(() => {});
   throw e;
