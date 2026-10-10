@@ -390,7 +390,42 @@ async function main() {
     let runIdForAudit = null;
     let cycleIdForReport = null;
 
-    if (canUndoARun) {
+    /*
+     * Which draw check runs depends on the environment, because only one of the two can
+     * be true of it: either an allocation is in force or it is not.
+     *
+     * A draw is refused while another period is in effect (drawBlocker), and dev usually
+     * has one - 2026-Q4 is in force until the end of the year. Asserting the success
+     * path there would fail on a rule working correctly, and closing the period in effect
+     * to get past it would expire the bays of real residents to satisfy a test. So the
+     * suite asserts whichever is true: the refusal, naming the period in the way, or the
+     * run itself when nothing is in the way.
+     */
+    const cycles = await call('GET', '/cycles');
+    const inEffect = (cycles.json?.items ?? []).find(
+      (c) => c.state === 'ACTIVE' && c.id !== cycleId,
+    );
+
+    if (canUndoARun && inEffect) {
+      const refused = await call('POST', `/cycles/${cycleId}/runs`, {
+        headers: { 'idempotency-key': randomUUID() },
+      });
+      check('a draw is refused while another period is in effect',
+        refused.status === 422 && refused.json?.error === 'INVALID_CYCLE_STATE',
+        `status=${refused.status}`);
+      check('and the refusal names the period that is in the way',
+        typeof refused.json?.message === 'string' && refused.json.message.includes(inEffect.label),
+        `message=${refused.json?.message}`);
+      // No run was committed, so the period is still deletable and the teardown will
+      // remove it. The success path is covered by the unit tests, which do not need a
+      // building to be between periods to be true.
+      console.log(`\n${inEffect.label} is in effect, so the draw was asserted as refused`);
+      // The audit and report checks still have something real to read: the draw that put
+      // that period in effect.
+      const existing = await call('GET', '/runs?limit=1');
+      runIdForAudit = existing.json?.items?.[0]?.runId ?? null;
+      cycleIdForReport = existing.json?.items?.[0]?.cycleId ?? null;
+    } else if (canUndoARun) {
       const key = randomUUID();
       const run = await call('POST', `/cycles/${cycleId}/runs`, {
         headers: { 'idempotency-key': key },
@@ -409,8 +444,13 @@ async function main() {
 
       runIdForAudit = run.json?.runId ?? null;
       cycleIdForReport = cycleId;
-      // The period now holds a run, so the teardown below must not try to delete it.
-      madeHere.cycleHasRun = true;
+      /*
+       * Only when a run was actually committed. Setting this on the attempt was wrong: a
+       * refused draw left the teardown believing the period held a record, so it skipped
+       * the delete and the period stayed in the register - the exact thing all of this
+       * was for.
+       */
+      if (run.status === 200 && run.json?.runId) madeHere.cycleHasRun = true;
     } else {
       console.log('\nDATABASE_URL is not set, so no draw is run: a committed run cannot be');
       console.log('removed afterwards. The audit and report checks read an existing run.');
