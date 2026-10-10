@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# Run the unit tests before the commit is made, so a broken test is found here rather
+# than on the pull request twenty minutes later.
+#
+# It runs the suites whose package the commit actually touches: a commit that edits only
+# the pipeline templates or a document pays nothing. `packages/` is shared, so it counts
+# as touching both.
+#
+# To skip it for a deliberate work-in-progress commit:  git commit --no-verify
+#
+# This hook is in the repository rather than in .git/hooks, which is not version
+# controlled. `pnpm install` points git at this directory through the root `prepare`
+# script; to do it by hand:  git config core.hooksPath .githooks
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+# ---------------------------------------------------------------- byte order marks
+#
+# A JSON file that starts with a BOM is not parseable by every reader that has to read
+# it: Vite's JSON loader refuses `package.json` outright, with an error that names no
+# file. It is written by PowerShell 5.1's `Set-Content -Encoding utf8` and by several
+# Windows editors, it is invisible in a diff, and it has cost this repository one red
+# pull request already. Cheaper to refuse here than to debug there.
+for f in $staged; do
+  case "$f" in
+    *.json | *.ts | *.mjs | *.js | *.yml | *.yaml | *.md)
+      [ -f "$f" ] || continue
+      if [ "$(head -c 3 "$f" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+        echo "pre-commit: $f starts with a UTF-8 BOM. Rewrite it without one."
+        fail=1
+      fi
+      ;;
+  esac
+done
+
+# ------------------------------------------------------------------- the unit suites
+touches() {
+  echo "$staged" | grep -qE "$1"
+}
+
+if touches '^(apps/api/|packages/)'; then
+  echo 'pre-commit: unit tests, api'
+  pnpm --filter @pacs/api test || fail=1
+fi
+
+if touches '^(apps/web/|packages/)'; then
+  echo 'pre-commit: unit tests, web'
+  pnpm --filter web test || fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ''
+  echo 'pre-commit: refused. Fix the above, or commit with --no-verify if you mean to.'
+  exit 1
+fi
+
+exit 0
