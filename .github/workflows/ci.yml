@@ -87,7 +87,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @pacs/web test
+      # Run from the package directory, not through a filter.
+      #
+      # A filter that matches nothing makes pnpm exit 0, so this job reported green
+      # for three commits while running nothing at all - the package was named `web`
+      # and the filter asked for `@pacs/web`. A missing directory cannot do that.
+      - run: pnpm test
+        working-directory: apps/web
 
   # The production bundle, built once and kept. The deploy workflow does not rebuild it:
   # what ships has to be the artefact the checks passed on, not a second build of the
@@ -106,7 +112,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @pacs/web build --configuration production
+      - run: pnpm build --configuration production
+        working-directory: apps/web
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist
@@ -129,11 +136,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Only the one browser the suite declares, and its system libraries.
-      - run: pnpm --filter @pacs/web exec playwright install --with-deps chromium
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: apps/web
 
       # Playwright starts both halves of the offline loop itself: the in-memory API on
       # 4300 and the app on 4200. No AWS, no database, no cost.
-      - run: pnpm --filter @pacs/web e2e
+      - run: pnpm e2e
+        working-directory: apps/web
 
       - if: failure()
         uses: actions/upload-artifact@v4
