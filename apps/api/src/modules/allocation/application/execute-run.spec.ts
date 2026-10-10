@@ -110,6 +110,11 @@ class FakeRepo implements AllocationRepository {
   async countActiveSpots(): Promise<number> {
     return this.activeSpots;
   }
+  /** The period in effect, when a test wants one. Null is the ordinary case. */
+  periodInEffect: { id: string; label: string } | null = null;
+  async findPeriodInEffect(): Promise<{ id: string; label: string } | null> {
+    return this.periodInEffect;
+  }
   async failStaleRuns(): Promise<number> {
     return 0;
   }
@@ -245,6 +250,32 @@ describe('ExecuteRun', () => {
     // Nothing was locked or written.
     expect(repo.openCalls).toBe(0);
     expect(repo.committed).toBeNull();
+  });
+
+  /*
+   * Two allocations at once is two statements about who may park in the same bays. The
+   * refusal has to happen before anything is locked or written, for the same reason the
+   * empty-inventory one does: a run row that exists strips first-time-participant status
+   * from everyone in it (E-4).
+   */
+  it('refuses while another period is in effect, and writes nothing', async () => {
+    repo.periodInEffect = { id: 'other', label: '2026-Q4' };
+    const r = await build(repo).execute({ cycleId: CYCLE_ID, idempotencyKey: 'k-in-effect' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('INVALID_CYCLE_STATE');
+      // Names the period the administrator has to close, because it is not the one they
+      // are looking at.
+      expect(r.error.message).toContain('2026-Q4');
+    }
+    expect(repo.openCalls).toBe(0);
+    expect(repo.committed).toBeNull();
+  });
+
+  it('runs when nothing else is in effect', async () => {
+    repo.periodInEffect = null;
+    const r = await build(repo).execute({ cycleId: CYCLE_ID, idempotencyKey: 'k-clear' });
+    expect(r.ok).toBe(true);
   });
 
   it('refuses when the inventory is empty, so no run row is created at all', async () => {

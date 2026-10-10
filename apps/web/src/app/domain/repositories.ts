@@ -197,6 +197,8 @@ export abstract class CycleRepository {
   abstract remove(id: string): Promise<void>;
   abstract openRegistration(id: string): Promise<Cycle>;
   abstract closeRegistration(id: string): Promise<Cycle>;
+  /** Ends the period in effect, expiring its assignments. Not closeRegistration. */
+  abstract closePeriod(id: string): Promise<Cycle>;
   /** UC-08 / withdrawal, for the resident's own registration. */
   abstract register(cycleId: string): Promise<void>;
   abstract withdraw(cycleId: string): Promise<void>;

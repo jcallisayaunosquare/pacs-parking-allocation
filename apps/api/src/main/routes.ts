@@ -1180,6 +1180,23 @@ export function buildRoutes(app: AppContainer): Route[] {
           okJson(presentCycle(v), ctx.traceId),
         ),
     },
+    /*
+     * Ending the period that is in effect, which expires the assignments it handed out.
+     *
+     * Separate from close-registration, and the names are worth keeping apart: that one
+     * shuts the door on entrants before a draw, this one ends the arrangement the draw
+     * produced. It is also what unblocks the next draw, since one is refused while an
+     * allocation is in force.
+     */
+    {
+      method: 'POST',
+      path: '/cycles/{id}/close',
+      roles: ['ADMIN'],
+      handler: async (ctx) =>
+        respond(await app.cycles.close(ctx.params.id!), ctx, (v) =>
+          okJson(presentCycle(v), ctx.traceId),
+        ),
+    },
 
     // -------------------------------------------------------------------- runs
     {

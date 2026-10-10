@@ -293,25 +293,36 @@ export class App {
       return out;
     }
     if (this.auth.isAdmin()) {
+      /*
+       * In the order the work is done, because the order is not obvious and the menu is
+       * the only place it is written down. An administrator running their first period
+       * has to: enter the people, enter the bays, set the rules that decide how long a
+       * period lasts, create the period and open it for entries, draw it, and then look
+       * at what came out.
+       *
+       * Run the draw used to sit above Periods, which read as the first thing to try and
+       * is the one thing that cannot be done yet: there is no period to draw.
+       */
       out.push({ path: '/admin/residents', label: 'Residents', exact: false });
       out.push({ path: '/admin/spots', label: 'Bays', exact: false });
-      // Next to Bays, because the two are the same inventory seen two ways: the register
-      // of them, and where they are. An administrator sees occupants on it; a resident
-      // does not, which is the one screen the two roles genuinely share.
-      out.push({ path: '/lot', label: 'The lot', exact: false });
-      out.push({ path: '/admin/draw', label: 'Run the draw', exact: false });
-      out.push({ path: '/admin/cycles', label: 'Periods', exact: false });
-      // "Fairness" alone hid the rules editor: an administrator looking for the period
-      // length had no reason to open a page that sounded like a report.
+      // Before Periods because it holds the rules editor, and allocationDuration decides
+      // how long the period about to be created will run for. "Fairness" alone hid that:
+      // an administrator looking for the period length had no reason to open a page that
+      // sounded like a report.
       out.push({ path: '/admin/metrics', label: 'Fairness & rules', exact: false });
-      // After the draw group and before Reports: the gate log is something an
-      // administrator watches between periods rather than while running one, but it is
-      // checked far more often than a report is produced.
+      out.push({ path: '/admin/cycles', label: 'Periods', exact: false });
+      out.push({ path: '/admin/draw', label: 'Run the draw', exact: false });
+      // After the draw, because this is where its result is read: who ended up where.
+      // The same inventory as Bays seen the other way round, and the one screen the two
+      // roles genuinely share - an administrator sees occupants on it, a resident does
+      // not.
+      out.push({ path: '/lot', label: 'The lot', exact: false });
       // One entry for the whole of M-7: the camera, the arrival it produced and the
-      // record of every frame are one screen, because they are one job.
+      // record of every frame are one screen, because they are one job. It sits after
+      // the sequence above because it is watched between periods rather than while
+      // running one, and far more often than a report is produced.
       out.push({ path: '/gate', label: 'Gate', exact: false });
-      // Last, because it is what an administrator does at the end of a period rather
-      // than while running one.
+      // Last, because it is what an administrator does at the end of a period.
       out.push({ path: '/admin/reports', label: 'Reports', exact: false });
     }
     return out;
