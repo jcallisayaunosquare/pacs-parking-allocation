@@ -214,19 +214,47 @@ try {
     await client.query('delete from resident where id = $1', [r.id]);
   }
 
-  // Bays are retired rather than deleted: a bay may be named in the history of a real
-  // period, and that record is not ours to rewrite.
+  /*
+   * A bay the allocation record does not name is deleted; one it names is retired.
+   *
+   * This used to retire every bay unconditionally, from a time when there was no rule
+   * for removing one. The rule exists now - spotRemovalBlocker, behind
+   * DELETE /spots/{id} - and it says the same thing: a bay that never held anyone is
+   * part of the plan of the building, not of its history. Retiring them all left
+   * thirteen inactive SMK- rows on the inventory screen, which is the pollution this
+   * script is for.
+   */
+  let retired = 0;
   for (const s of spots) {
-    await client.query(
-      `update parking_spot
-          set is_active = false, deactivated_at = now(), notes = 'Retired: created by the smoke suite'
-        where id = $1`,
+    const { rows } = await client.query(
+      `select
+         (select count(*)::int from spot_assignment where spot_id = $1) +
+         (select count(*)::int from allocation_history where spot_id = $1) as named`,
       [s.id],
     );
+    if (rows[0].named > 0) {
+      await client.query(
+        `update parking_spot
+            set is_active = false, deactivated_at = now(),
+                notes = 'Retired: created by the smoke suite'
+          where id = $1`,
+        [s.id],
+      );
+      retired++;
+      continue;
+    }
+    // allocation_run_candidate.spot_id is NO ACTION rather than SET NULL, so a candidate
+    // row would refuse the delete. It names a bay the draw considered, not one it gave
+    // out, and for a bay nothing else references it is not a record worth keeping.
+    await client.query('delete from allocation_run_candidate where spot_id = $1', [s.id]);
+    await client.query('delete from parking_spot where id = $1', [s.id]);
   }
 
   await client.query('commit');
-  console.log('\nRemoved. Bays were retired rather than deleted, since history may name them.');
+  console.log(
+    `\nRemoved. ${spots.length - retired} bay(s) deleted; ` +
+      `${retired} retired instead, because the allocation record names them.`,
+  );
 
   /*
    * The accounts, after the commit rather than inside it.

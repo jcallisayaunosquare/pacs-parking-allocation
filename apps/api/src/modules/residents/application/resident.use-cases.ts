@@ -2,6 +2,7 @@ import { fail } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock } from '../../../shared/clock';
 import type { EventBus } from '../../../shared/events/dynamodb-event-bus';
+import { residentRemovalBlocker } from '../domain/resident-removal';
 
 export interface Resident {
   readonly id: string;
@@ -80,6 +81,15 @@ export interface ResidentRepository {
   setEligibility(id: string, isEligible: boolean, reason: string | null): Promise<Resident | null>;
   linkSubject(id: string, subject: string): Promise<void>;
   softDelete(id: string, at: Date): Promise<boolean>;
+  /** Removes the row. Only called for a resident nothing in the record names. */
+  hardDelete(id: string): Promise<boolean>;
+  consequences(id: string): Promise<{
+    registrations: number;
+    assignments: number;
+    historyRows: number;
+    changedConfig: number;
+    reviewedPlateReads: number;
+  }>;
   hasActiveAssignment(id: string): Promise<boolean>;
 }
 
@@ -209,15 +219,39 @@ export class ResidentUseCases {
     return r ? ok(r) : fail('NOT_FOUND', 'Resident not found.');
   }
 
-  /** Soft delete: history is preserved (section 16 DELETE /residents/{id}). */
-  async deactivate(id: string): Promise<Result<{ deactivated: true }>> {
+  /**
+   * Takes a resident off the register (§16 DELETE /residents/{id}).
+   *
+   * Two outcomes, and the data decides which. A resident the record names is hidden and
+   * kept, which is what the soft delete has always done and what rule D requires: a past
+   * draw stays explainable to the resident who lost it. A resident who never registered,
+   * never held a bay and appears in no record is deleted outright - that row is not the
+   * history of anything, and keeping it hidden for ever serves nobody. It is the same
+   * line cycleRemovalBlocker and spotRemovalBlocker already draw.
+   *
+   * Both answer 204, because the caller asked for one thing and got it: the person is
+   * off the register. `deleted` says which happened, for a caller that wants to know.
+   */
+  async remove(id: string): Promise<Result<{ deleted: boolean; reason: string | null }>> {
     if (await this.repo.hasActiveAssignment(id)) {
       return fail(
         'SPOT_IN_USE',
         'This resident holds a bay. Release it before removing them from the register.',
       );
     }
+
+    const blocker = residentRemovalBlocker(await this.repo.consequences(id));
+    if (!blocker) {
+      const hardDeleted = await this.repo.hardDelete(id);
+      // Falls through to the soft delete rather than failing: between the count and the
+      // delete something may have arrived that the schema refuses to lose, and hiding
+      // the row is still the right answer to what was asked.
+      if (hardDeleted) return ok({ deleted: true, reason: null });
+    }
+
     const done = await this.repo.softDelete(id, this.clock.now());
-    return done ? ok({ deactivated: true } as const) : fail('NOT_FOUND', 'Resident not found.');
+    return done
+      ? ok({ deleted: false, reason: blocker })
+      : fail('NOT_FOUND', 'Resident not found.');
   }
 }

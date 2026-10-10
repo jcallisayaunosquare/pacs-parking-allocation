@@ -67,6 +67,8 @@ class FakeResidents implements ResidentRepository {
   setEligibility = unused('setEligibility');
   linkSubject = unused('linkSubject');
   softDelete = unused('softDelete');
+  hardDelete = unused('hardDelete');
+  consequences = unused('consequences');
   hasActiveAssignment = unused('hasActiveAssignment');
 }
 
