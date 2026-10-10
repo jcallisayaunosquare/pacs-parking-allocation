@@ -91,6 +91,36 @@ export class KyselySpotRepository implements SpotRepository {
     return r ? toSpot(r as Row) : null;
   }
 
+  /**
+   * What a bay would take with it. Two counts rather than one, because history outlives
+   * an assignment: a released assignment leaves no current row and still leaves the bay
+   * named in allocation_history.
+   */
+  async consequences(id: string): Promise<{ assignments: number; historyRows: number }> {
+    const assignments = await this.db
+      .selectFrom('spot_assignment')
+      .select(({ fn }) => fn.countAll<string>().as('n'))
+      .where('spot_id', '=', id)
+      .executeTakeFirst();
+    const history = await this.db
+      .selectFrom('allocation_history')
+      .select(({ fn }) => fn.countAll<string>().as('n'))
+      .where('spot_id', '=', id)
+      .executeTakeFirst();
+    return {
+      assignments: Number(assignments?.n ?? 0),
+      historyRows: Number(history?.n ?? 0),
+    };
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const r = await this.db
+      .deleteFrom('parking_spot')
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return Number(r.numDeletedRows ?? 0) > 0;
+  }
+
   async isCurrentlyAssigned(id: string): Promise<boolean> {
     const r = await this.db
       .selectFrom('spot_assignment')

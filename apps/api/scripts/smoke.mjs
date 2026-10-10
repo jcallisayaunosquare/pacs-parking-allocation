@@ -498,15 +498,23 @@ async function main() {
       gone.status === 204 || gone.status === 200, `status=${gone.status}`);
   }
 
-  for (const id of madeHere.spotIds) {
-    // No DELETE exists for a bay, by design: a bay may be named in the history of a real
-    // period. Retiring it is what takes it off the inventory screen.
-    const retired = await call('PATCH', `/spots/${id}`, {
-      body: { isActive: false, notes: 'Retired by the smoke suite' },
-    });
-    check('PATCH /spots/{id} retires the bay the suite created',
-      retired.status === 200, `status=${retired.status}`);
+  /*
+   * Deleted, not retired. Retiring was what this used to do, and it was not enough: the
+   * inventory screen lists inactive bays by default, so every run added a row an
+   * administrator could see. These bays were never assigned - no draw ran on the period
+   * they were made for - so the removal rule allows it.
+   *
+   * The codes and the ids are pushed together, so the index is what pairs them: a bay
+   * that is gone must not be named in the list of rows left behind.
+   */
+  const spotsStillThere = [];
+  for (const [i, id] of madeHere.spotIds.entries()) {
+    const gone = await call('DELETE', `/spots/${id}`);
+    check('DELETE /spots/{id} removes a bay that was never assigned',
+      gone.status === 204 || gone.status === 200, `status=${gone.status}`);
+    if (!(gone.status === 204 || gone.status === 200)) spotsStillThere.push(madeHere.spotCodes[i]);
   }
+  madeHere.spotCodes = spotsStillThere;
 
   await finish(cognito, userPoolId, email);
 }
