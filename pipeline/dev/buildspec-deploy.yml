@@ -30,7 +30,11 @@ phases:
     commands:
       - echo "Deploying the backend stack"
       - cd apps/api
-      - npx --no-install serverless deploy --stage "${STAGE}"
+      # `pnpm exec`, not `npx`: npx reaches for the registry when it cannot resolve a
+      # binary, which is how this stage first failed - serverless was not a dependency
+      # of anything, and every deploy until now had been leaning on one developer's
+      # machine having it cached. It is a declared devDependency now.
+      - pnpm exec serverless deploy --stage "${STAGE}"
       - cd "${CODEBUILD_SRC_DIR}"
 
       # Hashed assets first, index.html last, each with the cache life it deserves.

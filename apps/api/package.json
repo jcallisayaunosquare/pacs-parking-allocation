@@ -49,6 +49,7 @@
     "@vitest/coverage-v8": "^2.1.8",
     "eslint": "^9",
     "node-pg-migrate": "^7.9.0",
+    "serverless": "4.43.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

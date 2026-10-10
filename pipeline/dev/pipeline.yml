@@ -39,6 +39,13 @@ Parameters:
   DistributionId:
     Type: String
     Description: From the web-hosting stack's DistributionId output.
+  ServerlessKeySecretName:
+    Type: String
+    Default: pacs/serverless-access-key
+    Description: >-
+      A Secrets Manager secret holding {"key": "<the Serverless Framework access
+      key>"}. Created outside this template on purpose: a credential should not be
+      passed through a parameter that CloudFormation records in plain text.
 
 Resources:
   # ------------------------------------------------------------------- source access
@@ -134,6 +141,10 @@ Resources:
                   - cognito-idp:AdminAddUserToGroup
                   - cognito-idp:AdminInitiateAuth
                 Resource: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+              # The Serverless Framework licence key, and nothing else in the vault.
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ServerlessKeySecretName}-*'
               # It must never be able to rewrite its own trust or its own permissions.
               - Effect: Deny
                 Action: iam:*
@@ -222,6 +233,15 @@ Resources:
         EnvironmentVariables:
           - { Name: WEB_BUCKET, Value: !Ref WebBucketName }
           - { Name: CLOUDFRONT_DISTRIBUTION_ID, Value: !Ref DistributionId }
+          # Serverless Framework v4 refuses to deploy without an access key, and the
+          # key is a credential: it is read from Secrets Manager at build time rather
+          # than written into this template, which lives in a public repository.
+          #
+          # The secret has to exist before the first deploy. CodeBuild masks the value
+          # in its logs, and the build role reads it through the policy below.
+          - Name: SERVERLESS_ACCESS_KEY
+            Type: SECRETS_MANAGER
+            Value: !Sub '${ServerlessKeySecretName}:key'
       TimeoutInMinutes: 30
 
   SmokeProject:
