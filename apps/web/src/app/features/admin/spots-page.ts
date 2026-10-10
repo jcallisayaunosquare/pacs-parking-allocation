@@ -116,6 +116,19 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
         matSortDisableClear
         (matSortChange)="sort.set($event)"
       >
+        <!--
+          The row number, a position in the list rather than a name for the row - the bay
+          already has one of those in the next column. This list is not paged, so the
+          index is the number. Hidden from screen readers: a count read before every bay
+          code tells someone who cannot see the column nothing.
+        -->
+        <ng-container matColumnDef="num">
+          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let s; let i = index" class="num" aria-hidden="true">
+            {{ i + 1 }}
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="code">
           <th mat-header-cell *matHeaderCellDef mat-sort-header>Bay</th>
           <td mat-cell *matCellDef="let s" data-label="Bay" class="code stencil">
@@ -266,6 +279,15 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
       .dim {
         color: var(--steel-faint);
       }
+      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
+         width of each digit. */
+      .num {
+        width: 3rem;
+        color: var(--steel-faint);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        padding-right: var(--sp-2);
+      }
 
       @media (max-width: 40rem) {
         .head {
@@ -286,7 +308,7 @@ export default class SpotsPage {
   readonly facade = inject(SpotsFacade);
   private readonly dialog = inject(MatDialog);
 
-  readonly columns = ['code', 'level', 'type', 'status', 'notes', 'actions'];
+  readonly columns = ['num', 'code', 'level', 'type', 'status', 'notes', 'actions'];
 
   /** The column and direction the table is sorted by. Null is the server's own order. */
   readonly sort = signal<Sort | null>(null);

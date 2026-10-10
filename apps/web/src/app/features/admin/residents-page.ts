@@ -117,6 +117,20 @@ import {
         [matSortDirection]="facade.dir()"
         (matSortChange)="onSort($event)"
       >
+        <!--
+          The row number. It is a position in the list and nothing else - it keeps
+          counting across pages through the facade's offset, and sorting or filtering
+          renumbers it, which is what a reader of a sorted list expects. The header is
+          hidden from screen readers rather than labelled, because "1" through "15" read
+          aloud in front of every name is noise to someone who cannot see the column.
+        -->
+        <ng-container matColumnDef="num">
+          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let r; let i = index" class="num" aria-hidden="true">
+            {{ facade.rowOffset() + i + 1 }}
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="name">
           <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
           <td mat-cell *matCellDef="let r" data-label="Name" class="name">{{ r.fullName }}</td>
@@ -135,7 +149,16 @@ import {
         <ng-container matColumnDef="eligibility">
           <th mat-header-cell *matHeaderCellDef mat-sort-header>Eligibility</th>
           <td mat-cell *matCellDef="let r" data-label="Eligibility">
-            @if (r.isEligible) {
+            <!--
+              The administrator is checked before eligibility, not after: the account can
+              carry is_eligible true and still never enter a draw, so showing "Eligible"
+              on the row of the person who operates the draw states the opposite of what
+              the rule does. Separation of duties is the reason, and the pill says so.
+            -->
+            @if (r.isAdmin) {
+              <app-status-pill label="Administrator" tone="idle" />
+              <span class="note">Operates the draw, so never enters it</span>
+            } @else if (r.isEligible) {
               <app-status-pill label="Eligible" tone="held" />
             } @else {
               <app-status-pill label="Not eligible" tone="revoked" />
@@ -371,6 +394,23 @@ import {
         font-size: var(--t-fine);
         margin-top: var(--sp-1);
       }
+      /* The same shape as .reason, but this one is a statement of a rule, not a refusal,
+         so it does not borrow the colour that means something was revoked. */
+      .note {
+        display: block;
+        color: var(--steel-faint);
+        font-size: var(--t-fine);
+        margin-top: var(--sp-1);
+      }
+      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
+         width of each digit, and narrow because it never holds more than a few. */
+      .num {
+        width: 3rem;
+        color: var(--steel-faint);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        padding-right: var(--sp-2);
+      }
       .acts {
         white-space: nowrap;
         text-align: right;
@@ -395,6 +435,7 @@ export default class ResidentsPage {
   private readonly confirm = inject(ConfirmService);
 
   readonly columns = [
+    'num',
     'name',
     'unit',
     'email',

@@ -1,9 +1,9 @@
-{
+﻿{
   "name": "@pacs/api",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "description": "PACS backend — Lambda + API Gateway HTTP API, Clean Architecture per module (analisis.html §10)",
+  "description": "PACS backend â€” Lambda + API Gateway HTTP API, Clean Architecture per module (analisis.html Â§10)",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
@@ -19,6 +19,7 @@
     "smoke:plates": "node scripts/smoke-plates.mjs",
     "gate-user": "node scripts/create-gate-user.mjs",
     "clean:smoke": "node scripts/clean-smoke-data.mjs",
+    "set-admin": "node scripts/set-admin-flag.mjs",
     "brand": "node scripts/apply-login-branding.mjs",
     "deploy:dev": "serverless deploy --stage dev",
     "deploy:prod": "serverless deploy --stage prod",

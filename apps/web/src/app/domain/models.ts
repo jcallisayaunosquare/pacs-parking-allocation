@@ -34,6 +34,12 @@ export interface Resident {
   readonly isEligible: boolean;
   readonly ineligibleReason: string | null;
   readonly needsAccessibleSpot: boolean;
+  /**
+   * The account operates the raffle, so it never enters it. The server keeps this as a
+   * second, independent record of the ADMIN group on the token, and it is what excludes
+   * the row from the candidate pool and from the fairness snapshot.
+   */
+  readonly isAdmin: boolean;
   readonly externalSubject: string | null;
   /**
    * The bay this resident holds right now, or null when they hold none.
