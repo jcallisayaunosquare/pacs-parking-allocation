@@ -127,8 +127,16 @@ async function main() {
       /* the user may never have been created */
     }
 
-    // Waits for the stream, because a delete that runs straight away finds nothing and
-    // the account appears afterwards with no one left to remove it.
+    /*
+     * Waits for the stream, because a delete that runs straight away finds nothing and
+     * the account turns up afterwards with nobody left to remove it.
+     *
+     * "Not found" after the window is reported as absent rather than as a failure: the
+     * resident is deactivated just above, and integrations declines to provision an
+     * account for a resident who is already gone, so most runs never create one at all.
+     * Calling that a failure sends someone looking for an orphan that does not exist.
+     * clean-smoke-data.mjs sweeps the pool by pattern for the runs where it does.
+     */
     if (provisionedResident) {
       const deadline = Date.now() + 12_000;
       for (;;) {
@@ -136,10 +144,15 @@ async function main() {
           await cognito.send(
             new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: provisionedResident }),
           );
+          console.log(`\nremoved the provisioned account ${provisionedResident}`);
           break;
         } catch (e) {
-          if (e?.name !== 'UserNotFoundException' || Date.now() > deadline) {
-            console.log(`\ncould not remove the provisioned user ${provisionedResident}`);
+          if (e?.name !== 'UserNotFoundException') {
+            console.log(`\ncould not remove the provisioned user ${provisionedResident}: ${e.name}`);
+            break;
+          }
+          if (Date.now() > deadline) {
+            console.log('\nno account was provisioned for this run, so none was removed');
             break;
           }
           await new Promise((r) => setTimeout(r, 1000));
@@ -454,8 +467,17 @@ async function main() {
     check('the vehicle can be removed again', gone.status === 200 || gone.status === 204,
       `status=${gone.status}`);
   }
+  // The resident goes the same way smoke.mjs sends theirs: DELETE deactivates rather
+  // than deletes, which is enough to take the row off the register an administrator
+  // reads. The row itself needs the database, and clean-smoke-data.mjs has it.
+  if (residentId) {
+    const gone = await call('DELETE', `/residents/${residentId}`);
+    check('the resident can be taken off the register again',
+      gone.status === 204 || gone.status === 200, `status=${gone.status}`);
+  }
+
   console.log(
-    `\nLeft in place (no API removes them): resident ${residentId}, ` +
+    `\nLeft in place: the deactivated row for resident ${residentId}, ` +
       `and this run's frames under raw/${cameraId}/.`,
   );
 

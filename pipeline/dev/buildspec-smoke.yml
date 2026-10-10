@@ -15,18 +15,26 @@ version: 0.2
 # missing DATABASE_URL, so this stage had never once run it, and nineteen test accounts
 # had collected in the pool.
 #
-# The rows are the part still outstanding. smoke.mjs creates a cycle, a bay and a
-# resident, and removing those means reaching the database - which this project cannot
-# do: hotel-db's security group admits 5432 from one address, and CodeBuild's change
-# every run. So the periods it creates still accumulate in the dev register, and one of
-# them has already been in front of an administrator as 2235-Q1.
+# The fixtures are now taken down through the API too, with the administrator's token
+# and no database at all: the period is deleted outright, the resident is deactivated,
+# and the bay is retired. So nothing a run creates is visible to an administrator
+# afterwards - which is what went wrong before, when a test period sat on the admin
+# screen announcing itself as "2235-Q1, ready to draw".
 #
-# Note that handing this project a DATABASE_URL would not be enough on its own, which an
-# earlier version of this comment claimed: the credential is not what is missing, the
-# route is. The options are a build inside the VPC (a NAT gateway or endpoints), an
-# ephemeral database per run, or moving the state-creating checks off the deployed
-# environment altogether. Until one is chosen, apps/api/scripts/clean-smoke-data.mjs
-# clears them from a machine the security group admits.
+# What that costs, and it is deliberate: the draw itself is not run here. A committed
+# run is a record, and cycleRemovalBlocker refuses to delete a period that has one, so
+# running the draw would make the period permanent. The write path is covered by the
+# unit tests instead, and the audit and report checks read a run that already exists.
+# Set DATABASE_URL and the suite runs the draw and clears it afterwards - which is what
+# a developer gets, and this project deliberately does not.
+#
+# Two inert rows per run are still left: the deactivated resident and the retired bay.
+# Removing those means reaching the database, which this project cannot do - hotel-db's
+# security group admits 5432 from one address and CodeBuild's change every run. Note
+# that a DATABASE_URL alone would not be enough, which an earlier version of this
+# comment claimed: the credential is not what is missing, the route is.
+# apps/api/scripts/clean-smoke-data.mjs clears them, and the pool, from a machine the
+# security group admits.
 
 env:
   variables:
