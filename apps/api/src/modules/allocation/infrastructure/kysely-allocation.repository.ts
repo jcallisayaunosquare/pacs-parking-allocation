@@ -419,6 +419,26 @@ export class KyselyAllocationRepository implements AllocationRepository {
     return Number(row?.n ?? 0);
   }
 
+  /**
+   * The period in force, if any, other than the one asked about.
+   *
+   * ACTIVE is the state a period reaches by being drawn, and it is the one that means
+   * "these residents hold these bays now". `ends_on` is not consulted: a period past its
+   * end that the sweeper has not closed yet is still in effect as far as the register is
+   * concerned, and letting a draw through on the strength of a date the system has not
+   * acted on would hand out bays that are still held.
+   */
+  async findPeriodInEffect(exceptCycleId: string): Promise<{ id: string; label: string } | null> {
+    const row = await this.db
+      .selectFrom('allocation_cycle')
+      .select(['id', 'label'])
+      .where('state', '=', 'ACTIVE')
+      .where('id', '!=', exceptCycleId)
+      .orderBy('ends_on', 'asc')
+      .executeTakeFirst();
+    return row ? { id: row.id, label: row.label } : null;
+  }
+
   async failStaleRuns(olderThan: Date): Promise<number> {
     const res = await this.db
       .updateTable('allocation_run')

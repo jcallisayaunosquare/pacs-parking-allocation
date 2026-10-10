@@ -106,6 +106,7 @@ class FakeCycles implements CycleRepository {
   async remove(): Promise<boolean> {
     return true;
   }
+  closeNow = unused('closeNow');
 }
 
 const configProvider: AllocationConfigProvider = {

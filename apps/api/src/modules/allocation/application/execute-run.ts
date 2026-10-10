@@ -2,6 +2,7 @@ import { fail, RunLockHeldError } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock, SeedSource } from '../../../shared/clock';
 import { isRunnable } from '../domain/cycle';
+import { drawBlocker } from '../domain/draw-eligibility';
 import {
   allocate,
   ALGORITHM_VERSION,
@@ -84,6 +85,15 @@ export class ExecuteRun {
         `A run may only start from REGISTRATION_CLOSED; this cycle is ${cycle.state}.`,
       );
     }
+
+    /*
+     * And no other period may be in effect. Checked here, before the run row exists, for
+     * the same reason the inventory is: a refused draw must leave no trace, because a
+     * spurious run strips first-time-participant status from everyone in it (E-4).
+     */
+    const inEffect = await this.repo.findPeriodInEffect(cmd.cycleId);
+    const blocked = drawBlocker({ state: cycle.state, periodInEffect: inEffect });
+    if (blocked) return fail('INVALID_CYCLE_STATE', blocked);
 
     // An inventory error must not produce a run row at all: a spurious run would strip
     // first-time-participant status from everyone in it (edge case E-4).

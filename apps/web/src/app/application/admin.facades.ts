@@ -417,6 +417,11 @@ export class CyclesFacade {
     return this.mutate(() => this.cycles.closeRegistration(id));
   }
 
+  /** Ends the period in effect. The draw of the next period is refused until this runs. */
+  closePeriod(id: string) {
+    return this.mutate(() => this.cycles.closePeriod(id));
+  }
+
   /**
    * UC-05. The idempotency key is generated once per cycle and attempt window, so a
    * double click or a retried request replays the original run instead of drawing again

@@ -418,6 +418,19 @@ export class HttpCycleRepository extends CycleRepository {
     );
   }
 
+  /**
+   * Ends the period that is in effect, expiring the assignments it handed out.
+   *
+   * Not the same as closing registration, which shuts the door on entrants before a
+   * draw. This ends the arrangement the draw produced, and it is what lets the next draw
+   * run - one is refused while an allocation is in force.
+   */
+  async closePeriod(id: string): Promise<Cycle> {
+    return toCycle(
+      await firstValueFrom(this.http.post<CycleDto>(`${API}/cycles/${id}/close`, {})),
+    );
+  }
+
   async register(cycleId: string): Promise<void> {
     await firstValueFrom(this.http.post<void>(`${API}/cycles/${cycleId}/registrations`, {}));
   }

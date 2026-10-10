@@ -138,6 +138,47 @@ export class KyselyCycleRepository implements CycleRepository {
       return Number(r.numDeletedRows ?? 0) > 0;
     });
   }
+
+  /**
+   * Closes one period now, ending the assignments it handed out.
+   *
+   * The administrator's version of what the sweeper does on a schedule, and the
+   * difference is the instant: the sweeper closes a period whose `ends_on` has passed and
+   * sets benefit_ended_at to valid_until, because the benefit ended when the period did
+   * and a late sweep must not cost the resident waiting time. Closing early ends the
+   * benefit *now*, so now is what is recorded - the resident had the bay until this
+   * moment and rule C should say so.
+   *
+   * counts_as_served stays true: they held the bay and consumed the allocation, which is
+   * the EXPIRED row of terminationPolicy. One transaction, because a closed period whose
+   * assignments are still ACTIVE would read as residents holding bays in a period that
+   * is over.
+   */
+  async closeNow(cycleId: string, at: Date): Promise<boolean> {
+    return this.db.transaction().execute(async (trx) => {
+      const closed = await trx
+        .updateTable('allocation_cycle')
+        .set({ state: 'CLOSED' })
+        .where('id', '=', cycleId)
+        .where('state', '=', 'ACTIVE')
+        .executeTakeFirst();
+      if (Number(closed.numUpdatedRows ?? 0) === 0) return false;
+
+      await trx
+        .updateTable('spot_assignment')
+        .set({
+          state: 'EXPIRED',
+          benefit_ended_at: at,
+          counts_as_served: true,
+          termination_reason: 'EXPIRED',
+        })
+        .where('cycle_id', '=', cycleId)
+        .where('state', '=', 'ACTIVE')
+        .execute();
+
+      return true;
+    });
+  }
 }
 
 export class KyselyRegistrationRepository implements RegistrationRepository {

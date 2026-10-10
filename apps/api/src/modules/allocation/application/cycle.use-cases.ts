@@ -137,6 +137,37 @@ export class CycleUseCases {
     return ok(cycle);
   }
 
+  /**
+   * Ends the period that is in effect.
+   *
+   * The administrator needs this because a draw is refused while an allocation is in
+   * force - see drawBlocker - and without a way to end one early the next draw would
+   * have to wait for `ends_on` and the sweeper. Ending a period is also a real operation
+   * in its own right: the building changes the arrangement before the quarter is out.
+   *
+   * It is not a transition anyone can make from anywhere: ACTIVE is the only state this
+   * means anything from, which is what CYCLE_TRANSITIONS already says, and the repository
+   * repeats the condition in its WHERE so two callers at once cannot both believe they
+   * closed it.
+   */
+  async close(cycleId: string): Promise<Result<CycleRecord>> {
+    const existing = await this.cycles.findById(cycleId);
+    if (!existing) return fail('NOT_FOUND', 'No such period.');
+    if (!canTransitionCycle(existing.state, 'CLOSED')) {
+      return fail(
+        'INVALID_CYCLE_STATE',
+        `Only a period in effect can be closed; this one is ${existing.state}.`,
+      );
+    }
+
+    const closed = await this.cycles.closeNow(cycleId, this.clock.now());
+    if (!closed) return fail('INVALID_CYCLE_STATE', 'This period is no longer in effect.');
+
+    await this.cache.invalidate('dashboard:').catch(() => undefined);
+    const after = await this.cycles.findById(cycleId);
+    return after ? ok(after) : fail('NOT_FOUND', 'No such period.');
+  }
+
   async guardedTransition(cycleId: string, to: CycleRecord['state']): Promise<Result<CycleRecord>> {
     const existing = (await this.cycles.list()).find((c) => c.id === cycleId);
     if (!existing) return fail('NOT_FOUND', 'Cycle not found.');

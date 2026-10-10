@@ -151,6 +151,11 @@ export interface AllocationRepository {
   markRunCompletedEmpty(runId: string, events: readonly DomainEvent[]): Promise<void>;
 
   countActiveSpots(): Promise<number>;
+  /**
+   * The period whose allocation is in force, when there is one, excluding the period
+   * named. Null when nothing is in effect.
+   */
+  findPeriodInEffect(exceptCycleId: string): Promise<{ id: string; label: string } | null>;
 
   /** Sweeper: runs stuck in RUNNING past the timeout are failed and the lock freed (section 12). */
   failStaleRuns(olderThan: Date): Promise<number>;
@@ -199,6 +204,11 @@ export interface CycleRepository {
   consequences(cycleId: string): Promise<{ hasRun: boolean; assignments: number }>;
   /** Hard delete, and deliberately so: only ever reached for a period with no history. */
   remove(cycleId: string): Promise<boolean>;
+  /**
+   * Ends a period in effect now, expiring the assignments it handed out. The sweeper's
+   * job done on request, with the benefit ending at `at` rather than at valid_until.
+   */
+  closeNow(cycleId: string, at: Date): Promise<boolean>;
 }
 
 export interface AssignmentRepository {

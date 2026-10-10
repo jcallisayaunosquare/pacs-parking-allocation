@@ -228,6 +228,17 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
                     Close registration
                   </button>
                 }
+                @case ('ACTIVE') {
+                  <!--
+                    Ending the arrangement this period produced, which is a different act
+                    from closing registration and is why the label says "period". It is
+                    also what lets the next draw run, since one is refused while an
+                    allocation is in force.
+                  -->
+                  <button mat-menu-item type="button" (click)="closePeriod(c)">
+                    Close period
+                  </button>
+                }
               }
               <button mat-menu-item type="button" (click)="rename(c)">Rename</button>
               <button mat-menu-item type="button" class="danger" (click)="remove(c)">
@@ -437,6 +448,27 @@ export default class CyclesPage {
       danger: true,
     });
     if (ok) await this.facade.remove(c.id);
+  }
+
+  /**
+   * Ends the period in effect.
+   *
+   * Confirmed, because it takes the bays back from the residents holding them: the
+   * assignments expire, and rule C records the benefit as having ended now rather than
+   * at the period's end date. It is not destructive of the record - the history of the
+   * draw stays - which is why it is not marked danger.
+   */
+  async closePeriod(c: Cycle): Promise<void> {
+    const ok = await this.confirm.ask({
+      title: `Close ${c.label}?`,
+      body:
+        'The residents holding bays in this period stop holding them, and their waiting ' +
+        'time starts again from now. The draw and its history are kept. This is what ' +
+        'lets the next period be drawn.',
+      confirmLabel: 'Close it',
+      cancelLabel: 'Leave it open',
+    });
+    if (ok) await this.facade.closePeriod(c.id);
   }
 
   async runDraw(c: Cycle): Promise<void> {

@@ -1326,6 +1326,33 @@ on('POST', '/cycles/{id}/close-registration', (_q, _b, p, params) => {
   return ok(c);
 });
 
+/*
+ * Ending the period in effect. Mirrors the real route rather than approximating it,
+ * because the stub is what the screens are built against: a Close period that works here
+ * and 404s on the deployed API would be found by a person rather than by a test.
+ */
+on('POST', '/cycles/{id}/close', (_q, _b, p, params) => {
+  const bad = needAdmin(p);
+  if (bad) return bad;
+  const c = cycles.find((x) => x.id === params.id);
+  if (!c) return err(404, 'NOT_FOUND', 'No such period');
+  if (c.state !== 'ACTIVE')
+    return err(409, 'ILLEGAL_TRANSITION', `Only a period in effect can be closed; this is ${c.state}`);
+  c.state = 'CLOSED';
+  /*
+   * The stub keeps one assignment per resident, keyed by resident and with no cycle on
+   * it, because it only ever has one period in effect. Closing that period ends them
+   * all, and the register has to forget the bay too - currentSpotCode is what the screens
+   * read, and a resident still showing a bay in a closed period is the inconsistency this
+   * whole rule exists to prevent.
+   */
+  for (const a of assignments.values()) {
+    if (a.state === 'ACTIVE') a.state = 'EXPIRED';
+  }
+  for (const r of residents) r.currentSpotCode = null;
+  return ok(c);
+});
+
 on('POST', '/cycles/{id}/runs', (_q, _b, p, params) => {
   const bad = needAdmin(p);
   if (bad) return bad;
