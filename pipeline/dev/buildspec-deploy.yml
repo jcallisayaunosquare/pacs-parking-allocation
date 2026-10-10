@@ -26,6 +26,13 @@ phases:
       - corepack enable
       - corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
+  pre_build:
+    commands:
+      # Installed here rather than carried from the build stage: see the note on that
+      # stage's artifacts. The lockfile is the same one the tests ran against, so this
+      # resolves the identical tree - it is a reinstall, not a different build.
+      - pnpm install --frozen-lockfile
+
   build:
     commands:
       - echo "Deploying the backend stack"

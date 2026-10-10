@@ -38,13 +38,21 @@ phases:
       - cd apps/web && pnpm build --configuration production && cd "${CODEBUILD_SRC_DIR}"
 
 artifacts:
-  # The whole tree, not just dist.
+  # The source tree and the built frontend - but NOT node_modules.
   #
-  # The deploy stage runs `serverless deploy`, which packages the backend from source
-  # and needs node_modules, serverless.yml and the api sources. Carrying them forward
-  # means the deployed artefact is built from the same checkout that passed the tests
-  # above, rather than from a second install that could resolve differently.
+  # pnpm builds node_modules out of symlinks into a content-addressed store, and those
+  # do not survive being zipped into an artifact and unzipped in another container:
+  # the deploy stage found serverless' bin pointing at a run.js that was no longer
+  # there. Serverless v4 compounds it by downloading its real binary in a postinstall,
+  # which a copied tree never runs.
+  #
+  # So the deploy stage installs from the same lockfile instead. It costs about thirty
+  # seconds and it is reproducible, which a half-copied dependency tree is not.
   files:
     - '**/*'
+  exclude-paths:
+    - 'node_modules/**/*'
+    - 'apps/*/node_modules/**/*'
+    - 'packages/*/node_modules/**/*'
   name: pacs-build
 

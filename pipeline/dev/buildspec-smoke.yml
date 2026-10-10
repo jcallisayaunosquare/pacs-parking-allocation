@@ -28,6 +28,12 @@ phases:
       - corepack enable
       - corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
+  pre_build:
+    commands:
+      # Same reason as the deploy stage: the artifact carries no node_modules, and
+      # these suites import the AWS SDK and the Cognito client.
+      - pnpm install --frozen-lockfile
+
   build:
     commands:
       - cd apps/api
