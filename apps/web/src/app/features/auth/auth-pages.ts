@@ -712,7 +712,7 @@ export class CallbackPage implements OnInit {
  * A signed-in account with no resident record.
  *
  * This used to land on the forbidden page, which told someone who had just created an
- * account and verified their email that they had no access ? technically true and
+ * account and verified their email that they had no access — technically true and
  * completely unhelpful. The state is now named for what it is: the account works, it
  * is simply not linked to a resident yet, which happens when an administrator adds
  * them (FR-10) and the provisioning event comes back round.
@@ -825,7 +825,7 @@ export class PendingPage {
   }
 }
 
-/** A 403 is a product state, not a crash (?17). */
+/** A 403 is a product state, not a crash (§17). */
 @Component({
   selector: 'app-forbidden-page',
   changeDetection: ChangeDetectionStrategy.OnPush,

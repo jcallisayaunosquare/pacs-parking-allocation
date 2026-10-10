@@ -143,6 +143,17 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
     >
       <h2 class="sec__h">All periods</h2>
       <table mat-table [dataSource]="facade.allCycles()">
+        <!--
+          The row number. Not paged, so the index is the number, and hidden from screen
+          readers because the period's label is already the name of the row.
+        -->
+        <ng-container matColumnDef="num">
+          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let c; let i = index" class="num" aria-hidden="true">
+            {{ i + 1 }}
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="label">
           <th mat-header-cell *matHeaderCellDef>Period</th>
           <td mat-cell *matCellDef="let c" data-label="Period" class="code stencil">
@@ -245,7 +256,8 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
         max-width: 88rem;
         margin: 0 auto;
         padding: var(--sp-6) var(--sp-5) var(--sp-8);
-        /* A register needs columns, not a reading measure. */        display: flex;
+        /* A register needs columns, not a reading measure. */
+        display: flex;
         flex-direction: column;
         gap: var(--sp-6);
       }
@@ -356,6 +368,15 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
       .dim {
         color: var(--steel-faint);
       }
+      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
+         width of each digit. */
+      .num {
+        width: 3rem;
+        color: var(--steel-faint);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        padding-right: var(--sp-2);
+      }
 
       table {
         width: 100%;
@@ -381,7 +402,7 @@ export default class CyclesPage {
 
   readonly assignments = signal<RunAssignment[]>([]);
 
-  readonly columns = ['label', 'status', 'quarter', 'registration', 'actions'];
+  readonly columns = ['num', 'label', 'status', 'quarter', 'registration', 'actions'];
   readonly assignmentColumns = ['resident', 'bay'];
 
   openCreate(): void {

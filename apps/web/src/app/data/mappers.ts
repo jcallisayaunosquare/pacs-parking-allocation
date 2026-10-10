@@ -83,6 +83,7 @@ export const toResident = (d: ResidentDto): Resident => ({
   isEligible: d.isEligible,
   ineligibleReason: d.ineligibleReason,
   needsAccessibleSpot: d.needsAccessibleSpot,
+  isAdmin: d.isAdmin ?? false,
   externalSubject: d.externalSubject,
   currentSpotCode: d.currentSpotCode ?? null,
 });

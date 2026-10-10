@@ -75,6 +75,16 @@ export class ResidentsFacade {
   readonly error = this._error.asReadonly();
 
   readonly pageNumber = computed(() => this.trail().length + 1);
+  /**
+   * How many rows came before this page, so the row numbers in the table keep counting
+   * across pages rather than restarting at 1 on every one.
+   *
+   * The trail already records one entry per page left behind, and every page but the last
+   * is full, so this is exact for the pages a reader can be on. It is a position in the
+   * list, not an identifier - sorting or filtering renumbers the rows, which is what a
+   * reader of a sorted list expects.
+   */
+  readonly rowOffset = computed(() => this.trail().length * this.limit());
   readonly hasPrevious = computed(() => this.trail().length > 0);
   readonly hasNext = computed(() => this.nextCursor() !== null);
 

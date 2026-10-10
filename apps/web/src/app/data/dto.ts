@@ -17,6 +17,13 @@ export interface ResidentDto {
   isEligible: boolean;
   ineligibleReason: string | null;
   needsAccessibleSpot: boolean;
+  /**
+   * Separation of duties: an administrator operates the raffle, so the account is out of
+   * the draw and out of the fairness figures. Optional, and absence maps to false - the
+   * safe direction, since it only ever shows one row as an ordinary resident rather than
+   * hiding a resident as an administrator.
+   */
+  isAdmin?: boolean;
   externalSubject: string | null;
   currentSpotCode?: string | null;
   /** Sent by `GET /residents/{id}` only; the register page does not ask for it. */
