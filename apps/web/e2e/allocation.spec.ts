@@ -30,7 +30,10 @@ test.describe('the administrator surfaces', () => {
 
   test('periods show a state, which is what the draw depends on', async ({ page }) => {
     await page.getByRole('link', { name: 'Periods' }).click();
-    await expect(page.getByRole('heading', { name: 'Periods' })).toBeVisible();
+    // `exact`, because the accessible name is matched as a substring by default and this
+    // screen has two headings that contain the word: the h1 "Periods" and the h2 "All
+    // periods" over the table.
+    await expect(page.getByRole('heading', { name: 'Periods', exact: true })).toBeVisible();
     /*
      * The state machine is the whole screen: a period that shows no state is a period
      * nobody can act on. The stub seeds four periods around today, deliberately
