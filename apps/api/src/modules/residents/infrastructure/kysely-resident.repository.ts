@@ -334,4 +334,66 @@ export class KyselyResidentRepository implements ResidentRepository {
       .executeTakeFirst();
     return r !== undefined;
   }
+
+  /**
+   * Everything that would make this resident part of the record, counted.
+   *
+   * Five separate counts rather than one join: each is a different reason, and the
+   * refusal says which, so somebody reading it knows what they are being told. The
+   * assignment count is every assignment, not only the active one - a released bay is
+   * still a bay this person was given.
+   */
+  async consequences(id: string): Promise<{
+    registrations: number;
+    assignments: number;
+    historyRows: number;
+    changedConfig: number;
+    reviewedPlateReads: number;
+  }> {
+    const countOf = async (
+      table: 'raffle_registration' | 'spot_assignment' | 'allocation_history',
+      column: 'resident_id',
+    ): Promise<number> => {
+      const r = await this.db
+        .selectFrom(table)
+        .select(({ fn }) => fn.countAll<string>().as('n'))
+        .where(column, '=', id)
+        .executeTakeFirst();
+      return Number(r?.n ?? 0);
+    };
+
+    const config = await this.db
+      .selectFrom('allocation_config')
+      .select(({ fn }) => fn.countAll<string>().as('n'))
+      .where('changed_by', '=', id)
+      .executeTakeFirst();
+    const reviewed = await this.db
+      .selectFrom('plate_read')
+      .select(({ fn }) => fn.countAll<string>().as('n'))
+      .where('reviewed_by', '=', id)
+      .executeTakeFirst();
+
+    return {
+      registrations: await countOf('raffle_registration', 'resident_id'),
+      assignments: await countOf('spot_assignment', 'resident_id'),
+      historyRows: await countOf('allocation_history', 'resident_id'),
+      changedConfig: Number(config?.n ?? 0),
+      reviewedPlateReads: Number(reviewed?.n ?? 0),
+    };
+  }
+
+  /**
+   * Deletes the row, and lets the schema deal with what points at it.
+   *
+   * Vehicles cascade, because a car is only ever a fact about its owner. The columns
+   * that merely say who did something - plate_config.changed_by, plate_read.reviewed_by,
+   * access_event.resident_id - are ON DELETE SET NULL and are emptied by Postgres.
+   * Nothing here is RESTRICT, because consequences() has already established that none
+   * of those rows exist; if one arrived in between, the delete raises and the caller
+   * falls back to hiding the row.
+   */
+  async hardDelete(id: string): Promise<boolean> {
+    const r = await this.db.deleteFrom('resident').where('id', '=', id).executeTakeFirst();
+    return Number(r.numDeletedRows ?? 0) > 0;
+  }
 }

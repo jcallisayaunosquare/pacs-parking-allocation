@@ -569,12 +569,23 @@ async function deleteProvisionedUser(cognito, userPoolId, email, waitMs = 12_000
 
 async function tidyUp(cognito, userPoolId) {
   const url = process.env.DATABASE_URL;
+  /*
+   * What main() could not take away through the API, and so may still be a row.
+   *
+   * The residents are not in this list any more. DELETE /residents deletes the row when
+   * nothing in the record names the resident, and hides it when something does - and a
+   * resident the suite just made has never registered and never held a bay, so the row
+   * is gone. Naming them here as "left in place" was telling the reader to go and clear
+   * something that is not there.
+   *
+   * The cycles and bays are listed only when their own DELETE was refused, which the
+   * teardown in main() checks; a successful one takes them off these lists.
+   */
   const left = [
     ...madeHere.cycleLabels.map((l) => `cycle ${l}`),
     ...madeHere.spotCodes.map((c) => `bay ${c}`),
-    ...madeHere.residentEmails.map((e) => `resident ${e}`),
   ];
-  if (left.length === 0) return;
+  if (left.length === 0 && madeHere.residentEmails.length === 0) return;
 
   /*
    * The Cognito users go first, and unconditionally.
@@ -601,7 +612,11 @@ async function tidyUp(cognito, userPoolId) {
   }
 
   if (!url) {
-    console.log(`\nDATABASE_URL is not set, so these rows were left in place:\n  ${left.join('\n  ')}`);
+    if (left.length > 0) {
+      console.log(`\nDATABASE_URL is not set, so these rows were left in place:\n  ${left.join('\n  ')}`);
+    } else {
+      console.log('\nnothing left behind: everything this run created was removed through the API');
+    }
     return;
   }
 

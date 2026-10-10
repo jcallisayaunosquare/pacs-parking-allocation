@@ -722,7 +722,13 @@ export function buildRoutes(app: AppContainer): Route[] {
       path: '/residents/{id}',
       roles: ['ADMIN'],
       handler: async (ctx) => {
-        const r = await app.residents.deactivate(ctx.params.id!);
+        /*
+         * One request, two outcomes: the row is deleted when nothing in the record names
+         * this resident, and hidden when something does. Both are 204 - the caller asked
+         * for the person to come off the register and that is what happened, and a
+         * resident who was deleted has no representation to return.
+         */
+        const r = await app.residents.remove(ctx.params.id!);
         return r.ok ? noContent(ctx.traceId) : errorResponse(r.error, ctx.traceId);
       },
     },
