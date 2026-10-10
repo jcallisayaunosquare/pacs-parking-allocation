@@ -110,7 +110,13 @@ try {
     await client.query('delete from allocation_history where cycle_id = $1', [c.id]);
     await client.query('delete from waitlist_entry where cycle_id = $1', [c.id]);
     await client.query('delete from spot_assignment where cycle_id = $1', [c.id]);
-    await client.query('delete from cycle_registration where cycle_id = $1', [c.id]);
+    await client.query('delete from raffle_registration where cycle_id = $1', [c.id]);
+    // The candidate rows hold the draw's inputs per run, and their FK to the run is
+    // RESTRICT, so they go before the runs do.
+    await client.query(
+      'delete from allocation_run_candidate where run_id in (select id from allocation_run where cycle_id = $1)',
+      [c.id],
+    );
     await client.query('delete from allocation_run where cycle_id = $1', [c.id]);
     await client.query('delete from allocation_cycle where id = $1', [c.id]);
   }
@@ -120,7 +126,15 @@ try {
     await client.query('delete from allocation_history where resident_id = $1', [r.id]);
     await client.query('delete from waitlist_entry where resident_id = $1', [r.id]);
     await client.query('delete from spot_assignment where resident_id = $1', [r.id]);
-    await client.query('delete from cycle_registration where resident_id = $1', [r.id]);
+    await client.query('delete from raffle_registration where resident_id = $1', [r.id]);
+    await client.query('delete from allocation_run_candidate where resident_id = $1', [r.id]);
+    // These three columns say who changed a setting or reviewed a read. The FK on
+    // allocation_config.changed_by has no ON DELETE clause, so it is NO ACTION and would
+    // refuse the delete outright; the other two are SET NULL already, and are cleared
+    // here only so the intent is in one place.
+    await client.query('update allocation_config set changed_by = null where changed_by = $1', [r.id]);
+    await client.query('update plate_config set changed_by = null where changed_by = $1', [r.id]);
+    await client.query('update plate_read set reviewed_by = null where reviewed_by = $1', [r.id]);
     await client.query('delete from resident where id = $1', [r.id]);
   }
 
