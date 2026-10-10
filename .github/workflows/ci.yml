@@ -59,7 +59,7 @@ jobs:
       - run: pnpm -r typecheck
 
   test-api:
-    name: Unit tests · API
+    name: Unit tests API
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
       - run: pnpm --filter @pacs/api test
 
   test-web:
-    name: Unit tests · Web
+    name: Unit tests Web
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
