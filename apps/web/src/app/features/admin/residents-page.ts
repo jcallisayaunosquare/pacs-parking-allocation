@@ -434,11 +434,14 @@ export default class ResidentsPage {
   private readonly confirm = inject(ConfirmService);
 
   /**
-   * The rows the table draws: the page the facade holds, without the administrators.
+   * The rows the table draws.
    *
-   * This is the register of the people the allocation is for, and an administrator
-   * account never enters it - it operates the raffle. A row with a pill explaining that
-   * was still a row, in the middle of the people waiting for a bay.
+   * GET /residents already leaves administrators out - it has to, because the page limit
+   * is applied in that query and filtering afterwards would hand this table fourteen
+   * rows and call it a page of fifteen. This filter is the second line of the same
+   * defence, and costs a pass over fifteen rows: an account that arrives flagged, from
+   * an older deployment or a caller that asked differently, still does not get drawn
+   * among the people waiting for a bay.
    */
   readonly rows = computed(() => this.facade.residents().filter((r) => !r.isAdmin));
 
