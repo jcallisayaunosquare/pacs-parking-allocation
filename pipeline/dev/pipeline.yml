@@ -183,10 +183,17 @@ Resources:
         Type: CODEPIPELINE
         BuildSpec: pipeline/dev/buildspec-build.yml
       Environment:
-        # ARM is cheaper per minute than x86 and the work here is node, which does not
-        # care. The free tier covers arm1.small as well.
+        # ARM because the work is node, which does not care, and ARM is cheaper per
+        # minute than x86.
+        #
+        # MEDIUM and not SMALL, which costs the free tier but is not optional: the
+        # small container has 3 GB and `pnpm install` on this workspace resolves 598
+        # packages across Angular, Playwright and the AWS SDK. On SMALL the container
+        # was killed mid-install with exit 236 - no error message, just a log that
+        # stops. Paying a tenth of a cent a minute beats a pipeline that fails for a
+        # reason nobody can read.
         Type: ARM_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
+        ComputeType: BUILD_GENERAL1_MEDIUM
         Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
       Cache:
         Type: LOCAL
@@ -204,7 +211,7 @@ Resources:
         BuildSpec: pipeline/dev/buildspec-deploy.yml
       Environment:
         Type: ARM_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
+        ComputeType: BUILD_GENERAL1_MEDIUM
         Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
         EnvironmentVariables:
           - { Name: WEB_BUCKET, Value: !Ref WebBucketName }
