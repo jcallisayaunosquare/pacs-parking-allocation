@@ -137,7 +137,20 @@ export class KyselyResidentRepository implements ResidentRepository {
     const column = SORT_COLUMNS[field];
     const after = dir === 'asc';
 
-    let q = this.db.selectFrom('resident').selectAll().where('deactivated_at', 'is', null);
+    /*
+     * Administrators are not in the register, and they are excluded here rather than in
+     * the client for a reason the screen shows: the limit is applied by this query. Drop
+     * the rows after the page is built and a page of fifteen arrives with fourteen on it,
+     * the row numbers skip at the boundary, and "15 per page" stops being true.
+     *
+     * The account stays reachable by id and by e-mail, and scripts/set-admin-flag.mjs
+     * clears the flag, so a row flagged by mistake is not lost behind this.
+     */
+    let q = this.db
+      .selectFrom('resident')
+      .selectAll()
+      .where('deactivated_at', 'is', null)
+      .where('is_admin', '=', false);
 
     if (input.unit) q = q.where('unit_number', '=', input.unit);
     if (input.eligible !== undefined) q = q.where('is_eligible', '=', input.eligible);

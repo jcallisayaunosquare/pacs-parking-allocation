@@ -2,6 +2,7 @@ import { fail } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock } from '../../../shared/clock';
 import type { SpotType } from '../../allocation/domain/types';
+import { spotRemovalBlocker } from '../domain/spot';
 
 export interface ParkingSpot {
   readonly id: string;
@@ -24,6 +25,8 @@ export interface SpotRepository {
     deactivatedAt: Date | null,
   ): Promise<ParkingSpot | null>;
   isCurrentlyAssigned(id: string): Promise<boolean>;
+  consequences(id: string): Promise<{ assignments: number; historyRows: number }>;
+  remove(id: string): Promise<boolean>;
 }
 
 export class SpotUseCases {
@@ -78,5 +81,26 @@ export class SpotUseCases {
     const deactivatedAt = patch.isActive === false ? this.clock.now() : null;
     const updated = await this.repo.update(id, patch, deactivatedAt);
     return updated ? ok(updated) : fail('NOT_FOUND', 'Parking spot not found.');
+  }
+
+  /**
+   * Removes a bay that has never been given to anybody.
+   *
+   * The counterpart of removing a period that never drew, and refused on the same
+   * grounds: a bay the allocation record names is part of that record. Retiring stays
+   * the answer for everything else, which is why the refusal says so.
+   *
+   * SPOT_IN_USE rather than a generic conflict, because what refuses this is the bay's
+   * own history - which is exactly what that code means (409).
+   */
+  async remove(id: string): Promise<Result<{ removed: true }>> {
+    const existing = await this.repo.findById(id);
+    if (!existing) return fail('NOT_FOUND', 'Parking spot not found.');
+
+    const blocker = spotRemovalBlocker(await this.repo.consequences(id));
+    if (blocker) return fail('SPOT_IN_USE', blocker);
+
+    const removed = await this.repo.remove(id);
+    return removed ? ok({ removed: true } as const) : fail('NOT_FOUND', 'Parking spot not found.');
   }
 }

@@ -42,7 +42,21 @@ const check = (label, pass, extra = '') => {
  * ended up pointing at a cycle invented by a test. A suite that dirties the system it
  * checks is worse than no suite.
  */
-const madeHere = { cycleLabels: [], spotCodes: [], residentEmails: [] };
+/*
+ * What this run created, by the two names each thing has: the label or code a person
+ * reads, and the id the API needs to undo it. The ids are what make the teardown below
+ * possible without a database.
+ */
+const madeHere = {
+  cycleLabels: [],
+  spotCodes: [],
+  residentEmails: [],
+  cycleIds: [],
+  spotIds: [],
+  residentIds: [],
+  /** Set once a draw has been committed, which makes the period undeletable by design. */
+  cycleHasRun: false,
+};
 
 async function outputs() {
   const cfn = new CloudFormationClient({ region: REGION });
@@ -212,6 +226,7 @@ async function main() {
     `status=${created.status}`);
   const residentId = created.json?.id;
   if (created.json?.email) madeHere.residentEmails.push(created.json.email);
+  if (created.json?.id) madeHere.residentIds.push(created.json.id);
 
   const dupe = await call('POST', '/residents', {
     body: { email: created.json?.email, fullName: 'Dupe', unitNumber: '998' },
@@ -296,6 +311,7 @@ async function main() {
   const spot = await call('POST', '/spots', { body: { spotCode, level: 'B9', type: 'EV' } });
   check('POST /spots creates a spot', spot.status === 201 && spot.json?.spotCode === spotCode);
   if (spot.status === 201) madeHere.spotCodes.push(spotCode);
+  if (spot.json?.id) madeHere.spotIds.push(spot.json.id);
 
   const badType = await call('POST', '/spots', {
     body: { spotCode: `${spotCode}X`, level: 'B9', type: 'HELICOPTER' },
@@ -321,6 +337,7 @@ async function main() {
     cycle.status === 201 && cycle.json?.state === 'DRAFT', `status=${cycle.status}`);
   const cycleId = cycle.json?.id;
   if (cycle.json?.label) madeHere.cycleLabels.push(cycle.json.label);
+  if (cycle.json?.id) madeHere.cycleIds.push(cycle.json.id);
 
   const badDates = await call('POST', '/cycles', {
     body: {
@@ -354,24 +371,63 @@ async function main() {
     check('a run without Idempotency-Key is 400', noKey.status === 400 &&
       noKey.json?.details?.[0]?.field === 'Idempotency-Key');
 
-    const key = randomUUID();
-    const run = await call('POST', `/cycles/${cycleId}/runs`, {
-      headers: { 'idempotency-key': key },
-    });
-    // Nobody registered for this brand-new cycle, so the §12 empty path is the
-    // expected outcome — and it must not touch anyone's fairness score.
-    check('a run with no entrants ends COMPLETED_EMPTY',
-      run.status === 200 && run.json?.state === 'COMPLETED_EMPTY',
-      `state=${run.json?.state}`);
+    /*
+     * Running the draw is gated on being able to undo it, and the gate is DATABASE_URL.
+     *
+     * A committed run is a record: cycleRemovalBlocker refuses to delete a period that
+     * has one, deliberately, because a past draw has to stay explainable to the resident
+     * who lost it. So a run here means the period can never be removed through the API,
+     * and in the pipeline - which has no route to the database - it stays in the register
+     * for good. One of them reached an administrator's screen as "2235-Q1, ready to draw".
+     *
+     * Where the suite can reach the database it still proves the whole thing and clears
+     * it afterwards. Where it cannot, the write path is left to the 214 unit tests, and
+     * the read paths below are pointed at a run that already exists instead - which costs
+     * nothing and still exercises the deployed stack.
+     */
+    const canUndoARun = Boolean(process.env.DATABASE_URL);
 
-    const replay = await call('POST', `/cycles/${cycleId}/runs`, {
-      headers: { 'idempotency-key': key },
-    });
-    check('replaying the idempotency key returns the same run',
-      replay.status === 200 && replay.json?.runId === run.json?.runId);
+    let runIdForAudit = null;
+    let cycleIdForReport = null;
 
-    if (run.json?.runId) {
-      const detail = await call('GET', `/runs/${run.json.runId}`);
+    if (canUndoARun) {
+      const key = randomUUID();
+      const run = await call('POST', `/cycles/${cycleId}/runs`, {
+        headers: { 'idempotency-key': key },
+      });
+      // Nobody registered for this brand-new cycle, so the §12 empty path is the
+      // expected outcome — and it must not touch anyone's fairness score.
+      check('a run with no entrants ends COMPLETED_EMPTY',
+        run.status === 200 && run.json?.state === 'COMPLETED_EMPTY',
+        `state=${run.json?.state}`);
+
+      const replay = await call('POST', `/cycles/${cycleId}/runs`, {
+        headers: { 'idempotency-key': key },
+      });
+      check('replaying the idempotency key returns the same run',
+        replay.status === 200 && replay.json?.runId === run.json?.runId);
+
+      runIdForAudit = run.json?.runId ?? null;
+      cycleIdForReport = cycleId;
+      // The period now holds a run, so the teardown below must not try to delete it.
+      madeHere.cycleHasRun = true;
+    } else {
+      console.log('\nDATABASE_URL is not set, so no draw is run: a committed run cannot be');
+      console.log('removed afterwards. The audit and report checks read an existing run.');
+      const runs = await call('GET', '/runs?limit=1');
+      check('GET /runs lists the draws already on record',
+        runs.status === 200 && Array.isArray(runs.json?.items),
+        `status=${runs.status}`);
+      const existing = runs.json?.items?.[0];
+      runIdForAudit = existing?.runId ?? null;
+      cycleIdForReport = existing?.cycleId ?? null;
+      if (!runIdForAudit) {
+        console.log('no run exists yet, so the audit and report checks are skipped');
+      }
+    }
+
+    if (runIdForAudit) {
+      const detail = await call('GET', `/runs/${runIdForAudit}`);
       /*
        * The seed is a hex string, not a number. And checking only that some seed came
        * back would pass on a run that committed to one seed and then drew with another,
@@ -386,9 +442,11 @@ async function main() {
           createHash('sha256').update(seedHex).digest('hex') === detail.json?.seedCommitmentHex);
     }
 
-    const report = await call('GET', `/reports/quarterly/${cycleId}?format=csv`);
-    check('the quarterly report serves CSV',
-      report.status === 200 && (report.contentType ?? '').includes('text/csv'));
+    if (cycleIdForReport) {
+      const report = await call('GET', `/reports/quarterly/${cycleIdForReport}?format=csv`);
+      check('the quarterly report serves CSV',
+        report.status === 200 && (report.contentType ?? '').includes('text/csv'));
+    }
   }
 
   // --------------------------------------------------------------- metrics
@@ -409,17 +467,69 @@ async function main() {
   const notARoute = await call('GET', '/no/such/route');
   check('an unknown route is 404, not a stack trace', notARoute.status === 404);
 
+  /*
+   * Teardown through the API, with the administrator's token and nothing else.
+   *
+   * This runs everywhere, the pipeline included, because it needs no database and no
+   * network route into the VPC. It is not a complete undo and does not pretend to be:
+   * the period is deleted, while DELETE /residents deactivates rather than deletes and
+   * there is no DELETE for a bay at all, so those two are taken out of the screens and
+   * their rows remain. What matters is that nothing the suite made is visible to an
+   * administrator afterwards. clean-smoke-data.mjs removes the rows from a machine the
+   * database admits.
+   */
+  for (const id of madeHere.cycleIds) {
+    if (madeHere.cycleHasRun) {
+      console.log(`\nperiod ${id} holds a committed draw, so it is kept - as the rule intends`);
+      continue;
+    }
+    const gone = await call('DELETE', `/cycles/${id}`);
+    check('DELETE /cycles/{id} removes a period that never drew', gone.status === 204 || gone.status === 200,
+      `status=${gone.status}`);
+    if (gone.status === 204 || gone.status === 200) {
+      madeHere.cycleIds = madeHere.cycleIds.filter((x) => x !== id);
+      madeHere.cycleLabels = [];
+    }
+  }
+
+  for (const id of madeHere.residentIds) {
+    const gone = await call('DELETE', `/residents/${id}`);
+    check('DELETE /residents/{id} takes the resident out of the register',
+      gone.status === 204 || gone.status === 200, `status=${gone.status}`);
+  }
+
+  /*
+   * Deleted, not retired. Retiring was what this used to do, and it was not enough: the
+   * inventory screen lists inactive bays by default, so every run added a row an
+   * administrator could see. These bays were never assigned - no draw ran on the period
+   * they were made for - so the removal rule allows it.
+   *
+   * The codes and the ids are pushed together, so the index is what pairs them: a bay
+   * that is gone must not be named in the list of rows left behind.
+   */
+  const spotsStillThere = [];
+  for (const [i, id] of madeHere.spotIds.entries()) {
+    const gone = await call('DELETE', `/spots/${id}`);
+    check('DELETE /spots/{id} removes a bay that was never assigned',
+      gone.status === 204 || gone.status === 200, `status=${gone.status}`);
+    if (!(gone.status === 204 || gone.status === 200)) spotsStillThere.push(madeHere.spotCodes[i]);
+  }
+  madeHere.spotCodes = spotsStillThere;
+
   await finish(cognito, userPoolId, email);
 }
 
 /**
- * Removes what this run created. The API has no delete endpoints for cycles, bays or
- * residents — deliberately, since §11 puts ON DELETE RESTRICT on anything the audit
- * trail references — so cleanup reaches past the API, and retires rather than deletes
- * whatever a draw has already touched.
+ * Removes the rows the API teardown in main() cannot: a deactivated resident, a retired
+ * bay, and a period that a draw has committed to.
  *
- * Needs DATABASE_URL. Without it the run still passes, but says what it left behind
- * instead of leaving it to be discovered in the admin screens later.
+ * It reaches past the API because §11 puts ON DELETE RESTRICT on anything the audit trail
+ * references, and the application's own role is denied DELETE on allocation_history on
+ * purpose. This connects as the owner instead, which is why it is a script run by a
+ * person rather than a step in the pipeline.
+ *
+ * Needs DATABASE_URL. Without it the run still passes - main() has already taken
+ * everything out of the administrator's screens - and this says which rows are left.
  */
 
 /**
@@ -434,10 +544,24 @@ async function deleteProvisionedUser(cognito, userPoolId, email, waitMs = 12_000
   for (;;) {
     try {
       await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }));
-      return true;
+      return 'removed';
     } catch (e) {
-      // Not provisioned yet: wait and look again, until the budget runs out.
-      if (e?.name !== 'UserNotFoundException' || Date.now() > deadline) return false;
+      if (e?.name !== 'UserNotFoundException') return 'failed';
+      /*
+       * No account by that address. Two different situations, and the difference matters
+       * to whoever reads the output:
+       *
+       * Within the window it means the stream has not got there yet, so wait and look
+       * again. After it, the likeliest explanation is that no account was ever made -
+       * main() deactivates the resident before this runs, and integrations declines to
+       * provision an account for a resident who is already gone. Reporting that as a
+       * failure sends someone looking for an orphan that does not exist.
+       *
+       * It is not a certainty, which is why clean-smoke-data.mjs sweeps the pool by
+       * pattern as well: an account provisioned after this gives up would otherwise have
+       * nobody left to remove it.
+       */
+      if (Date.now() > deadline) return 'absent';
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -461,14 +585,19 @@ async function tidyUp(cognito, userPoolId) {
    * It used to sit after the SQL, behind the `return` below, so every pipeline run left
    * its users in the pool: nineteen of them had piled up by the time anyone looked.
    */
-  const usersLeft = [];
+  const outcome = { removed: 0, absent: 0, failed: [] };
   for (const mail of madeHere.residentEmails) {
-    if (!(await deleteProvisionedUser(cognito, userPoolId, mail))) usersLeft.push(mail);
+    const r = await deleteProvisionedUser(cognito, userPoolId, mail);
+    if (r === 'removed') outcome.removed++;
+    else if (r === 'absent') outcome.absent++;
+    else outcome.failed.push(mail);
   }
-  if (usersLeft.length > 0) {
-    console.log(`\ncould not remove ${usersLeft.length} Cognito user(s): ${usersLeft.join(', ')}`);
-  } else if (madeHere.residentEmails.length > 0) {
-    console.log(`\nremoved ${madeHere.residentEmails.length} Cognito user(s) created by this run`);
+  if (outcome.removed > 0) console.log(`\nremoved ${outcome.removed} Cognito account(s)`);
+  if (outcome.absent > 0) {
+    console.log(`${outcome.absent} resident(s) had no account to remove`);
+  }
+  if (outcome.failed.length > 0) {
+    console.log(`could not remove ${outcome.failed.length}: ${outcome.failed.join(', ')}`);
   }
 
   if (!url) {

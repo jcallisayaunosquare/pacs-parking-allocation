@@ -1065,6 +1065,27 @@ export function buildRoutes(app: AppContainer): Route[] {
         return respond(await app.spots.update(ctx.params.id!, b.data), ctx);
       },
     },
+    /*
+     * Removing a bay, as against retiring one.
+     *
+     * Allowed only for a bay that has never been assigned and that the allocation
+     * history does not name - the same line DELETE /cycles/{id} draws for a period. For
+     * anything else the refusal says to retire it, which is what PATCH above does and
+     * what an administrator wants in almost every real case.
+     *
+     * It exists because a bay that was created by mistake, or by a test, otherwise sits
+     * on the inventory screen for ever: retiring hides a bay from the active filter but
+     * the register lists inactive bays by default.
+     */
+    {
+      method: 'DELETE',
+      path: '/spots/{id}',
+      roles: ['ADMIN'],
+      handler: async (ctx) => {
+        const r = await app.spots.remove(ctx.params.id!);
+        return r.ok ? noContent(ctx.traceId) : errorResponse(r.error, ctx.traceId);
+      },
+    },
 
     // ----------------------------------------------------- configuration (A)
     {

@@ -110,7 +110,7 @@ import {
     >
       <table
         mat-table
-        [dataSource]="facade.residents()"
+        [dataSource]="rows()"
         matSort
         matSortDisableClear
         [matSortActive]="facade.sort()"
@@ -150,15 +150,12 @@ import {
           <th mat-header-cell *matHeaderCellDef mat-sort-header>Eligibility</th>
           <td mat-cell *matCellDef="let r" data-label="Eligibility">
             <!--
-              The administrator is checked before eligibility, not after: the account can
-              carry is_eligible true and still never enter a draw, so showing "Eligible"
-              on the row of the person who operates the draw states the opposite of what
-              the rule does. Separation of duties is the reason, and the pill says so.
+              No case for an administrator here: GET /residents does not return them.
+              This is the register of the people the allocation is for, and the account
+              that operates the raffle is not one of them - a row with a pill explaining
+              that was still a row.
             -->
-            @if (r.isAdmin) {
-              <app-status-pill label="Administrator" tone="idle" />
-              <span class="note">Operates the draw, so never enters it</span>
-            } @else if (r.isEligible) {
+            @if (r.isEligible) {
               <app-status-pill label="Eligible" tone="held" />
             } @else {
               <app-status-pill label="Not eligible" tone="revoked" />
@@ -435,6 +432,18 @@ export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
   private readonly dialog = inject(MatDialog);
   private readonly confirm = inject(ConfirmService);
+
+  /**
+   * The rows the table draws.
+   *
+   * GET /residents already leaves administrators out - it has to, because the page limit
+   * is applied in that query and filtering afterwards would hand this table fourteen
+   * rows and call it a page of fifteen. This filter is the second line of the same
+   * defence, and costs a pass over fifteen rows: an account that arrives flagged, from
+   * an older deployment or a caller that asked differently, still does not get drawn
+   * among the people waiting for a bay.
+   */
+  readonly rows = computed(() => this.facade.residents().filter((r) => !r.isAdmin));
 
   readonly columns = [
     'num',
