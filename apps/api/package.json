@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "description": "PACS backend â€” Lambda + API Gateway HTTP API, Clean Architecture per module (analisis.html Â§10)",
+  "description": "PACS backend — Lambda + API Gateway HTTP API, Clean Architecture per module (analisis.html §10)",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",

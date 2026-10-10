@@ -34,6 +34,14 @@ for f in $staged; do
         echo "pre-commit: $f starts with a UTF-8 BOM. Rewrite it without one."
         fail=1
       fi
+      # The BOM's sibling, from the same cause: UTF-8 bytes read as Latin-1 and written
+      # back as UTF-8, so an em dash becomes "a-tilde euro quote" and a section sign
+      # becomes "A-circumflex section". It happened to apps/api/package.json's
+      # description, and unlike a BOM it survives in the file for anyone to read.
+      if LC_ALL=C grep -qE 'â€|Â§|Ã[¡©­³º± ]' "$f"; then
+        echo "pre-commit: $f holds doubly-encoded UTF-8 (mojibake). Restore it from git."
+        fail=1
+      fi
       ;;
   esac
 done
@@ -42,7 +50,7 @@ done
 # told about it is twenty seconds spent learning nothing.
 if [ "$fail" -ne 0 ]; then
   echo ''
-  echo 'pre-commit: refused. Rewrite those files without a BOM, or --no-verify if you mean it.'
+  echo 'pre-commit: refused on encoding. Fix the files above, or --no-verify if you mean it.'
   exit 1
 fi
 
