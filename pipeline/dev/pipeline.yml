@@ -186,18 +186,24 @@ Resources:
         # ARM because the work is node, which does not care, and ARM is cheaper per
         # minute than x86.
         #
-        # MEDIUM and not SMALL, which costs the free tier but is not optional: the
-        # small container has 3 GB and `pnpm install` on this workspace resolves 598
-        # packages across Angular, Playwright and the AWS SDK. On SMALL the container
-        # was killed mid-install with exit 236 - no error message, just a log that
-        # stops. Paying a tenth of a cent a minute beats a pipeline that fails for a
-        # reason nobody can read.
         Type: ARM_CONTAINER
-        ComputeType: BUILD_GENERAL1_MEDIUM
+        ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+      # No LOCAL_CUSTOM_CACHE here, and the reason is worth leaving behind.
+      #
+      # It was configured with the paths `node_modules/**/*` and
+      # `apps/*/node_modules/**/*`, which looks reasonable and is not: the cache does
+      # not expand globs. It created a directory named literally `apps/*/node_modules`
+      # and symlinked the source tree at it, so `pnpm install` was writing into a path
+      # that could not exist. The build died two seconds in with exit status 236 and a
+      # log that simply stops - no error, nothing to search for.
+      #
+      # pnpm is fast enough from a cold registry that caching is not worth a trap like
+      # that. LOCAL_SOURCE_CACHE is kept: it caches the git checkout, which has no
+      # globs in it.
       Cache:
         Type: LOCAL
-        Modes: [LOCAL_CUSTOM_CACHE, LOCAL_SOURCE_CACHE]
+        Modes: [LOCAL_SOURCE_CACHE]
       TimeoutInMinutes: 20
 
   DeployProject:
@@ -211,7 +217,7 @@ Resources:
         BuildSpec: pipeline/dev/buildspec-deploy.yml
       Environment:
         Type: ARM_CONTAINER
-        ComputeType: BUILD_GENERAL1_MEDIUM
+        ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
         EnvironmentVariables:
           - { Name: WEB_BUCKET, Value: !Ref WebBucketName }
