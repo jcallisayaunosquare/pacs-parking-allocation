@@ -38,6 +38,14 @@ for f in $staged; do
   esac
 done
 
+# Refused before the suites run: a BOM is a one-line fix, and waiting out the tests to be
+# told about it is twenty seconds spent learning nothing.
+if [ "$fail" -ne 0 ]; then
+  echo ''
+  echo 'pre-commit: refused. Rewrite those files without a BOM, or --no-verify if you mean it.'
+  exit 1
+fi
+
 # ------------------------------------------------------------------- the unit suites
 touches() {
   echo "$staged" | grep -qE "$1"
