@@ -452,8 +452,27 @@ async function tidyUp(cognito, userPoolId) {
   ];
   if (left.length === 0) return;
 
+  /*
+   * The Cognito users go first, and unconditionally.
+   *
+   * Deleting them needs an IAM permission and nothing else - no database, no network
+   * route into the VPC - so it works in exactly the place the rest of this cleanup
+   * cannot: CodeBuild, whose addresses the database's security group does not admit.
+   * It used to sit after the SQL, behind the `return` below, so every pipeline run left
+   * its users in the pool: nineteen of them had piled up by the time anyone looked.
+   */
+  const usersLeft = [];
+  for (const mail of madeHere.residentEmails) {
+    if (!(await deleteProvisionedUser(cognito, userPoolId, mail))) usersLeft.push(mail);
+  }
+  if (usersLeft.length > 0) {
+    console.log(`\ncould not remove ${usersLeft.length} Cognito user(s): ${usersLeft.join(', ')}`);
+  } else if (madeHere.residentEmails.length > 0) {
+    console.log(`\nremoved ${madeHere.residentEmails.length} Cognito user(s) created by this run`);
+  }
+
   if (!url) {
-    console.log(`\nDATABASE_URL is not set, so these were left in place:\n  ${left.join('\n  ')}`);
+    console.log(`\nDATABASE_URL is not set, so these rows were left in place:\n  ${left.join('\n  ')}`);
     return;
   }
 
@@ -487,14 +506,16 @@ async function tidyUp(cognito, userPoolId) {
       );
       await client.query('delete from parking_spot where spot_code = $1 and id not in (select spot_id from spot_assignment where spot_id is not null union select spot_id from allocation_history where spot_id is not null)', [code]);
     }
-    // The Cognito user too, waiting for the stream to produce it first.
-    for (const mail of madeHere.residentEmails) {
-      await deleteProvisionedUser(cognito, userPoolId, mail);
-    }
+    // The Cognito users are already gone - removed above, before this function could
+    // return early for want of a DATABASE_URL.
 
     for (const mail of madeHere.residentEmails) {
       await client.query('update resident set deactivated_at = now() where email = $1', [mail]);
-      await client.query('delete from fairness_state where resident_id in (select id from resident where email = $1) and resident_id not in (select resident_id from allocation_history)', [mail]);
+      // There is no fairness_state table to clear: migration waiting-time-fairness drops
+      // it in `up` and recreates it only in `down`, because fairness is now derived from
+      // allocation_history rather than stored. The query that used to be here threw
+      // 42P01, the catch below reported "cleanup failed", and everything after it in this
+      // loop was skipped - so the rows this was meant to tidy survived anyway.
       await client.query('delete from resident where email = $1 and id not in (select resident_id from allocation_history union select resident_id from spot_assignment)', [mail]);
     }
     console.log(`\ncleaned up ${left.length} item(s) created by this run`);

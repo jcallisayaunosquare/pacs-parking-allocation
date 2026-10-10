@@ -109,11 +109,42 @@ async function main() {
   const password = `Aa1!${randomBytes(18).toString('base64url')}`;
   let token;
 
+  /*
+   * The resident this run creates, so the account the application provisions for them
+   * can be removed again.
+   *
+   * It is not this script that creates that user: POST /residents emits ResidentCreated,
+   * and `integrations` builds the Cognito account from the stream a second or two later.
+   * So the script was deleting its own operator account and leaving the provisioned one
+   * behind on every run - nine of them had collected in the pool.
+   */
+  let provisionedResident = null;
+
   const finish = async () => {
     try {
       await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }));
     } catch {
       /* the user may never have been created */
+    }
+
+    // Waits for the stream, because a delete that runs straight away finds nothing and
+    // the account appears afterwards with no one left to remove it.
+    if (provisionedResident) {
+      const deadline = Date.now() + 12_000;
+      for (;;) {
+        try {
+          await cognito.send(
+            new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: provisionedResident }),
+          );
+          break;
+        } catch (e) {
+          if (e?.name !== 'UserNotFoundException' || Date.now() > deadline) {
+            console.log(`\ncould not remove the provisioned user ${provisionedResident}`);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
     }
     const failed = results.filter((r) => !r.pass);
     console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
@@ -186,12 +217,16 @@ async function main() {
   };
 
   // ------------------------------------------------- a resident with a registered car
+  const residentEmail = `plates-resident-${Date.now()}@example.test`;
   const resident = await call('POST', '/residents', {
-    email: `plates-resident-${Date.now()}@example.test`,
+    email: residentEmail,
     fullName: 'Plates Smoke Resident',
     unitNumber: '901',
     needsAccessibleSpot: false,
   });
+  // Recorded even if the assertion below fails: the resident may well have been created
+  // and the account provisioned, and a failed run is no reason to leave it behind.
+  if (resident.status === 201) provisionedResident = residentEmail;
   check(
     'POST /residents creates the resident who owns the car',
     resident.status === 201 && Boolean(resident.json?.id),
