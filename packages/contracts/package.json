@@ -9,6 +9,7 @@
     "lint": "redocly lint openapi.yaml"
   },
   "devDependencies": {
+    "@redocly/cli": "^2.62.1",
     "openapi-typescript": "^7.4.4"
   }
 }

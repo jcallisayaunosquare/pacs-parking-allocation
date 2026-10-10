@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src migrations --ext .ts",
+    "lint": "eslint src migrations",
     "migrate:up": "node-pg-migrate up -m migrations -j ts --tsconfig tsconfig.json",
     "migrate:down": "node-pg-migrate down -m migrations -j ts --tsconfig tsconfig.json",
     "seed": "tsx scripts/seed.ts",
@@ -42,14 +42,17 @@
   },
   "devDependencies": {
     "@aws-sdk/client-cloudformation": "^3.1146.0",
+    "@eslint/js": "^10.0.1",
     "@types/aws-lambda": "^8.10.146",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9",
     "node-pg-migrate": "^7.9.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8",
     "vitest": "^2.1.8"
   }
 }

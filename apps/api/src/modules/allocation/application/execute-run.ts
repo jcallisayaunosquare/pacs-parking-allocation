@@ -156,7 +156,6 @@ export class ExecuteRun {
       const resultHashHex = resultHash(result);
 
       const spotByResident = new Map(result.allocations.map((a) => [a.residentId, a]));
-      const waitlistByResident = new Map(result.waitlist.map((w) => [w.residentId, w.position]));
 
       // The contestable record: every key as computed, in final rank order.
       const candidateRows: RunCandidateRow[] = result.keys.map((k, i) => {

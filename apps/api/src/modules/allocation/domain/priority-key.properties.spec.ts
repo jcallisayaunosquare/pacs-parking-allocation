@@ -284,7 +284,7 @@ describe('priority key properties', () => {
       });
 
       const end = new Date(now.getTime() + periodHours * HOUR);
-      for (const [id, s] of state) s.participations += 1;
+      for (const s of state.values()) s.participations += 1;
       for (const a of out.allocations) {
         const s = state.get(a.residentId)!;
         // The allocation runs for the whole period, so the anchor moves to its end.
