@@ -228,7 +228,7 @@ export class CycleUseCases {
     if (!isRegistrationOpen(cycle.state)) {
       return fail('REGISTRATION_CLOSED', 'Registration has closed; you can no longer withdraw.');
     }
-    const done = await this.registrations.withdraw(cycleId, residentId);
+    const done = await this.registrations.withdraw(cycleId, residentId, this.clock.now());
     if (!done) return fail('NOT_FOUND', 'You are not registered for this cycle.');
     await this.cache.invalidate(`dashboard:${residentId}`).catch(() => undefined);
     return ok({ withdrawn: true } as const);
@@ -247,13 +247,7 @@ export class CycleUseCases {
     if (!current) return fail('NOT_FOUND', 'You do not currently hold a parking spot.');
 
     const at = this.clock.now();
-    const { declineGraceHours } = await this.config.current();
-    const termination = terminationPolicy({
-      reason: 'RELEASED',
-      at,
-      validFrom: current.validFrom,
-      declineGraceHours,
-    });
+    const termination = terminationPolicy({ reason: 'RELEASED', at });
 
     const { promotedResidentId } = await this.assignments.release(current.id, at, termination);
 

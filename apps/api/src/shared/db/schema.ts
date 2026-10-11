@@ -103,6 +103,8 @@ export interface RaffleRegistrationTable {
   resident_id: string;
   registered_at: Generated<Date>;
   withdrawn: Generated<boolean>;
+  /** When the resident pulled out. Counts as having held a bay; never cleared. */
+  withdrawn_at: Date | null;
 }
 
 export interface AllocationRunTable {
@@ -196,8 +198,8 @@ export interface AllocationConfigTable {
   allocation_duration_months: Generated<number>;
   early_waiting_bias_hours: Generated<number>;
   wait_quantum_minutes: Generated<number>;
-  decline_grace_hours: Generated<number>;
-  absence_reset_months: number | null;
+  /** Periods missed before waiting restarts. null disables the reset. */
+  absence_reset_periods: number | null;
   total_bays: Generated<number>;
   changed_by: string | null;
   changed_at: Generated<Date>;

@@ -202,6 +202,7 @@ export interface DashboardDto {
     servedCount: number;
     biasApplied: boolean;
     firstTimeParticipant: boolean;
+    absenceResetApplied?: boolean;
     explanation: string;
   };
   nextCycle: CycleDto | null;
@@ -301,8 +302,7 @@ export interface AllocationConfigDto {
   allocationDurationMonths: number;
   earlyWaitingBiasHours: number;
   waitQuantumMinutes: number;
-  declineGraceHours: number;
-  absenceResetMonths: number | null;
+  absenceResetPeriods: number | null;
   totalBays: number;
 }
 

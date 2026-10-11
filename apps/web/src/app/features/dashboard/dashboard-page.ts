@@ -463,7 +463,8 @@ export default class DashboardPage {
       title: 'Release your bay?',
       body:
         'The bay goes to the first person on the waitlist and you cannot take it back ' +
-        'until the next draw. Your score is not affected.',
+        'until the next draw. It counts as a bay you have held, and your waiting time ' +
+        'starts again from today.',
       confirmLabel: 'Release it',
       cancelLabel: 'Keep it',
       danger: true,
@@ -474,9 +475,13 @@ export default class DashboardPage {
   async withdraw(): Promise<void> {
     const ok = await this.confirm.ask({
       title: 'Withdraw from the draw?',
-      body: 'You can enter again while registration is still open.',
+      body:
+        'Withdrawing counts as a bay you have held, and your waiting time starts again ' +
+        'from today. You can enter again while registration is still open, but the count ' +
+        'stays.',
       confirmLabel: 'Withdraw',
       cancelLabel: 'Stay in',
+      danger: true,
     });
     if (ok) await this.facade.withdraw();
   }

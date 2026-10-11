@@ -218,27 +218,6 @@ import type { AllocationConfigVersion } from '../../domain/models';
             </label>
 
             <label class="field">
-              <span class="field__l">Declining is free for</span>
-              <span class="field__row">
-                <input
-                  class="field__i"
-                  type="number"
-                  min="0"
-                  [ngModel]="c.declineGraceHours"
-                  (ngModelChange)="config.edit('declineGraceHours', +$event)"
-                />
-                <span class="field__u">hours</span>
-              </span>
-              <span class="field__h">
-                Turn a bay down inside this window and it does not count as an allocation.
-                After it, declining is treated as an early release.
-              </span>
-              @if (config.issues().get('declineGraceHours'); as issue) {
-                <span class="field__e" role="alert">{{ issue }}</span>
-              }
-            </label>
-
-            <label class="field">
               <span class="field__l">Bays the scheme allocates</span>
               <span class="field__row">
                 <input
@@ -257,38 +236,39 @@ import type { AllocationConfigVersion } from '../../domain/models';
             </label>
 
             <!--
-              The sixth knob. It was validated on the server, stored in the table and
-              versioned like the rest, and there was no way to set it: the form shipped
-              five of six fields, so this one could only ever hold its default.
+              The one nullable knob, so it leads with the choice rather than the number -
+              an empty box would have to mean "never", which no number can say.
 
-              It is the only nullable one, so it leads with the choice rather than the
-              number - an empty box would have to mean "never", which no number can say.
+              Counted in periods, not months: that is the unit the rule is stated in and
+              the only one a resident can act on. Missing the draw is the thing that costs
+              them, not the calendar passing.
             -->
             <label class="field">
-              <span class="field__l">Waiting restarts after an absence</span>
+              <span class="field__l">Waiting restarts after missing</span>
               <span class="field__row">
                 <input
                   class="field__c"
                   type="checkbox"
-                  [checked]="c.absenceResetMonths !== null"
+                  [checked]="c.absenceResetPeriods !== null"
                   (change)="toggleAbsenceReset($event)"
                 />
                 <input
                   class="field__i"
                   type="number"
                   min="1"
-                  [disabled]="c.absenceResetMonths === null"
-                  [ngModel]="c.absenceResetMonths"
-                  (ngModelChange)="config.edit('absenceResetMonths', +$event)"
+                  [disabled]="c.absenceResetPeriods === null"
+                  [ngModel]="c.absenceResetPeriods"
+                  (ngModelChange)="config.edit('absenceResetPeriods', +$event)"
                 />
-                <span class="field__u">months</span>
+                <span class="field__u">periods</span>
               </span>
               <span class="field__h">
-                A resident who leaves the register and comes back this long afterwards
-                starts their wait again. Unticked, a returning resident keeps the wait
-                they had.
+                A resident who enters none of this many periods in a row starts their wait
+                again from the entry that brings them back. Their history is untouched.
+                Withdrawing an entry is taking part, not sitting out. Unticked, a
+                returning resident keeps the wait they had.
               </span>
-              @if (config.issues().get('absenceResetMonths'); as issue) {
+              @if (config.issues().get('absenceResetPeriods'); as issue) {
                 <span class="field__e" role="alert">{{ issue }}</span>
               }
             </label>
@@ -804,8 +784,7 @@ export default class MetricsPage {
       ['allocationDurationMonths', 'period length', ' months'],
       ['earlyWaitingBiasHours', 'early-waiting bias', ' h'],
       ['waitQuantumMinutes', 'tie window', ' min'],
-      ['declineGraceHours', 'decline grace', ' h'],
-      ['absenceResetMonths', 'absence reset', ' months'],
+      ['absenceResetPeriods', 'absence reset', ' periods'],
       ['totalBays', 'bays allocated', ''],
     ];
 
@@ -825,7 +804,7 @@ export default class MetricsPage {
   /** Turns the absence reset on at the current value, or off entirely. */
   toggleAbsenceReset(event: Event): void {
     const on = (event.target as HTMLInputElement).checked;
-    this.config.edit('absenceResetMonths', on ? (this.config.saved()?.absenceResetMonths ?? 3) : null);
+    this.config.edit('absenceResetPeriods', on ? (this.config.saved()?.absenceResetPeriods ?? 1) : null);
   }
 
   /** True when the server returned the shape but none of the numbers in it. */

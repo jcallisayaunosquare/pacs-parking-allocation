@@ -16,8 +16,43 @@ import type {
 export class KyselyFairnessReadModel implements FairnessReadModel {
   constructor(private readonly db: Kysely<Database>) {}
 
-  /** Served by ix_assignment_served_end and ix_assignment_served_count. */
-  async getFacts(residentId: string): Promise<FairnessFacts | null> {
+  /**
+   * Served by ix_assignment_served_end, ix_assignment_served_count and
+   * ix_registration_forfeit.
+   *
+   * The absence window is read the same way the run reads it - the periods before the
+   * one now open, and whether this resident entered any of them - because a dashboard
+   * that measured absence differently from the draw would be the stored-counter problem
+   * again, wearing a different disguise.
+   */
+  async getFacts(
+    residentId: string,
+    absenceResetPeriods: number | null,
+  ): Promise<FairnessFacts | null> {
+    const openCycle = await this.db
+      .selectFrom('allocation_cycle')
+      .select(['id', 'starts_on as startsOn'])
+      .where('state', 'in', ['REGISTRATION_OPEN', 'REGISTRATION_CLOSED'])
+      .orderBy('starts_on')
+      .executeTakeFirst();
+
+    const priorCycles =
+      absenceResetPeriods === null || openCycle === undefined
+        ? []
+        : await this.db
+            .selectFrom('allocation_cycle')
+            .select(['id', 'registration_closes_at as registrationClosesAt'])
+            .where('id', '!=', openCycle.id)
+            .where('starts_on', '<', openCycle.startsOn)
+            .orderBy('starts_on', 'desc')
+            .limit(absenceResetPeriods)
+            .execute();
+
+    const windowComplete =
+      absenceResetPeriods !== null && priorCycles.length === absenceResetPeriods;
+    const priorCycleIds = priorCycles.map((c) => c.id);
+    const windowOpensAt = priorCycles.at(-1)?.registrationClosesAt ?? null;
+
     const r = await this.db
       .selectFrom('resident as r')
       .select((eb) => [
@@ -33,7 +68,36 @@ export class KyselyFairnessReadModel implements FairnessReadModel {
           .select(sql<string>`count(*)`.as('v'))
           .whereRef('sa2.resident_id', '=', 'r.id')
           .where('sa2.counts_as_served', '=', true)
-          .as('servedCount'),
+          .as('assignedCount'),
+        eb
+          .selectFrom('raffle_registration as rrw')
+          .select(sql<Date | null>`max(rrw.withdrawn_at)`.as('v'))
+          .whereRef('rrw.resident_id', '=', 'r.id')
+          .where('rrw.withdrawn_at', 'is not', null)
+          .as('lastForfeitAt'),
+        eb
+          .selectFrom('raffle_registration as rrw2')
+          .select(sql<string>`count(*)`.as('v'))
+          .whereRef('rrw2.resident_id', '=', 'r.id')
+          .where('rrw2.withdrawn_at', 'is not', null)
+          .as('forfeitCount'),
+        openCycle === undefined
+          ? sql<Date | null>`null`.as('currentRegistrationAt')
+          : eb
+              .selectFrom('raffle_registration as rrc')
+              .select('rrc.registered_at as v')
+              .whereRef('rrc.resident_id', '=', 'r.id')
+              .where('rrc.cycle_id', '=', openCycle.id)
+              .where('rrc.withdrawn', '=', false)
+              .as('currentRegistrationAt'),
+        priorCycleIds.length > 0
+          ? eb
+              .selectFrom('raffle_registration as rrp')
+              .select(sql<string>`count(*)`.as('v'))
+              .whereRef('rrp.resident_id', '=', 'r.id')
+              .where('rrp.cycle_id', 'in', priorCycleIds)
+              .as('priorWindowRegistrations')
+          : sql<string>`0`.as('priorWindowRegistrations'),
         eb
           .selectFrom('allocation_history as ah')
           .select(sql<string>`count(distinct ah.run_id)`.as('v'))
@@ -44,10 +108,22 @@ export class KyselyFairnessReadModel implements FairnessReadModel {
       .executeTakeFirst();
 
     if (!r) return null;
+
+    const participationStartedAt = new Date(r.participationStartedAt);
+    const missedWindow =
+      windowComplete &&
+      Number(r.priorWindowRegistrations ?? 0) === 0 &&
+      windowOpensAt !== null &&
+      participationStartedAt <= new Date(windowOpensAt);
+
     return {
-      participationStartedAt: new Date(r.participationStartedAt),
+      participationStartedAt,
       lastBenefitEndAt: r.lastBenefitEndAt === null ? null : new Date(r.lastBenefitEndAt),
-      servedCount: Number(r.servedCount ?? 0),
+      lastForfeitAt: r.lastForfeitAt === null ? null : new Date(r.lastForfeitAt),
+      missedWindow,
+      currentRegistrationAt:
+        r.currentRegistrationAt == null ? null : new Date(r.currentRegistrationAt),
+      servedCount: Number(r.assignedCount ?? 0) + Number(r.forfeitCount ?? 0),
       priorParticipations: Number(r.priorParticipations ?? 0),
     };
   }
