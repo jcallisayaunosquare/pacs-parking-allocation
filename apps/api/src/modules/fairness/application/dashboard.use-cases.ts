@@ -29,6 +29,12 @@ export interface HistoryEntry {
 export interface FairnessFacts {
   readonly participationStartedAt: Date;
   readonly lastBenefitEndAt: Date | null;
+  /** Rule G - the latest withdrawal, which ends a benefit exactly as an expiry does. */
+  readonly lastForfeitAt: Date | null;
+  /** Rule H - true when the resident entered none of the periods in the reset window. */
+  readonly missedWindow: boolean;
+  /** Their entry in the period now open, when there is one: rule H's new anchor. */
+  readonly currentRegistrationAt: Date | null;
   readonly servedCount: number;
   readonly priorParticipations: number;
 }
@@ -50,7 +56,7 @@ export interface RunCandidateRowRaw {
 }
 
 export interface FairnessReadModel {
-  getFacts(residentId: string): Promise<FairnessFacts | null>;
+  getFacts(residentId: string, absenceResetPeriods: number | null): Promise<FairnessFacts | null>;
   getHistory(residentId: string, limit: number): Promise<readonly HistoryEntry[]>;
   getWaitlistPosition(residentId: string): Promise<{ cycleId: string; position: number } | null>;
   /** FR-22 - admin fairness dashboard. */
@@ -116,13 +122,16 @@ export class DashboardUseCases {
     const resident = await this.residents.findById(residentId);
     if (!resident) return fail('NOT_FOUND', 'Resident not found.');
 
-    const [assignment, facts, history, waitlist, nextCycle, config] = await Promise.all([
+    // Read first and alone: the absence window the facts are measured against is a
+    // policy value, so the query cannot be issued until it is known.
+    const config = await this.config.current();
+
+    const [assignment, facts, history, waitlist, nextCycle] = await Promise.all([
       this.assignments.findActiveForResident(residentId),
-      this.read.getFacts(residentId),
+      this.read.getFacts(residentId, config.absenceResetPeriods),
       this.read.getHistory(residentId, 5),
       this.read.getWaitlistPosition(residentId),
       this.cycles.findUpcoming(this.clock.now()),
-      this.config.current(),
     ]);
 
     // Second round trip, because it needs the cycle the first one found.
@@ -158,6 +167,7 @@ export class DashboardUseCases {
         servedCount: standing.servedCount,
         biasApplied: standing.biasApplied,
         firstTimeParticipant: standing.firstTimeParticipant,
+        absenceResetApplied: standing.absenceResetApplied,
         explanation: explainStanding(standing, assignment !== null),
       },
       policy: {
@@ -299,16 +309,29 @@ export class DashboardUseCases {
     participationStartedAt: Date,
     config: Parameters<typeof computePriorityKey>[1],
   ): FairnessStanding {
+    const now = this.clock.now();
+    /*
+     * Rule H on the dashboard, and the reason it is shown before a draw rather than
+     * discovered in one: a resident who missed the window has a clock of zero whether or
+     * not they have entered yet. Showing them months of accrued waiting and then handing
+     * them zero at the draw is exactly the disagreement between screen and run this
+     * module exists to prevent. Before they enter, the preview anchors on now; once they
+     * do, on the entry itself, which is what the draw will read.
+     */
+    const absenceResetAt = facts?.missedWindow ? (facts.currentRegistrationAt ?? now) : null;
+
     const candidate: Candidate = {
       residentId,
       participationStartedAt: facts?.participationStartedAt ?? participationStartedAt,
       lastBenefitEndAt: facts?.lastBenefitEndAt ?? null,
+      lastForfeitAt: facts?.lastForfeitAt ?? null,
+      absenceResetAt,
       servedCount: facts?.servedCount ?? 0,
       priorParticipations: facts?.priorParticipations ?? 0,
       needsAccessibleSpot: false,
       hasElectricVehicle: false,
     };
-    const key = computePriorityKey(candidate, config, this.clock.now(), '', '');
+    const key = computePriorityKey(candidate, config, now, '', '');
     return {
       residentId,
       anchorAt: key.anchorAt,
@@ -317,6 +340,7 @@ export class DashboardUseCases {
       servedCount: key.servedCount,
       biasApplied: key.biasApplied,
       firstTimeParticipant: key.firstTimeParticipant,
+      absenceResetApplied: key.absenceResetApplied,
     };
   }
 }

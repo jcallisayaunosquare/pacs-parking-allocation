@@ -165,8 +165,7 @@ let config = {
   allocationDurationMonths: 3,
   earlyWaitingBiasHours: 720,
   waitQuantumMinutes: 60,
-  declineGraceHours: 48,
-  absenceResetMonths: 12,
+  absenceResetPeriods: 1,
   totalBays: 56,
 };
 const configHistory = [

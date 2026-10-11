@@ -13,8 +13,7 @@ type Row = {
   allocation_duration_months: number;
   early_waiting_bias_hours: number;
   wait_quantum_minutes: number;
-  decline_grace_hours: number;
-  absence_reset_months: number | null;
+  absence_reset_periods: number | null;
   total_bays: number;
   changed_by: string | null;
   changed_at: Date;
@@ -25,8 +24,7 @@ const toConfig = (r: Row): AllocationConfig => ({
   allocationDurationMonths: Number(r.allocation_duration_months),
   earlyWaitingBiasHours: Number(r.early_waiting_bias_hours),
   waitQuantumMinutes: Number(r.wait_quantum_minutes),
-  declineGraceHours: Number(r.decline_grace_hours),
-  absenceResetMonths: r.absence_reset_months === null ? null : Number(r.absence_reset_months),
+  absenceResetPeriods: r.absence_reset_periods === null ? null : Number(r.absence_reset_periods),
   totalBays: Number(r.total_bays),
 });
 
@@ -91,8 +89,7 @@ export class KyselyAllocationConfigProvider implements AllocationConfigProvider 
           allocation_duration_months: values.allocationDurationMonths,
           early_waiting_bias_hours: values.earlyWaitingBiasHours,
           wait_quantum_minutes: values.waitQuantumMinutes,
-          decline_grace_hours: values.declineGraceHours,
-          absence_reset_months: values.absenceResetMonths,
+          absence_reset_periods: values.absenceResetPeriods,
           total_bays: values.totalBays,
           changed_by: changedBy,
         })

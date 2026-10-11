@@ -148,6 +148,8 @@ const candidates = (n: number): Candidate[] =>
     residentId: `3333${String(i).padStart(4, '0')}-3333-3333-3333-333333333333`,
     participationStartedAt: new Date(DECIDED_AT.getTime() - (100 - i) * HOUR),
     lastBenefitEndAt: null,
+    lastForfeitAt: null,
+    absenceResetAt: null,
     servedCount: 0,
     priorParticipations: 1,
     needsAccessibleSpot: false,
