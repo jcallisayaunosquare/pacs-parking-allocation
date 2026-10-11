@@ -493,7 +493,7 @@ async function main() {
   const metrics = await call('GET', '/metrics/fairness');
   check('GET /metrics/fairness returns the distribution',
     metrics.status === 200 && typeof metrics.json?.residents === 'number',
-    `residents=${metrics.json?.residents}, avg=${metrics.json?.averageScore}`);
+    `residents=${metrics.json?.residents}, avgWaitHours=${metrics.json?.averageWaitHours}`);
 
   const cached = await call('GET', '/metrics/fairness');
   check('the cached second read agrees with the first',
