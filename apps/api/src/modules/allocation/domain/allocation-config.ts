@@ -11,10 +11,11 @@ export interface AllocationConfig {
   readonly earlyWaitingBiasHours: number;
   /** Minutes. Default 60. The granularity at which two waiting times count as equal. */
   readonly waitQuantumMinutes: number;
-  /** Hours after an allocation starts within which declining it is free. */
-  readonly declineGraceHours: number;
-  /** Months of absence after which waiting restarts. null disables the reset. */
-  readonly absenceResetMonths: number | null;
+  /**
+   * Rule H - consecutive periods a resident may sit out before waiting restarts.
+   * 1 means missing a single period costs the clock. null disables the reset.
+   */
+  readonly absenceResetPeriods: number | null;
   /** Bays the HOA declares allocatable. 0 means "however many are active in inventory". */
   readonly totalBays: number;
   /** Stamped onto the run so a past decision is explainable under the config then in force. */
@@ -40,8 +41,7 @@ export const DEFAULT_ALLOCATION_CONFIG: Omit<AllocationConfig, 'version'> = {
   allocationDurationMonths: 3,
   earlyWaitingBiasHours: 24,
   waitQuantumMinutes: 60,
-  declineGraceHours: 48,
-  absenceResetMonths: 3,
+  absenceResetPeriods: 1,
   totalBays: 0,
 };
 
@@ -50,8 +50,7 @@ export interface AllocationConfigPatch {
   readonly allocationDurationMonths?: number;
   readonly earlyWaitingBiasHours?: number;
   readonly waitQuantumMinutes?: number;
-  readonly declineGraceHours?: number;
-  readonly absenceResetMonths?: number | null;
+  readonly absenceResetPeriods?: number | null;
   readonly totalBays?: number;
 }
 
@@ -76,11 +75,11 @@ export function validateConfig(
   if (!int(c.waitQuantumMinutes) || c.waitQuantumMinutes < 1) {
     issues.push({ field: 'waitQuantumMinutes', issue: 'must be a whole number of minutes, at least 1' });
   }
-  if (!int(c.declineGraceHours) || c.declineGraceHours < 0) {
-    issues.push({ field: 'declineGraceHours', issue: 'must be a whole number of hours, 0 or more' });
-  }
-  if (c.absenceResetMonths !== null && (!int(c.absenceResetMonths) || c.absenceResetMonths < 1)) {
-    issues.push({ field: 'absenceResetMonths', issue: 'must be null or a whole number of months, at least 1' });
+  if (c.absenceResetPeriods !== null && (!int(c.absenceResetPeriods) || c.absenceResetPeriods < 1)) {
+    issues.push({
+      field: 'absenceResetPeriods',
+      issue: 'must be null or a whole number of periods, at least 1',
+    });
   }
   if (!int(c.totalBays) || c.totalBays < 0) {
     issues.push({ field: 'totalBays', issue: 'must be a whole number, 0 or more' });
@@ -124,9 +123,8 @@ export const applyConfigPatch = (
   allocationDurationMonths: patch.allocationDurationMonths ?? current.allocationDurationMonths,
   earlyWaitingBiasHours: patch.earlyWaitingBiasHours ?? current.earlyWaitingBiasHours,
   waitQuantumMinutes: patch.waitQuantumMinutes ?? current.waitQuantumMinutes,
-  declineGraceHours: patch.declineGraceHours ?? current.declineGraceHours,
-  absenceResetMonths:
-    patch.absenceResetMonths === undefined ? current.absenceResetMonths : patch.absenceResetMonths,
+  absenceResetPeriods:
+    patch.absenceResetPeriods === undefined ? current.absenceResetPeriods : patch.absenceResetPeriods,
   totalBays: patch.totalBays ?? current.totalBays,
 });
 

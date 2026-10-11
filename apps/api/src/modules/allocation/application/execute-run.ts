@@ -130,7 +130,11 @@ export class ExecuteRun {
       // candidates' waiting times computed microseconds apart would make hour-bucket
       // membership a race, and no replay could reproduce it.
       const decidedAt = run.decidedAt;
-      const snapshot = await this.repo.snapshotInputs(cycle.id, decidedAt);
+      const snapshot = await this.repo.snapshotInputs(
+        cycle.id,
+        decidedAt,
+        config.absenceResetPeriods,
+      );
 
       if (snapshot.candidates.length === 0) {
         await this.repo.markRunCompletedEmpty(run.id, [

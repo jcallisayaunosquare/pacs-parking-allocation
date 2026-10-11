@@ -15,6 +15,7 @@ const standing = (over: Partial<FairnessStanding> = {}): FairnessStanding => ({
   servedCount: 1,
   biasApplied: false,
   firstTimeParticipant: false,
+  absenceResetApplied: false,
   ...over,
 });
 
@@ -41,6 +42,19 @@ describe('explainStanding', () => {
     const s = explainStanding(standing({ servedCount: 0 }), false);
     expect(s).toContain('2160 hours');
     expect(s).toContain('never held a bay');
+  });
+
+  it('says plainly that missing a period is why the clock reads zero', () => {
+    // Without this sentence the number looks like a fault, and the first thing a
+    // resident does with a number that looks like a fault is report it.
+    const s = explainStanding(
+      standing({ waitingHours: 2, effectiveWaitHours: 2, absenceResetApplied: true, servedCount: 1 }),
+      false,
+    );
+    expect(s).toContain('did not enter the last draw');
+    expect(s).toContain('started again from zero');
+    // The history is still quoted: the reset is of waiting, never of the count.
+    expect(s).toContain('held a bay 1 time');
   });
 
   it('says plainly why a resident is below everyone during the early-waiting window', () => {

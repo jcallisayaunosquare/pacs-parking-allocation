@@ -128,7 +128,11 @@ export interface AllocationRepository {
   }): Promise<RunRecord>;
 
   /** The unordered snapshot. It never computes a priority key; the domain does that. */
-  snapshotInputs(cycleId: string, decidedAt: Date): Promise<RunSnapshot>;
+  snapshotInputs(
+    cycleId: string,
+    decidedAt: Date,
+    absenceResetPeriods: number | null,
+  ): Promise<RunSnapshot>;
 
   /** The one transaction: assignments, waitlist, history, candidate keys, run, cycle, outbox. */
   commitRun(input: {
@@ -184,7 +188,8 @@ export type { AllocationConfigPatch };
 
 export interface RegistrationRepository {
   register(cycleId: string, residentId: string): Promise<{ created: boolean }>;
-  withdraw(cycleId: string, residentId: string): Promise<boolean>;
+  /** `at` is stored: a withdrawal counts as having held the bay and restarts the clock. */
+  withdraw(cycleId: string, residentId: string, at: Date): Promise<boolean>;
   isRegistered(cycleId: string, residentId: string): Promise<boolean>;
 }
 

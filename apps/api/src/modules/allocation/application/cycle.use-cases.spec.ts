@@ -78,7 +78,9 @@ class FakeRegistrations implements RegistrationRepository {
     this.registered.push(residentId);
     return { created: true };
   }
-  async withdraw(): Promise<boolean> {
+  withdrawnAt: Date | null = null;
+  async withdraw(_cycleId: string, _residentId: string, at: Date): Promise<boolean> {
+    this.withdrawnAt = at;
     return true;
   }
   async isRegistered(): Promise<boolean> {
@@ -171,6 +173,20 @@ describe('CycleUseCases.register', () => {
   it('defaults to refusing nothing, so an existing caller is unaffected', async () => {
     const { useCases } = build(resident());
     expect((await useCases.register(CYCLE_ID, RESIDENT_ID)).ok).toBe(true);
+  });
+});
+
+describe('CycleUseCases.withdraw', () => {
+  /*
+   * The timestamp is the whole point of the rule. Withdrawing counts as having held the
+   * bay, so the ranking needs to know *when* it happened - a boolean would say that the
+   * resident is out of this draw and nothing about where their waiting restarts.
+   */
+  it('records the instant of the withdrawal, not merely the fact', async () => {
+    const { useCases, registrations } = build(resident());
+    const r = await useCases.withdraw(CYCLE_ID, RESIDENT_ID);
+    expect(r.ok).toBe(true);
+    expect(registrations.withdrawnAt?.toISOString()).toBe('2026-03-10T09:00:00.000Z');
   });
 });
 

@@ -281,6 +281,8 @@ export interface Fairness {
   readonly servedCount: number | null;
   readonly biasApplied: boolean;
   readonly firstTimeParticipant: boolean;
+  /** True when waiting restarted because the resident sat periods out. */
+  readonly absenceResetApplied: boolean;
   /**
    * The sentence that goes with the numbers. §17's rule: never show a number without
    * it. The API returns both together so the two can never drift apart.
@@ -475,9 +477,11 @@ export interface AllocationConfig {
   readonly earlyWaitingBiasHours: number;
   /** The granularity at which two waiting times count as equal, so ties really occur. */
   readonly waitQuantumMinutes: number;
-  readonly declineGraceHours: number;
-  /** Months of absence after which waiting restarts. null disables the reset. */
-  readonly absenceResetMonths: number | null;
+  /**
+   * Consecutive periods a resident may sit out before their waiting time restarts.
+   * 1 means missing a single period costs the clock; null disables the reset.
+   */
+  readonly absenceResetPeriods: number | null;
   /** Bays the scheme allocates. 0 means the whole active inventory. */
   readonly totalBays: number;
 }
