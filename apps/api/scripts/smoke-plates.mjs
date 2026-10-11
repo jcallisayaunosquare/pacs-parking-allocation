@@ -476,9 +476,16 @@ async function main() {
       gone.status === 204 || gone.status === 200, `status=${gone.status}`);
   }
 
+  /*
+   * DELETE /residents deletes the row when nothing in the record names the resident and
+   * hides it when something does, so which happened here is not knowable from a 204. For
+   * this suite it is normally the delete: the resident registers a car and the gate reads
+   * it, and neither of those is a record that names them - an access event's resident_id
+   * is ON DELETE SET NULL. Resolving a plate read would be, since it writes reviewed_by.
+   */
   console.log(
-    `\nLeft in place: the deactivated row for resident ${residentId}, ` +
-      `and this run's frames under raw/${cameraId}/.`,
+    `\nLeft in place: this run's frames under raw/${cameraId}/. The resident was removed ` +
+      'from the register - deleted outright unless the record names them.',
   );
 
   await finish();

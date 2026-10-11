@@ -34,3 +34,7 @@ Thumbs.db
 # Playwright diagnostic output (screenshots, console dumps)
 apps/web/diagnose-out/
 apps/web/test-results/
+
+# The renderer writes an intermediate HTML next to each PDF: 2.7 MB apiece, with the
+# whole mermaid bundle inlined, and regenerated on every run.
+docs/delivery/*.html
