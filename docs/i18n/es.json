@@ -666,5 +666,22 @@
  "t0511": "<code>ADR-008</code>",
  "t0512": "<strong>Diseño lógico antes del mapeo a la nube</strong>",
  "t0513": "Diseñar contra servicios específicos desde el primer día",
- "t0514": "Mantuvo el dominio neutral respecto al proveedor y la comparación honesta. El mapeo se hace ahora en la §10 (ADR-011 … ADR-018); vive solo en el anillo de infraestructura, así que cuesta un adaptador por costura de plataforma."
+ "t0514": "Mantuvo el dominio neutral respecto al proveedor y la comparación honesta. El mapeo se hace ahora en la §10 (ADR-011 … ADR-018); vive solo en el anillo de infraestructura, así que cuesta un adaptador por costura de plataforma.",
+ "t9019": "<em>Análisis del sistema</em>Parking Allocation Context System",
+ "t9021": "<span class=\"dot\"></span> PACS · rev 2.7 · previo a la nube",
+ "t9020": "<span class=\"dot\"></span> Dossier de análisis y diseño · rev 2.7",
+ "t9501": "Parking Allocation Context System\n    <span class=\"sub\">Un sorteo de estacionamiento trimestral, justo y auditable, para un edificio residencial</span>",
+ "t9502": "Todo lo necesario para construir el sistema: el dominio, las reglas, los datos, el algoritmo,\n  los contratos, las amenazas y el plan — especificado hasta el punto en que lo que queda es teclear,\n  no decidir.",
+ "t9503": "Documento",
+ "t9504": "analisis.html · rev 2.7",
+ "t9505": "Cubre",
+ "t9506": "Requisitos → Diseño → Stack",
+ "t9507": "Mapeo a la nube",
+ "t9508": "AWS serverless · §10",
+ "t9509": "Secciones",
+ "t9510": "Estado",
+ "t9511": "Listo para revisión",
+ "t9512": "<span class=\"num\">01</span>Resumen ejecutivo",
+ "t9513": "Todo el sistema en dos minutos: qué hace, las seis decisiones que lo moldean\ny cómo sabremos que funcionó.",
+ "t9514": "Un edificio residencial tiene menos plazas de estacionamiento que residentes que quieren una. Hoy eso se\nresuelve por quien pidió primero, por antigüedad o a discusión. PACS reemplaza eso con un\n<strong>sorteo trimestral</strong> cuyos resultados quedan registrados de forma permanente, en el que quien\nlleva más tiempo esperando va primero y el sorteo solo rompe un empate exacto, y cuyos sorteos se pueden\nrepetir y verificar después."
 }
