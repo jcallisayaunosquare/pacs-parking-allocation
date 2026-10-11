@@ -266,7 +266,13 @@ figure .fig-head .t{font-size:10.2px;text-transform:uppercase;letter-spacing:.11
   font-weight:700}
 figure .fig-tools{display:flex;gap:5px}
 figure .fig-body{padding:22px 16px;overflow-x:auto;background:var(--chart-surface)}
-figure .mermaid{text-align:center;min-width:min-content}
+/* A mermaid block is a <pre>, so it inherits the code-block padding and border.
+   Those 38px of horizontal chrome made every diagram sit 66px wider than the
+   frame that holds it, so the figure scrolled sideways even when the diagram
+   itself had been fitted. The diagram is the content here; the frame around it
+   is the figure's, not the pre's. */
+figure pre.mermaid{margin:0;padding:0;border:none;background:none;border-radius:0;
+  text-align:center;min-width:0;overflow-x:auto}
 figure .mermaid svg{max-width:none !important;height:auto}
 figcaption{padding:12px 18px 15px;font-size:12.8px;color:var(--ink-faint);line-height:1.58;
   border-top:1px solid var(--rule-soft);background:var(--panel)}
@@ -365,14 +371,131 @@ footer .f-grid{display:flex;gap:26px;flex-wrap:wrap;justify-content:space-betwee
   .bar-row{grid-template-columns:92px minmax(0,1fr) 42px}
 }
 
+/* ============================================================
+   PRINT / PDF
+   One rule governs everything here: a title is never the last
+   thing on a page, and the figure, table or card it introduces
+   is never split or stranded. Headings are smaller on paper than
+   on screen precisely so that a title and its diagram fit
+   together on one sheet.
+   ============================================================ */
+@page{size:A4;margin:14mm 12mm 16mm}
+
 @media print{
-  nav.toc,#progress,.fig-tools,.copybtn,.toc-tools{display:none !important}
-  .shell{display:block}
-  body{font-size:10.5pt;background:#fff}
-  section{page-break-inside:auto;padding-top:18pt}
-  figure,.chart,.tw,.note{page-break-inside:avoid;box-shadow:none}
-  h2{page-break-after:avoid}
+  /* ---- paper is always light ----
+     Printing from the dark theme put pale ink on a white sheet. The palette is
+     pinned here so the PDF is the same document whichever theme the reader had
+     open, and the dark selectors are named explicitly because they outrank a
+     bare :root. */
+  :root,:root[data-theme="dark"],:root:not([data-theme="light"]){
+    --bg:#ffffff; --bg-deep:#ffffff; --panel:#ffffff; --panel-2:#faf8f4;
+    --ink:#1a1917; --ink-soft:#4f4c46; --ink-faint:#6b6760; --ink-ghost:#8e8a82;
+    --rule:#d6d1c6; --rule-soft:#e6e2da; --rule-strong:#bdb6a8;
+    --accent:#8a5320; --accent-ink:#5b3612; --accent-soft:#f2e6d7; --accent-line:#d9b98d;
+    --accent-2:#2f5d63; --accent-2-soft:#dde9ea; --accent-2-ink:#22474c;
+    --ok:#2c6b4a; --ok-soft:#dfefe5; --warn:#7a5a10; --warn-soft:#f7eed7;
+    --bad:#93321c; --bad-soft:#f8e2db; --info:#33558a; --info-soft:#e0e7f5;
+    --chart-1:#8a5320; --chart-grid:#e6e2d8; --chart-surface:#ffffff;
+    --code-bg:#f4f1ea; --code-ink:#2b2823; --shadow:none; --shadow-lift:none;
+  }
+
+  /* ---- interactive chrome is not part of the printed document ---- */
+  nav.toc,#progress,.fig-tools,.copybtn,.toc-tools,#lightbox,.anchor,
+  .tablist{display:none !important}
+  .shell{display:block;max-width:none}
+  main{padding:0}
+  .wrap{max-width:none;margin:0;padding:0}
+  body{background:#fff;font-size:9.8pt;line-height:1.5}
+  html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   a{color:inherit;text-decoration:none}
+
+  /* ---- cover ---- */
+  header.hero{overflow:visible}
+  header.hero::after{display:none}
+  header.hero .inner{max-width:none;padding:0 0 18pt}
+  header.hero h1{font-size:25pt;margin:0 0 9pt}
+  header.hero h1 .sub{font-size:12pt;margin-top:6pt}
+  header.hero p.lede{font-size:11pt;max-width:none}
+  .hero-kicker{margin-bottom:12pt}
+  .metastrip{margin-top:14pt;break-inside:avoid;page-break-inside:avoid}
+
+  /* ---- sections ---- */
+  section{padding:14pt 0 0;break-inside:auto;page-break-inside:auto}
+
+  /* ---- a heading never ends a page ---- */
+  /* .cb-head is a title too: a code block taller than a sheet must break, and
+     without this it broke immediately after its own header, leaving the header
+     alone on the page and the code starting the next one. */
+  h1,h2,h3,h4,h5,.dek,.lead,figure .fig-head,.chart-head,.adr-head,
+  .codeblock .cb-head,details.acc>summary,.tl-item h5,thead,caption{
+    break-after:avoid;page-break-after:avoid;
+    break-inside:avoid;page-break-inside:avoid}
+  h2{font-size:16pt;margin:0 0 6pt}
+  h2 .num{font-size:7.5pt;margin-bottom:6pt;padding:2pt 6pt}
+  h3{font-size:11.5pt;margin:13pt 0 6pt}
+  h3::before{margin-bottom:5pt}
+  h4{font-size:8pt;margin:10pt 0 5pt}
+  .dek{font-size:10pt;margin:0 0 11pt;max-width:none}
+  .lead{font-size:10.6pt}
+  p,li,blockquote{orphans:3;widows:3}
+
+  /* ---- figures stay whole, and stay with the title above them ---- */
+  figure,.chart,.note,.card,.adr,.stats,.codeblock,.kv,.wire,
+  blockquote,pre,.tl-item,.tabpanel,details.acc{
+    break-inside:avoid;page-break-inside:avoid;box-shadow:none}
+  figure{margin:9pt 0 12pt}
+  figure .fig-body{padding:9pt 7pt;overflow:visible}
+  figure pre.mermaid{min-width:0;overflow:visible}
+  /* The on-screen renderer pins each diagram's width in pixels for the
+     viewport. On paper that width is wider than the sheet and the figure
+     would print clipped, so the SVG is handed back to its own aspect
+     ratio and capped to a height that still leaves room for the heading,
+     the caption and some prose on the same page. */
+  figure .mermaid svg{width:auto !important;max-width:100% !important;
+    height:auto !important;max-height:178mm}
+  figcaption{padding:7pt 10pt 8pt;font-size:8.6pt}
+  .chart{margin:0 0 12pt}
+  .chart-body{padding:8pt 10pt 4pt}
+
+  /* ---- tables break between rows instead of being pushed whole ---- */
+  .tw{overflow:visible;margin:0 0 12pt;box-shadow:none;
+    break-inside:auto;page-break-inside:auto}
+  table{min-width:0;width:100%;font-size:8.8pt}
+  th{position:static;white-space:normal;padding:5pt 7pt;font-size:7.4pt}
+  td{padding:5pt 7pt;overflow-wrap:break-word}
+  td code{white-space:normal}
+  table.compact td,table.compact th{padding:4pt 6pt;font-size:8.2pt}
+  thead{display:table-header-group}
+  tr{break-inside:avoid;page-break-inside:avoid}
+
+  /* ---- nothing is hidden behind an interaction on paper ---- */
+  .tabpanel[hidden]{display:block !important}
+  .tabpanel{padding-top:7pt}
+  details.acc>summary::before{display:none}
+  details.acc::details-content{content-visibility:visible !important;
+    block-size:auto !important}
+  details.acc .acc-body{break-inside:auto;page-break-inside:auto}
+
+  /* ---- misc ---- */
+  pre{font-size:8pt;white-space:pre-wrap;overflow-wrap:break-word;margin:0 0 10pt}
+  .wire{font-size:7.1pt;white-space:pre-wrap;padding:9pt 10pt}
+  .grid{gap:9pt;margin:0 0 12pt}
+  .stats{margin:0 0 12pt}
+  hr.soft{margin:16pt 0}
+  footer{margin-top:20pt;break-inside:avoid;page-break-inside:avoid}
+}
+
+/* A diagram's colours are baked into its SVG at the moment mermaid draws it, so
+   pinning the page palette above does nothing for them: printing from the dark
+   theme put a black block on a white sheet. Repainting them would mean
+   re-rendering every diagram during the print, which is asynchronous and would
+   not finish in time, so they are inverted back to light instead. Only when the
+   dark theme is genuinely the one in use. */
+@media print{
+  :root[data-theme="dark"] figure .mermaid svg{filter:invert(1) hue-rotate(180deg)}
+}
+@media print and (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) figure .mermaid svg{filter:invert(1) hue-rotate(180deg)}
 }
 </style>
 </head>
@@ -382,7 +505,7 @@ footer .f-grid{display:flex;gap:26px;flex-wrap:wrap;justify-content:space-betwee
 <nav class="toc">
   <div class="toc-top">
     <div class="brand"><em>System Analysis</em>Parking Allocation Context System</div>
-    <div class="ver"><span class="dot"></span> PACS · rev 2.0 · pre-cloud</div>
+    <div class="ver"><span class="dot"></span> PACS · rev 2.6 · pre-cloud</div>
   </div>
   <div class="toc-tools">
     <input id="tocSearch" class="toc-search" type="search" placeholder="Filter sections  ( / )"
@@ -397,7 +520,7 @@ footer .f-grid{display:flex;gap:26px;flex-wrap:wrap;justify-content:space-betwee
 
 <header class="hero">
  <div class="inner">
-  <div class="hero-kicker"><span class="dot"></span> Analysis &amp; Design Dossier · rev 2.5</div>
+  <div class="hero-kicker"><span class="dot"></span> Analysis &amp; Design Dossier · rev 2.6</div>
   <h1>Parking Allocation Context System
     <span class="sub">A fair, auditable, quarterly parking raffle for a residential building</span>
   </h1>
@@ -405,7 +528,7 @@ footer .f-grid{display:flex;gap:26px;flex-wrap:wrap;justify-content:space-betwee
   the contracts, the threats and the plan — specified to the point where the remaining work is typing,
   not deciding.</p>
   <div class="metastrip">
-    <div><dt>Document</dt><dd>analisis.html · rev 2.5</dd></div>
+    <div><dt>Document</dt><dd>analisis.html · rev 2.6</dd></div>
     <div><dt>Covers</dt><dd>Requirements → Design → Stack</dd></div>
     <div><dt>Cloud mapping</dt><dd>AWS serverless · §10</dd></div>
     <div><dt>Sections</dt><dd>30</dd></div>
@@ -3361,6 +3484,36 @@ engineering one — not as a checkbox at the end.</p></div>
 <section id="delivery" data-title="Delivery, Delegation &amp; Communication">
 <h2 id="delivery-title"><span class="num">25</span>Delivery, Delegation &amp; Communication</h2>
 
+<h3>Delivery documentation</h3>
+<p>The plans in this section are the design intent. They have since been written up as standalone
+documents under <code>docs/delivery/</code>, each one as Markdown with its diagrams as <code>mermaid</code>
+blocks and as a PDF with those diagrams rendered to vector. <code>docs/delivery/README.md</code> indexes
+them and documents how the PDFs are regenerated (<code>render-pdf.mjs</code>, which exits non-zero if any
+diagram fails to render, so a blank figure cannot ship).</p>
+<div class="tw"><table>
+<thead><tr><th>Document</th><th>Contents</th><th>Audience</th></tr></thead>
+<tbody>
+<tr><td><code>01-technical-documentation.md</code><br><span class="small">+ PDF</span></td>
+<td>Thirteen chapters: what the system is, repository layout, architecture, AWS services, network,
+data model, domain rules, sequences, API surface, running it locally, deploying, test strategy,
+and known constraints and gaps.</td>
+<td>An engineer picking the project up</td></tr>
+<tr><td><code>02-communication-plan.md</code><br><span class="small">+ PDF</span></td>
+<td>The current shape of the team, the path a change takes, code review, sprint planning, how
+decisions get made, communicating outside the team, and what is deliberately not in place yet.</td>
+<td>The team, and anyone asking how work gets agreed</td></tr>
+<tr><td><code>03-onboarding-guide.md</code><br><span class="small">+ PDF</span></td>
+<td>Eight chapters from a fresh clone to a merged pull request: what the product is, what to read in
+what order, getting it running, the shape of the code, the conventions and why each exists, a first
+issue, getting through review, and the things that will confuse you.</td>
+<td>A developer joining</td></tr>
+</tbody></table></div>
+<div class="note i"><strong>Which document wins</strong>
+<p>Its README states that everything in those documents was checked against the code in this
+repository, and that where the code and this analysis disagree the code is treated as correct and the
+disagreement is named — see §13 of the technical documentation. This document remains the
+specification of record for <em>intent</em>; the delivery set records what was built.</p></div>
+
 <h3>Work breakdown</h3>
 <figure>
   <div class="fig-head"><span class="t">Figure 25.1 — Dependency order of the work packages</span></div>
@@ -3688,6 +3841,9 @@ timeline
 <li><span class="p p-ok">done</span> API contract, error model, security model and test strategy defined.</li>
 <li><span class="p p-w">pending</span> Open questions Q-01…Q-09 answered by their owners.</li>
 <li><span class="p p-ok">done</span> Technology stack, AWS service mapping and Free Tier cost model (§10).</li>
+<li><span class="p p-ok">done</span> Delivery documentation written up under <code>docs/delivery/</code> — technical
+documentation, communication plan and onboarding guide, each as Markdown and as a rendered PDF, with a
+README that indexes them and documents the render step (§25).</li>
 <li><span class="p p-w">pending</span> Pin Angular / PrimeNG majors; CodePipeline vs GitHub Actions spike (ADR-018).</li>
 </ul>
 </section>
@@ -3696,7 +3852,7 @@ timeline
 <section id="appendix" data-title="Appendices">
 <h2 id="appendix-title"><span class="num">29</span>Appendices</h2>
 <p class="dek">The reference material: schema, contract, fixtures, error codes, decision log.
-Collapsed by default — open what you need.</p>
+Collapsed by default on screen — open what you need; all of it prints.</p>
 
 <details class="acc"><summary>A · Complete schema DDL</summary>
 <div class="acc-body">
@@ -4009,6 +4165,12 @@ than an empty database.</p>
 <div class="tw"><table class="compact">
 <thead><tr><th>Rev</th><th>Change</th></tr></thead>
 <tbody>
+<tr><td>2.6</td><td>Added §25 <em>Delivery documentation</em>: the three standalone documents under
+<code>docs/delivery/</code> and how their PDFs are produced; recorded in the definition of done. Print
+stylesheet rewritten — A4 page box, headings and figure/table/card headers that never end a page,
+figures capped to a height that fits the sheet instead of printing clipped, tables that break between
+rows, and collapsed appendices and hidden tab panels printed rather than dropped. On screen, a diagram
+now fits its frame instead of scrolling out of it under its own title.</td></tr>
 <tr><td>2.1</td><td>Added §10 Technology Stack &amp; AWS Mapping: Angular + PrimeNG, Node.js 24 + TypeScript, Clean
 Architecture on both sides, AWS serverless topology without NAT, Serverless Framework v4, Free Tier cost
 model, cloud security checklist, GitHub Actions CI/CD, ADR-011…018. Module layering redrawn as Clean
@@ -4042,7 +4204,11 @@ exactly where the work stopped. Snapshot taken on <strong>Sunday 4 October 2026,
 
 ARCHIVOS
 - requirements.pdf: enunciado del assessment (5 entregables; el 5 es un prototipo de código).
-- analisis.html (rev 2.5): documento MAESTRO, 30 secciones. §10 = Technology Stack &amp; AWS Mapping.
+- analisis.html (rev 2.6): documento MAESTRO, 30 secciones. §10 = Technology Stack &amp; AWS Mapping.
+- docs/delivery/: documentación de entrega ya escrita — 01-technical-documentation,
+  02-communication-plan, 03-onboarding-guide (cada uno .md + .pdf) y README.md con el índice y
+  render-pdf.mjs / verify-pages.mjs. El README dice que se verificó contra el código del repo y que,
+  cuando el código y este análisis difieren, manda el código (§13 de la técnica).
   Backups: analisis.bak-rev2.4.html, 2.3, 2.2, 2.1, 2.0. analisis/PLAN_ANALISIS_SISTEMA.md y analisis/DIAGRAMAS.md
   son versiones viejas e inconsistentes (Angular/JWT propio/Multi-AZ) — no usarlas como fuente.
 - jira/backlog/backlog.js: backlog fuente (equipo, 13 épicas, 49 historias, subtasks, 4 sprints).
@@ -4121,7 +4287,7 @@ Lee analisis.html (§10, §26, §27) y jira/backlog/backlog.js antes de continua
 </div>
 <div class="wrap"><footer>
   <div class="f-grid">
-    <div><strong>PACS System Analysis</strong> · rev 2.5 · Phase 0 deliverable</div>
+    <div><strong>PACS System Analysis</strong> · rev 2.6 · Phase 0 deliverable</div>
     <div>Diagrams: Mermaid · Shortcuts: <code>/</code> filter, <code>t</code> theme, <code>Esc</code> close</div>
     <div>Stack and AWS mapping — see §10.</div>
   </div>
@@ -4214,8 +4380,15 @@ Lee analisis.html (§10, §26, §27) y jira/backlog/backlog.js antes de continua
     // Fit to the figure when the reduction is mild; keep genuinely huge diagrams
     // legible and let them scroll inside their own frame instead.
     var avail = node.parentElement.clientWidth - 4;
-    var w = vb.width <= avail ? vb.width
-          : (vb.width / avail > 1.55 ? vb.width * 0.72 : avail);
+    // A hidden tab panel has no width yet; sizing against it would collapse the
+    // diagram to nothing. Leave it alone and let the panel size it when shown.
+    if (avail < 80) return;
+    // Always fit the frame. The previous rule kept diagrams wider than 1.55x the
+    // frame at 72% of their natural size, which left the figure scrolling
+    // sideways under its own title — the figure looked detached from the heading
+    // and the right-hand half of the diagram was invisible until you dragged it.
+    // Detail is now reached through the figure's own zoom and full-screen tools.
+    var w = Math.min(vb.width, avail);
     svg.style.width = Math.ceil(w) + 'px';
     svg.style.maxWidth = 'none';
   }

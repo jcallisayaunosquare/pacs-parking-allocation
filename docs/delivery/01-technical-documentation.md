@@ -691,7 +691,7 @@ erDiagram
 The output side. Every table here is written in the one transaction that commits a run,
 and four of the five are append-only to the application role.
 
-<!-- figure:wide -->
+<!-- figure:page -->
 ```mermaid
 erDiagram
   allocation_cycle ||--o{ allocation_run : "is drawn by"
@@ -1311,7 +1311,7 @@ sequenceDiagram
 
 ### 8.3 Running the draw
 
-<!-- figure:wide -->
+<!-- figure:page -->
 ```mermaid
 sequenceDiagram
   autonumber

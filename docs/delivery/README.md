@@ -46,8 +46,22 @@ Two HTML comments control how a diagram is laid out. Both are invisible to every
 Markdown renderer, so the source stays portable:
 
 ```markdown
-<!-- figure:wide -->   the diagram gets its own landscape page
-<!-- figure:page -->   the diagram gets its own portrait page, with narrow margins
+<!-- figure:wide -->   the diagram gets a landscape page
+<!-- figure:page -->   the diagram gets the full text column
 ```
 
 Without one, a diagram flows with the prose and is scaled to the text measure.
+
+All three are the same kind of object: a block holding the heading, the line that
+introduces the diagram and the diagram itself, which is never split and never parted from
+its heading. None of them forces a page break; what moves a figure to the next page is
+simply not fitting on this one, and the heading moves with it. The height of every diagram
+is capped at print time, measured against the page it is on, so a figure cannot overflow
+the page or be cut across a break.
+
+`wide` is the exception worth thinking about, because a landscape page is a different
+`@page` and the size change forces a break at each end of it. It only pays for a diagram
+that is genuinely wider than a landscape page is — ratio above 273/184 — and the render
+prints a warning for any `figure:wide` that is not, since for those the landscape page is
+less room than a portrait one, not more. Prose following a wide diagram is moved onto the
+landscape page with it where it fits, rather than leaving the page two thirds white.
