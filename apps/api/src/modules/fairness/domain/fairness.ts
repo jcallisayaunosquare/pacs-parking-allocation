@@ -19,6 +19,8 @@ export interface FairnessStanding {
   readonly servedCount: number;
   readonly biasApplied: boolean;
   readonly firstTimeParticipant: boolean;
+  /** True when waiting restarted because the resident sat periods out. */
+  readonly absenceResetApplied: boolean;
 }
 
 /** One candidate's stored row from a committed run - the contestable record. */
@@ -57,6 +59,15 @@ export function explainStanding(s: FairnessStanding, holdsSpot: boolean): string
     s.servedCount === 0
       ? 'You have never held a bay, which breaks a tie in your favour.'
       : `You have held a bay ${s.servedCount} ${s.servedCount === 1 ? 'time' : 'times'}, which breaks a tie against you.`;
+
+  // Said plainly, and said first. A resident who sat a period out and comes back to a
+  // clock of zero will otherwise read the number as a fault and report it as one.
+  if (s.absenceResetApplied) {
+    return (
+      'You did not enter the last draw, so your waiting time started again from zero. ' +
+      `${served} Entering every period is what keeps a wait running.`
+    );
+  }
   return `You have been waiting ${hours(s.waitingHours)}. Longest wait goes first. ${served}`;
 }
 

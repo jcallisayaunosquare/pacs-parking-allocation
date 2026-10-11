@@ -17,7 +17,22 @@ export interface Candidate {
   readonly participationStartedAt: Date;
   /** End of the most recent allocation that counted as served. null means never served. */
   readonly lastBenefitEndAt: Date | null;
-  /** Rule D - lifetime count of allocations that counted. Never reset. */
+  /**
+   * Rule G - when this resident last withdrew a registration. A withdrawal is a decision
+   * about a bay, so it ends a benefit exactly as expiry does: the clock restarts here and
+   * the lifetime count already includes it.
+   */
+  readonly lastForfeitAt: Date | null;
+  /**
+   * Rule H - when waiting restarted because the resident skipped periods. The instant
+   * they registered for this one, so a returning resident starts level with somebody who
+   * moved in today. null when they did not miss enough periods to trigger the reset.
+   *
+   * Unlike a benefit end this does NOT make them cooling: they are back at zero, not
+   * fresh off a bay, and rule F exists to stop the latter winning twice in a row.
+   */
+  readonly absenceResetAt: Date | null;
+  /** Rule D - lifetime count of allocations that counted, withdrawals included. Never reset. */
   readonly servedCount: number;
   /** Committed runs this resident has appeared in. 0 means a first-time participant. */
   readonly priorParticipations: number;
@@ -42,6 +57,8 @@ export interface PriorityKey {
   readonly rawWaitQuanta: number;
   readonly biasApplied: boolean;
   readonly firstTimeParticipant: boolean;
+  /** True when the anchor is an absence reset - the one case the resident did not choose. */
+  readonly absenceResetApplied: boolean;
 }
 
 const MS_PER_MINUTE = 60_000;
@@ -68,17 +85,36 @@ export function computePriorityKey(
   const quantumMs = cfg.waitQuantumMinutes * MS_PER_MINUTE;
   const bias = biasQuanta(cfg);
 
+  // A benefit ends when the period ends, when the bay is given back, or when the
+  // registration is withdrawn. All three are the resident holding, then not holding,
+  // something they asked for, so all three move the anchor and all three are already
+  // counted in servedCount. The withdrawal is the only one with no bay attached, which is
+  // the whole of the difference and none of the arithmetic.
+  const benefitEndMs = Math.max(
+    c.lastBenefitEndAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+    c.lastForfeitAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+  );
+  const hasBenefitEnd = Number.isFinite(benefitEndMs);
+
   const anchorMs = Math.max(
     c.participationStartedAt.getTime(),
-    c.lastBenefitEndAt?.getTime() ?? c.participationStartedAt.getTime(),
+    hasBenefitEnd ? benefitEndMs : Number.NEGATIVE_INFINITY,
+    c.absenceResetAt?.getTime() ?? Number.NEGATIVE_INFINITY,
   );
+
+  // Recorded, not compared: the ordering only ever sees the anchor. A resident whose
+  // clock was reset by an absence is told that, because it is the one reset they did not
+  // decide for themselves and the one they will ask about.
+  const absenceResetApplied =
+    c.absenceResetAt !== null &&
+    c.absenceResetAt.getTime() === anchorMs &&
+    (!hasBenefitEnd || c.absenceResetAt.getTime() >= benefitEndMs);
 
   // Clamped at 0: a clock that went backwards, or an admin typo that puts activation in
   // the future, must not mint priority out of nothing.
   const rawWaitQuanta = Math.max(0, Math.floor((decidedAt.getTime() - anchorMs) / quantumMs));
 
-  const sinceBenefitMs =
-    c.lastBenefitEndAt === null ? null : decidedAt.getTime() - c.lastBenefitEndAt.getTime();
+  const sinceBenefitMs = hasBenefitEnd ? decidedAt.getTime() - benefitEndMs : null;
   const biasApplied =
     sinceBenefitMs !== null &&
     sinceBenefitMs >= 0 &&
@@ -93,6 +129,7 @@ export function computePriorityKey(
     rawWaitQuanta,
     biasApplied,
     firstTimeParticipant: c.priorParticipations === 0,
+    absenceResetApplied,
   };
 }
 

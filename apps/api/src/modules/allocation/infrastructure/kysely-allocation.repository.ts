@@ -165,13 +165,49 @@ export class KyselyAllocationRepository implements AllocationRepository {
    * Read in one REPEATABLE READ transaction, so a registration committed halfway through
    * cannot produce a candidate list no replay can reproduce.
    */
-  async snapshotInputs(cycleId: string, decidedAt: Date): Promise<RunSnapshot> {
+  async snapshotInputs(
+    cycleId: string,
+    decidedAt: Date,
+    absenceResetPeriods: number | null,
+  ): Promise<RunSnapshot> {
     return this.db.transaction().setIsolationLevel('repeatable read').execute(async (trx) => {
+      // Rule H's window: the periods immediately before this one. A resident who entered
+      // none of them comes back with their clock at zero. Read inside the same snapshot
+      // transaction as the candidates, so the question "did they miss these" is answered
+      // against the same instant the ranking is.
+      const thisCycle = await trx
+        .selectFrom('allocation_cycle')
+        .select(['starts_on as startsOn'])
+        .where('id', '=', cycleId)
+        .executeTakeFirst();
+
+      const priorCycles =
+        absenceResetPeriods === null || thisCycle === undefined
+          ? []
+          : await trx
+              .selectFrom('allocation_cycle')
+              .select(['id', 'registration_closes_at as registrationClosesAt'])
+              .where('id', '!=', cycleId)
+              .where('starts_on', '<', thisCycle.startsOn)
+              .orderBy('starts_on', 'desc')
+              .limit(absenceResetPeriods)
+              .execute();
+
+      // The rule needs a full window to fire. With fewer periods behind it than the
+      // policy asks for, the building has not run long enough for anyone to have missed
+      // that many, and nobody is reset for the system's own youth.
+      const windowComplete = absenceResetPeriods !== null && priorCycles.length === absenceResetPeriods;
+      const priorCycleIds = priorCycles.map((c) => c.id);
+      // The oldest period in the window. A resident who was not yet able to register by
+      // the time its registration closed cannot have missed it.
+      const windowOpensAt = priorCycles.at(-1)?.registrationClosesAt ?? null;
+
       const registered = await trx
         .selectFrom('raffle_registration as rr')
         .innerJoin('resident as r', 'r.id', 'rr.resident_id')
         .select((eb) => [
           'r.id as residentId',
+          'rr.registered_at as registeredAt',
           'r.is_eligible as isEligible',
           'r.is_admin as isAdmin',
           'r.deactivated_at as deactivatedAt',
@@ -193,7 +229,35 @@ export class KyselyAllocationRepository implements AllocationRepository {
             .select(sql<string>`count(*)`.as('v'))
             .whereRef('sa2.resident_id', '=', 'r.id')
             .where('sa2.counts_as_served', '=', true)
-            .as('servedCount'),
+            .as('assignedCount'),
+          // Rule G. A withdrawal is a bay taken off the board and handed back, so it
+          // weighs the same as one that was held to the end: it ends a benefit and it
+          // counts in the history. Both halves read the one column that records it.
+          eb
+            .selectFrom('raffle_registration as rrw')
+            .select(sql<Date | null>`max(rrw.withdrawn_at)`.as('v'))
+            .whereRef('rrw.resident_id', '=', 'r.id')
+            .where('rrw.withdrawn_at', 'is not', null)
+            .where('rrw.withdrawn_at', '<=', decidedAt)
+            .as('lastForfeitAt'),
+          eb
+            .selectFrom('raffle_registration as rrw2')
+            .select(sql<string>`count(*)`.as('v'))
+            .whereRef('rrw2.resident_id', '=', 'r.id')
+            .where('rrw2.withdrawn_at', 'is not', null)
+            .where('rrw2.withdrawn_at', '<=', decidedAt)
+            .as('forfeitCount'),
+          // Rule H. Rows in the window, withdrawn or not: pulling out of a period is
+          // taking part in it and has already been paid for under rule G. Only silence
+          // counts as absence.
+          priorCycleIds.length > 0
+            ? eb
+                .selectFrom('raffle_registration as rrp')
+                .select(sql<string>`count(*)`.as('v'))
+                .whereRef('rrp.resident_id', '=', 'r.id')
+                .where('rrp.cycle_id', 'in', priorCycleIds)
+                .as('priorWindowRegistrations')
+            : sql<string>`0`.as('priorWindowRegistrations'),
           eb
             .selectFrom('allocation_history as ah')
             .select(sql<string>`count(distinct ah.run_id)`.as('v'))
@@ -233,11 +297,31 @@ export class KyselyAllocationRepository implements AllocationRepository {
           skipped.push({ residentId: r.residentId, reason });
           continue;
         }
+        const participationStartedAt = new Date(r.participationStartedAt);
+
+        /*
+         * Rule H, decided here rather than in SQL because it is a policy question - who
+         * *could* have taken part - and policy questions belong where they can be read.
+         *
+         * Three conditions, all of them necessary:
+         *   - the policy is on and the building has run long enough to have a window
+         *   - the resident entered none of the periods in it
+         *   - they were able to enter the oldest one: a resident who moved in last month
+         *     did not miss anything, and must not be charged for the building's past.
+         */
+        const absent =
+          windowComplete &&
+          Number(r.priorWindowRegistrations ?? 0) === 0 &&
+          windowOpensAt !== null &&
+          participationStartedAt <= new Date(windowOpensAt);
+
         candidates.push({
           residentId: r.residentId,
-          participationStartedAt: new Date(r.participationStartedAt),
+          participationStartedAt,
           lastBenefitEndAt: r.lastBenefitEndAt === null ? null : new Date(r.lastBenefitEndAt),
-          servedCount: Number(r.servedCount ?? 0),
+          lastForfeitAt: r.lastForfeitAt === null ? null : new Date(r.lastForfeitAt),
+          absenceResetAt: absent ? new Date(r.registeredAt) : null,
+          servedCount: Number(r.assignedCount ?? 0) + Number(r.forfeitCount ?? 0),
           priorParticipations: Number(r.priorParticipations ?? 0),
           needsAccessibleSpot: r.needsAccessibleSpot,
           hasElectricVehicle: r.hasElectricVehicle,

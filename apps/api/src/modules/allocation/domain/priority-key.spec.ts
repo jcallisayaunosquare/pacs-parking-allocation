@@ -32,6 +32,8 @@ const candidate = (
   residentId: id,
   participationStartedAt: lastServed ? ago(100_000) : ago(anchorHoursAgo),
   lastBenefitEndAt: lastServed ? ago(anchorHoursAgo) : null,
+  lastForfeitAt: null,
+  absenceResetAt: null,
   servedCount: served,
   priorParticipations,
   needsAccessibleSpot: false,
@@ -203,6 +205,109 @@ describe('compareByPriority - the unit table of section 9.2', () => {
     expect(order([x, z, y])).toEqual(['Z', 'Y', 'X']);
     expect(order([y, x, z])).toEqual(['Z', 'Y', 'X']);
     expect(order([x, y, z])).toEqual(['Z', 'Y', 'X']);
+  });
+
+  // ------------------------------------------------------------------ rules G and H
+  //
+  // Both are resets of the same clock, and the tests below are mostly about which reset
+  // wins when more than one applies - the anchor is a maximum, so the answer is always
+  // "the latest one", and that is what makes the pair safe to state separately.
+
+  describe('rule G - a withdrawal ends a benefit', () => {
+    const withdrawn = (id: string, hoursAgo: number, served: number): Candidate => ({
+      residentId: id,
+      participationStartedAt: ago(100_000),
+      lastBenefitEndAt: null,
+      lastForfeitAt: ago(hoursAgo),
+      absenceResetAt: null,
+      servedCount: served,
+      priorParticipations: 2,
+      needsAccessibleSpot: false,
+      hasElectricVehicle: false,
+    });
+
+    it('anchors waiting on the withdrawal, not on the long-ago arrival', () => {
+      const k = key(withdrawn('A', 50, 1));
+      expect(k.rawWaitQuanta).toBe(50);
+      expect(k.anchorAt.toISOString()).toBe(ago(50).toISOString());
+      expect(k.absenceResetApplied).toBe(false);
+    });
+
+    it('cools a fresh withdrawal exactly as it cools a finished allocation', () => {
+      const fresh = key(withdrawn('A', 2, 1));
+      expect(fresh.biasApplied).toBe(true);
+      expect(fresh.effectiveWaitQuanta).toBe(2 - biasQuanta(CFG));
+      // Beyond the window it is an ordinary wait again.
+      expect(key(withdrawn('A', CFG.earlyWaitingBiasHours + 1, 1)).biasApplied).toBe(false);
+    });
+
+    it('takes the later of a withdrawal and an expiry', () => {
+      const both: Candidate = {
+        ...withdrawn('A', 100, 2),
+        lastBenefitEndAt: ago(30),
+      };
+      expect(key(both).anchorAt.toISOString()).toBe(ago(30).toISOString());
+      expect(key({ ...both, lastForfeitAt: ago(5) }).anchorAt.toISOString()).toBe(
+        ago(5).toISOString(),
+      );
+    });
+
+    it('ranks a resident who withdrew below one who kept waiting', () => {
+      const kept = candidate('KEPT', 500, 1, true);
+      const pulled = withdrawn('PULLED', 100, 1);
+      expect(order([pulled, kept])).toEqual(['KEPT', 'PULLED']);
+    });
+  });
+
+  describe('rule H - missing periods restarts the clock', () => {
+    const returning = (id: string, registeredHoursAgo: number, served: number): Candidate => ({
+      residentId: id,
+      participationStartedAt: ago(100_000),
+      lastBenefitEndAt: null,
+      lastForfeitAt: null,
+      absenceResetAt: ago(registeredHoursAgo),
+      servedCount: served,
+      priorParticipations: 1,
+      needsAccessibleSpot: false,
+      hasElectricVehicle: false,
+    });
+
+    it('anchors on the entry that ended the absence, however long the absence was', () => {
+      const k = key(returning('A', 3, 0));
+      expect(k.rawWaitQuanta).toBe(3);
+      expect(k.anchorAt.toISOString()).toBe(ago(3).toISOString());
+      expect(k.absenceResetApplied).toBe(true);
+    });
+
+    it('does not make the returning resident cooling - they are at zero, not fresh off a bay', () => {
+      // The distinction matters: a cooling resident sorts below everyone, a resident at
+      // zero sorts below everyone who has waited and above anyone who has not.
+      const k = key(returning('A', 1, 0));
+      expect(k.biasApplied).toBe(false);
+      expect(k.effectiveWaitQuanta).toBe(1);
+    });
+
+    it('keeps the history: the reset is of waiting, never of the count', () => {
+      expect(key(returning('A', 2, 4)).servedCount).toBe(4);
+    });
+
+    it('puts the returning resident below everyone who kept entering', () => {
+      const steady = candidate('STEADY', 200, 1, true);
+      const back = returning('BACK', 2, 0);
+      // BACK has never held a bay, which would win the tie-break - but the tie is never
+      // reached, because waiting time decides first and BACK has almost none.
+      expect(order([back, steady])).toEqual(['STEADY', 'BACK']);
+    });
+
+    it('takes the later of an absence reset and a benefit end', () => {
+      const served = { ...returning('A', 50, 1), lastBenefitEndAt: ago(10) };
+      expect(key(served).anchorAt.toISOString()).toBe(ago(10).toISOString());
+      expect(key(served).absenceResetApplied).toBe(false);
+
+      const absentLater = { ...returning('A', 10, 1), lastBenefitEndAt: ago(50) };
+      expect(key(absentLater).anchorAt.toISOString()).toBe(ago(10).toISOString());
+      expect(key(absentLater).absenceResetApplied).toBe(true);
+    });
   });
 
   it('E-14: identical keys fall back to the resident id, and only then', () => {

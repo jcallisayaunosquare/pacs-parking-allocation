@@ -197,10 +197,15 @@ export class KyselyRegistrationRepository implements RegistrationRepository {
     return { created: r !== undefined };
   }
 
-  async withdraw(cycleId: string, residentId: string): Promise<boolean> {
+  /**
+   * The withdrawal instant is kept even if the resident registers again afterwards: the
+   * boolean answers "are they in this draw", the timestamp answers "did they once take a
+   * bay off the board", and only the second one decides anything about fairness.
+   */
+  async withdraw(cycleId: string, residentId: string, at: Date): Promise<boolean> {
     const r = await this.db
       .updateTable('raffle_registration')
-      .set({ withdrawn: true })
+      .set({ withdrawn: true, withdrawn_at: at })
       .where('cycle_id', '=', cycleId)
       .where('resident_id', '=', residentId)
       .where('withdrawn', '=', false)

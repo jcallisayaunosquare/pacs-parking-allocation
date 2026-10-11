@@ -276,6 +276,9 @@ export const toDashboard = (d: DashboardDto): Dashboard => ({
     servedCount: num(d.fairness.servedCount),
     biasApplied: d.fairness.biasApplied ?? false,
     firstTimeParticipant: d.fairness.firstTimeParticipant ?? false,
+    // Absent on an older server means "not reset", which keeps the old reading of the
+    // numbers rather than announcing a rule that server does not apply.
+    absenceResetApplied: d.fairness.absenceResetApplied ?? false,
     explanation: d.fairness.explanation,
   },
   nextCycle: d.nextCycle ? toCycle(d.nextCycle) : null,
@@ -368,8 +371,7 @@ export const toConfigVersion = (d: AllocationConfigVersionDto): AllocationConfig
   allocationDurationMonths: Number(d.allocationDurationMonths),
   earlyWaitingBiasHours: Number(d.earlyWaitingBiasHours),
   waitQuantumMinutes: Number(d.waitQuantumMinutes),
-  declineGraceHours: Number(d.declineGraceHours),
-  absenceResetMonths: num(d.absenceResetMonths),
+  absenceResetPeriods: num(d.absenceResetPeriods),
   totalBays: Number(d.totalBays),
   changedAt: date(d.changedAt),
   changedBy: d.changedBy,

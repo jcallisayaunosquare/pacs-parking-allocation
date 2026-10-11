@@ -1051,8 +1051,7 @@ paths:
                 allocationDurationMonths: { type: integer, minimum: 1, maximum: 60 }
                 earlyWaitingBiasHours: { type: integer, minimum: 0, maximum: 8760 }
                 waitQuantumMinutes: { type: integer, minimum: 1 }
-                declineGraceHours: { type: integer, minimum: 0 }
-                absenceResetMonths: { type: [integer, 'null'], minimum: 1 }
+                absenceResetPeriods: { type: [integer, 'null'], minimum: 1 }
                 totalBays: { type: integer, minimum: 0 }
       responses:
         '200':
@@ -1846,9 +1845,16 @@ components:
             effectiveWaitHours:
               type: integer
               description: waitingHours minus the Early-Waiting Bias. Negative while cooling.
-            servedCount: { type: integer }
+            servedCount:
+              type: integer
+              description: >
+                Allocations that counted, withdrawals and declines included. Never reset,
+                not even by an absence.
             biasApplied: { type: boolean }
             firstTimeParticipant: { type: boolean }
+            absenceResetApplied:
+              type: boolean
+              description: True when waiting restarted because the resident sat periods out.
             explanation:
               type: string
               description: One sentence a resident can read, generated from the same rule.
@@ -1951,7 +1957,7 @@ components:
       description: Rule A. Versioned and append-only; a run stamps the version it used.
       required:
         [version, allocationDurationMonths, earlyWaitingBiasHours, waitQuantumMinutes,
-         declineGraceHours, totalBays]
+         totalBays]
       properties:
         version: { type: integer }
         allocationDurationMonths: { type: integer, minimum: 1, maximum: 60, default: 3 }
@@ -1961,11 +1967,15 @@ components:
           minimum: 1
           default: 60
           description: The granularity at which two waiting times count as equal.
-        declineGraceHours: { type: integer, minimum: 0, default: 48 }
-        absenceResetMonths:
+        absenceResetPeriods:
           type: [integer, 'null']
           minimum: 1
-          description: Months of absence after which waiting restarts. null disables the reset.
+          default: 1
+          description: >
+            Consecutive periods a resident may sit out before their waiting time restarts.
+            1 means missing a single period costs the clock; null disables the reset.
+            Withdrawing an entry is taking part, not sitting out - it costs a place in the
+            history instead.
         totalBays:
           type: integer
           minimum: 0

@@ -16,8 +16,6 @@ export interface Termination {
   readonly makeWhole: boolean;
 }
 
-const MS_PER_HOUR = 3_600_000;
-
 /**
  * The rules, each a deliberate decision:
  *
@@ -28,10 +26,11 @@ const MS_PER_HOUR = 3_600_000;
  *               h(r), which increments anyway.
  *   REVOKED   - served. The resident held and consumed the bay and lost it through their
  *               own conduct; not resetting would reward misconduct with priority.
- *   DECLINED  - inside the grace window, nothing was consumed, so the anchor is untouched.
- *               Penalising a free decline would make residents accept bays they cannot
- *               use, and an empty bay nobody may use is worse for everyone. After the
- *               window it is an early release.
+ *   DECLINED  - served, with no grace window. Turning down a bay you won is the same
+ *               decision as withdrawing before the draw, and withdrawing costs a place in
+ *               the history. A free decline would be the cheaper way to do the identical
+ *               thing, and the resident who never registered would end up paying more
+ *               than the one who took a bay off the board and handed it back.
  *   CANCELLED - the system's mistake (admin error, building works). Not served when the
  *               administrator marks it make-whole, so our error does not cost the
  *               resident their place in the queue.
@@ -39,17 +38,12 @@ const MS_PER_HOUR = 3_600_000;
 export function terminationPolicy(input: {
   reason: TerminationReason;
   at: Date;
-  validFrom: Date;
-  declineGraceHours: number;
   makeWhole?: boolean;
 }): Termination {
-  const { reason, at, validFrom, declineGraceHours } = input;
+  const { reason, at } = input;
   const makeWhole = input.makeWhole ?? false;
 
-  const withinGrace = at.getTime() - validFrom.getTime() < declineGraceHours * MS_PER_HOUR;
-
-  const countsAsServed =
-    reason === 'DECLINED' ? !withinGrace : reason === 'CANCELLED' ? !makeWhole : true;
+  const countsAsServed = reason === 'CANCELLED' ? !makeWhole : true;
 
   return { benefitEndedAt: at, countsAsServed, reason, makeWhole };
 }

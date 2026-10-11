@@ -32,10 +32,9 @@ describe('allocation config', () => {
     expect(fields({ ...CFG, earlyWaitingBiasHours: 9000 })).toEqual(['earlyWaitingBiasHours']);
     expect(fields({ ...CFG, waitQuantumMinutes: 0 })).toEqual(['waitQuantumMinutes']);
     expect(fields({ ...CFG, waitQuantumMinutes: 1.5 })).toEqual(['waitQuantumMinutes']);
-    expect(fields({ ...CFG, declineGraceHours: -1 })).toEqual(['declineGraceHours']);
-    expect(fields({ ...CFG, absenceResetMonths: 0 })).toEqual(['absenceResetMonths']);
+    expect(fields({ ...CFG, absenceResetPeriods: 0 })).toEqual(['absenceResetPeriods']);
     expect(fields({ ...CFG, totalBays: -1 })).toEqual(['totalBays']);
-    expect(validateConfig({ ...CFG, absenceResetMonths: null })).toEqual([]);
+    expect(validateConfig({ ...CFG, absenceResetPeriods: null })).toEqual([]);
     expect(validateConfig(CFG)).toEqual([]);
   });
 
@@ -60,8 +59,8 @@ describe('allocation config', () => {
       ...DEFAULT_ALLOCATION_CONFIG,
       earlyWaitingBiasHours: 0,
     });
-    expect(applyConfigPatch(CFG, { absenceResetMonths: null }).absenceResetMonths).toBeNull();
-    expect(applyConfigPatch(CFG, {}).absenceResetMonths).toBe(CFG.absenceResetMonths);
+    expect(applyConfigPatch(CFG, { absenceResetPeriods: null }).absenceResetPeriods).toBeNull();
+    expect(applyConfigPatch(CFG, {}).absenceResetPeriods).toBe(CFG.absenceResetPeriods);
   });
 });
 

@@ -70,8 +70,7 @@ const configPatchSchema = z
     allocationDurationMonths: z.number().int().min(1).max(60).optional(),
     earlyWaitingBiasHours: z.number().int().min(0).max(8760).optional(),
     waitQuantumMinutes: z.number().int().min(1).optional(),
-    declineGraceHours: z.number().int().min(0).optional(),
-    absenceResetMonths: z.number().int().min(1).nullable().optional(),
+    absenceResetPeriods: z.number().int().min(1).nullable().optional(),
     totalBays: z.number().int().min(0).optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'at least one field is required' });
