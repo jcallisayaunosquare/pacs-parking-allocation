@@ -214,11 +214,10 @@ functions:
       - httpApi:
           path: /health
           method: GET
+      # Only `/docs`: an HTTP API route key cannot end in a slash ("Part of the given
+      # route key path is empty"), so `/docs/` is not declarable and broke the deploy.
       - httpApi:
           path: /docs
-          method: GET
-      - httpApi:
-          path: /docs/
           method: GET
       - httpApi:
           path: /openapi.yaml
