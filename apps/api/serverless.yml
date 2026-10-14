@@ -144,6 +144,19 @@ provider:
         # already covered by the statements above. Nothing further is needed for them.
 
 custom:
+  # The sender of every email the user pool sends: invitations, verification codes,
+  # password resets. A verified SES identity, read from SSM so the address is not in a
+  # public repository. Absent, the pool falls back to Cognito's default sender.
+  #
+  # The default sender allows 50 emails a day for the whole account. On 2026-10-14 the
+  # smoke suites spent that, and a real resident created afterwards got no Cognito user
+  # and no invitation. Through SES the quota is the account's SES quota (200 a day while
+  # it is in sandbox, where every RECIPIENT must also be a verified identity).
+  #
+  # The domain matters: SES sends with the identity in From, so the domain's DMARC policy
+  # must let it. unosquare.com publishes p=reject, so a corporate address cannot be the
+  # sender; gmail.com publishes p=none.
+  emailFrom: ${ssm:/pacs/${self:provider.stage}/email-from, 'none'}
   # Where the frontend is served from, per stage.
   #
   # It is a CloudFront domain rather than the bucket's: the bucket is private and
@@ -362,6 +375,8 @@ functions:
           enabled: true
 
 resources:
+  Conditions:
+    HasSesSender: !Not [!Equals ['${self:custom.emailFrom}', 'none']]
   Resources:
     # ------------------------------------------------------------------ cache
     CacheTable:
@@ -558,8 +573,17 @@ resources:
             StringAttributeConstraints:
               MinLength: '0'
               MaxLength: '64'
+        # Residents are created by an administrator, never by signing themselves up. The
+        # live pool already said true while this template said false (changed in the
+        # console); the template now agrees, so a deploy cannot reopen self sign-up.
         AdminCreateUserConfig:
-          AllowAdminCreateUserOnly: false
+          AllowAdminCreateUserOnly: true
+        EmailConfiguration: !If
+          - HasSesSender
+          - EmailSendingAccount: DEVELOPER
+            SourceArn: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${self:custom.emailFrom}'
+            From: 'PACS <${self:custom.emailFrom}>'
+          - EmailSendingAccount: COGNITO_DEFAULT
 
     UserPoolClient:
       Type: AWS::Cognito::UserPoolClient
