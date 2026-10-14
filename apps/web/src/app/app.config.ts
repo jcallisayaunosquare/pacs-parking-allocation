@@ -4,7 +4,12 @@ import {
   provideAppInitializer,
   provideBrowserGlobalErrorListeners,
 } from '@angular/core';
-import { provideRouter, withComponentInputBinding, withInMemoryScrolling } from '@angular/router';
+import {
+  provideRouter,
+  withComponentInputBinding,
+  withInMemoryScrolling,
+  withViewTransitions,
+} from '@angular/router';
 import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
 import { provideAuth } from 'angular-auth-oidc-client';
 import { MAT_ICON_DEFAULT_OPTIONS } from '@angular/material/icon';
@@ -64,6 +69,9 @@ export const appConfig: ApplicationConfig = {
       routes,
       withComponentInputBinding(),
       withInMemoryScrolling({ scrollPositionRestoration: 'top' }),
+      // The page cross-fades and lifts on a route change; the shell holds still. Where
+      // the browser has no View Transitions, navigation is simply instant.
+      withViewTransitions({ skipInitialTransition: true }),
     ),
 
     // `withFetch` so requests are abortable — `resource()` cancels an in-flight load

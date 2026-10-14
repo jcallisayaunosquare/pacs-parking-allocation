@@ -14,6 +14,7 @@ import type { ParkingSpot, SpotType } from '../../domain/models';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { AddBayDialog, EditBayDialog } from './spots-dialogs';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — the bay inventory (FR-16, §17).
@@ -91,13 +92,12 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
       </mat-checkbox>
     </div>
 
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-    }
-
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="6"
+      [busy]="facade.busy()"
+      loadingLabel="Loading bays"
+      busyLabel="Saving the inventory"
       emptyTitle="No bays in the inventory"
       emptyBody="A draw needs at least one bay in service. Add the first one before opening a cycle."
       emptyActionLabel="Add bay"
@@ -109,102 +109,104 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
         arrives in one response, so sorting it on the server would be a round trip to
         reorder a list the browser already holds.
       -->
-      <table
-        mat-table
-        [dataSource]="rows()"
-        matSort
-        matSortDisableClear
-        (matSortChange)="sort.set($event)"
-      >
-        <!--
-          The row number, a position in the list rather than a name for the row - the bay
-          already has one of those in the next column. This list is not paged, so the
-          index is the number. Hidden from screen readers: a count read before every bay
-          code tells someone who cannot see the column nothing.
-        -->
-        <ng-container matColumnDef="num">
-          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let s; let i = index" class="num" aria-hidden="true">
-            {{ i + 1 }}
-          </td>
-        </ng-container>
+      <div class="table-scroll">
+        <table
+          mat-table
+          [dataSource]="rows()"
+          matSort
+          matSortDisableClear
+          (matSortChange)="sort.set($event)"
+        >
+          <!--
+            The row number, a position in the list rather than a name for the row - the bay
+            already has one of those in the next column. This list is not paged, so the
+            index is the number. Hidden from screen readers: a count read before every bay
+            code tells someone who cannot see the column nothing.
+          -->
+          <ng-container matColumnDef="num">
+            <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+            <td mat-cell *matCellDef="let s; let i = index" class="col-index" aria-hidden="true">
+              {{ i + 1 }}
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="code">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Bay</th>
-          <td mat-cell *matCellDef="let s" data-label="Bay" class="code stencil">
-            {{ s.spotCode }}
-          </td>
-        </ng-container>
+          <ng-container matColumnDef="code">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Bay</th>
+            <td mat-cell *matCellDef="let s" data-label="Bay" class="code stencil">
+              {{ s.spotCode }}
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="level">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Level</th>
-          <td mat-cell *matCellDef="let s" data-label="Level">{{ s.level }}</td>
-        </ng-container>
+          <ng-container matColumnDef="level">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Level</th>
+            <td mat-cell *matCellDef="let s" data-label="Level">{{ s.level }}</td>
+          </ng-container>
 
-        <ng-container matColumnDef="type">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Type</th>
-          <td mat-cell *matCellDef="let s" data-label="Type">
-            @switch (s.type) {
-              @case ('ACCESSIBLE') {
-                <app-status-pill label="Accessible" tone="attention" />
+          <ng-container matColumnDef="type">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Type</th>
+            <td mat-cell *matCellDef="let s" data-label="Type">
+              @switch (s.type) {
+                @case ('ACCESSIBLE') {
+                  <app-status-pill label="Accessible" tone="attention" />
+                }
+                @case ('EV') {
+                  <app-status-pill label="EV" tone="waiting" />
+                }
+                @default {
+                  <span class="dim">Standard</span>
+                }
               }
-              @case ('EV') {
-                <app-status-pill label="EV" tone="waiting" />
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="status">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
+            <td mat-cell *matCellDef="let s" data-label="Status">
+              @if (s.isActive) {
+                <app-status-pill label="In service" tone="held" />
+              } @else {
+                <app-status-pill label="Out of service" tone="revoked" />
               }
-              @default {
-                <span class="dim">Standard</span>
-              }
-            }
-          </td>
-        </ng-container>
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="status">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
-          <td mat-cell *matCellDef="let s" data-label="Status">
-            @if (s.isActive) {
-              <app-status-pill label="In service" tone="held" />
-            } @else {
-              <app-status-pill label="Out of service" tone="revoked" />
-            }
-          </td>
-        </ng-container>
+          <ng-container matColumnDef="notes">
+            <th mat-header-cell *matHeaderCellDef>Notes</th>
+            <td mat-cell *matCellDef="let s" data-label="Notes" class="dim">{{ s.notes || '—' }}</td>
+          </ng-container>
 
-        <ng-container matColumnDef="notes">
-          <th mat-header-cell *matHeaderCellDef>Notes</th>
-          <td mat-cell *matCellDef="let s" data-label="Notes" class="dim">{{ s.notes || '—' }}</td>
-        </ng-container>
-
-        <!--
-          One trigger per row rather than a button whose label changes with the row's
-          state. A column of "Take out of service" / "Put back in service" set the row's
-          width from its longest verb and read as the table's loudest element, which a
-          maintenance action is not. The menu also leaves room for Edit without adding a
-          second column.
-        -->
-        <ng-container matColumnDef="actions">
-          <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
-          <td mat-cell *matCellDef="let s">
-            <button
-              matIconButton
-              type="button"
-              [disabled]="facade.busy()"
-              [matMenuTriggerFor]="rowMenu"
-              [attr.aria-label]="'Actions for bay ' + s.spotCode"
-            >
-              <mat-icon>more_vert</mat-icon>
-            </button>
-            <mat-menu #rowMenu="matMenu">
-              <button mat-menu-item type="button" (click)="openEdit(s)">Edit</button>
-              <button mat-menu-item type="button" (click)="toggle(s)">
-                {{ s.isActive ? 'Take out of service' : 'Put back in service' }}
+          <!--
+            One trigger per row rather than a button whose label changes with the row's
+            state. A column of "Take out of service" / "Put back in service" set the row's
+            width from its longest verb and read as the table's loudest element, which a
+            maintenance action is not. The menu also leaves room for Edit without adding a
+            second column.
+          -->
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+            <td mat-cell *matCellDef="let s" class="acts">
+              <button
+                matIconButton
+                type="button"
+                [disabled]="facade.busy()"
+                [matMenuTriggerFor]="rowMenu"
+                [attr.aria-label]="'Actions for bay ' + s.spotCode"
+              >
+                <mat-icon>more_vert</mat-icon>
               </button>
-            </mat-menu>
-          </td>
-        </ng-container>
+              <mat-menu #rowMenu="matMenu">
+                <button mat-menu-item type="button" (click)="openEdit(s)">Edit</button>
+                <button mat-menu-item type="button" (click)="toggle(s)">
+                  {{ s.isActive ? 'Take out of service' : 'Put back in service' }}
+                </button>
+              </mat-menu>
+            </td>
+          </ng-container>
 
-        <tr mat-header-row *matHeaderRowDef="columns"></tr>
-        <tr mat-row *matRowDef="let row; columns: columns" [class.row--out]="!row.isActive"></tr>
-      </table>
+          <tr mat-header-row *matHeaderRowDef="columns"></tr>
+          <tr mat-row *matRowDef="let row; columns: columns" [class.row--out]="!row.isActive"></tr>
+        </table>
+      </div>
     </app-view-state>
   `,
   styles: [
@@ -267,27 +269,10 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
         width: 13rem;
       }
 
-      table {
-        width: 100%;
-      }
-      .code {
-        font-size: 1.05rem;
-      }
+      /* A bay out of service: still listed, visibly not in the draw. */
       .row--out .code {
         color: var(--steel-faint);
         text-decoration: line-through;
-      }
-      .dim {
-        color: var(--steel-faint);
-      }
-      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
-         width of each digit. */
-      .num {
-        width: 3rem;
-        color: var(--steel-faint);
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        padding-right: var(--sp-2);
       }
 
       @media (max-width: 40rem) {
@@ -307,6 +292,8 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
 })
 export default class SpotsPage {
   readonly facade = inject(SpotsFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly dialog = inject(MatDialog);
 
   readonly columns = ['num', 'code', 'level', 'type', 'status', 'notes', 'actions'];

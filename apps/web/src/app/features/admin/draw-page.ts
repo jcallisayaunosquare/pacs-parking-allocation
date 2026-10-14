@@ -129,7 +129,7 @@ import type { DecidedBy } from '../../domain/models';
                 [disabled]="facade.busy()"
                 (click)="facade.run_()"
               >
-                {{ facade.busy() ? 'Drawing...' : 'Run the draw' }}
+                {{ facade.busy() ? 'Drawing…' : 'Run the draw' }}
               </button>
 
               <!--

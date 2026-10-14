@@ -50,11 +50,13 @@
       The icon face, subset to the icons actually used via `icon_names`. Google serves
       only those glyphs, so this is a few hundred bytes rather than the whole set - which
       matters against the 180 kB budget for the first route. Add any new icon name here
-      or mat-icon renders the literal word.
+      or mat-icon renders the literal word. Keep the list alphabetical, and check every
+      name exists: one unknown name does not fail - Google silently drops the subset and
+      serves the whole face, about 970 kB, with a 200.
     -->
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&icon_names=arrow_back,arrow_forward,check,dark_mode,fit_screen,light_mode,lock,logout,more_vert,my_location,person,replay,zoom_in,zoom_out&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&icon_names=arrow_back,arrow_forward,balance,calendar_month,check,close,confirmation_number,dark_mode,description,directions_car,edit,fit_screen,format_list_numbered,group,history,light_mode,local_parking,lock,logout,map,menu,more_vert,my_location,person,refresh,replay,table_rows,videocam,visibility,visibility_off,zoom_in,zoom_out&display=swap"
     />
     <!--
       amazon-cognito-identity-js is published for Node and reaches for `global`. Defining

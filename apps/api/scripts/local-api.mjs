@@ -22,6 +22,10 @@
  */
 import { createServer } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+const docsHtml = readFileSync(new URL('../src/main/docs.html', import.meta.url), 'utf8');
+const openapiYaml = readFileSync(new URL('../../../packages/contracts/openapi.yaml', import.meta.url), 'utf8');
 
 const PORT = Number(process.env.PORT ?? 4300);
 const HOUR = 3600_000;
@@ -1466,6 +1470,16 @@ const server = createServer((req, res) => {
   };
 
   if (req.method === 'OPTIONS') return send(204, null);
+  if (req.method === 'GET' && ['/docs', '/docs/', '/openapi.yaml'].includes(url.pathname)) {
+    const isUi = url.pathname !== '/openapi.yaml';
+    res.writeHead(200, {
+      ...CORS,
+      'content-type': isUi ? 'text/html; charset=utf-8' : 'application/yaml; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    return res.end(isUi ? docsHtml : openapiYaml);
+  }
 
   const chunks = [];
   req.on('data', (c) => chunks.push(c));

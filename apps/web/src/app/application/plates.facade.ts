@@ -1,8 +1,8 @@
-import { Injectable, computed, inject, resource, signal } from '@angular/core';
+import { Injectable, Injector, computed, effect, inject, resource, signal } from '@angular/core';
 import type { ApiError, PlateRead, PlateReviewDraft } from '../domain/models';
 import { PlateRepository } from '../domain/repositories';
 import { toApiError } from '../core/http/api-error';
-import { peek, viewState } from './async-state';
+import { peek, reloaded, viewState } from './async-state';
 
 /**
  * The gate log (M-7). Same shape as the other admin facades: a `resource` per list,
@@ -19,6 +19,7 @@ import { peek, viewState } from './async-state';
 @Injectable({ providedIn: 'root' })
 export class PlatesFacade {
   private readonly repo = inject(PlateRepository);
+  private readonly injector = inject(Injector);
 
   /**
    * The one filter the screen actually needs. "Needs review" is not the same query as
@@ -64,7 +65,40 @@ export class PlatesFacade {
   readonly busy = this._busy.asReadonly();
   readonly error = this._error.asReadonly();
 
+  /**
+   * A reload in flight, as distinct from a first load.
+   *
+   * `resource` keeps the previous value while it reloads, so the table does not blink and
+   * `state()` stays `ready`. That is the behaviour this screen wants - but it also means
+   * nothing on screen says the fetch is happening, and a refresh control that gives no
+   * answer gets pressed four times. This is what the control reads from.
+   */
+  readonly refreshing = computed(
+    () => this.page.status() === 'reloading' || this.metricsRes.status() === 'reloading',
+  );
+
+  private readonly _refreshedAt = signal<Date | null>(null);
+  /** When the rows on screen were last fetched, so the control can say how old they are. */
+  readonly refreshedAt = this._refreshedAt.asReadonly();
+
+  constructor() {
+    /*
+     * Stamped on every resolution rather than at the moment the button is pressed: the
+     * figure has to describe the rows being displayed, and between the press and the
+     * response the rows are still the old ones.
+     */
+    effect(() => {
+      if (this.page.status() === 'resolved') this._refreshedAt.set(new Date());
+    });
+  }
+
   readonly pageNumber = computed(() => this.trail().length + 1);
+  /**
+   * Rows before this page, so the row number keeps counting across pages instead of
+   * restarting at 1 - the same rule the register uses. A position in the list, not an
+   * identifier: a new read arriving at the top renumbers everything below it.
+   */
+  readonly rowOffset = computed(() => this.trail().length * this.limit());
   readonly hasPrevious = computed(() => this.trail().length > 0);
   readonly hasNext = computed(() => this.nextCursor() !== null);
 
@@ -139,9 +173,10 @@ export class PlatesFacade {
       this._error.set(toApiError(e));
       return false;
     } finally {
+      // Reloaded on both paths - a 409 means somebody else's verdict is now the true one
+      // - and awaited, so the dialog closes onto a log that already shows the decision.
+      await reloaded(this.injector, this.page, this.metricsRes);
       this._busy.set(false);
-      this.page.reload();
-      this.metricsRes.reload();
     }
   }
 

@@ -150,7 +150,7 @@ const FRAME_HEIGHT = '78vh';
           @for (aisle of aisles(); track aisle.y) {
             <line
               class="lot__aisle"
-              [attr.x1]="margin() * 3.2"
+              [attr.x1]="aisleStart()"
               [attr.y1]="aisle.y"
               [attr.x2]="box().w - margin() * 1.6"
               [attr.y2]="aisle.y"
@@ -167,7 +167,7 @@ const FRAME_HEIGHT = '78vh';
           @for (row of rows(); track row.row) {
             <text
               class="lot__row-letter stencil"
-              [attr.x]="margin() * 3.0"
+              [attr.x]="letterX()"
               [attr.y]="rowMidY(row.row)"
               [attr.font-size]="codeSize() * 1.5"
               text-anchor="middle"
@@ -215,6 +215,8 @@ const FRAME_HEIGHT = '78vh';
             [class]="'lot__bay lot__bay--' + tone(bay)"
             [class.lot__bay--dim]="isDimmed(bay)"
             [class.lot__bay--hot]="bay.placement.spotId === hovered()"
+            [style.--row]="bay.placement.row"
+            [style.--col]="bay.placement.col"
           >
             <polygon class="lot__floor" [attr.points]="face(bay)" />
             @if (bay.status === 'OUT_OF_SERVICE') {
@@ -444,7 +446,7 @@ const FRAME_HEIGHT = '78vh';
       }
 
       .lot__row-letter {
-        fill: var(--steel-faint);
+        fill: var(--steel-soft);
       }
 
       .lot__level-label {
@@ -459,6 +461,37 @@ const FRAME_HEIGHT = '78vh';
 
       .lot__floor {
         stroke-width: 8;
+        /*
+         * Status changes ease rather than snap: when occupancy reloads after a draw, the
+         * bays that changed hands visibly turn, which is the result being read rather
+         * than a frame swapped under the reader. The edge is quicker - it is hover.
+         */
+        transition:
+          fill 360ms ease,
+          stroke 160ms ease,
+          stroke-width 160ms ease;
+      }
+
+      /*
+       * The plan's one authored moment: when it is drawn, the bays come up row by row,
+       * front to back, the way a deck is read. Opacity and a slight scale only - both
+       * composited - and 'backwards' fill, so once it has run the bay belongs to its
+       * status and filter classes again (a 'both' fill would pin it at full opacity and
+       * break the dimming a filter applies).
+       */
+      .lot__bay {
+        transform-box: fill-box;
+        transform-origin: center;
+        transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
+        animation: bay-in 460ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+        animation-delay: calc(var(--row, 0) * 70ms + var(--col, 0) * 14ms);
+      }
+
+      @keyframes bay-in {
+        from {
+          opacity: 0;
+          transform: scale(0.82);
+        }
       }
 
       /*
@@ -589,6 +622,15 @@ const FRAME_HEIGHT = '78vh';
       .lot__cell--selected::after {
         border-color: var(--bay-line);
         box-shadow: 0 0 0 3px var(--surface-1);
+        /* The ring closes in on the bay as it is chosen, so the eye lands on it. */
+        animation: ring-in 320ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      @keyframes ring-in {
+        from {
+          opacity: 0;
+          transform: scale(1.35);
+        }
       }
 
       /* ---------------------------------------------------------------- minimap */
@@ -634,8 +676,10 @@ const FRAME_HEIGHT = '78vh';
 
       @media (prefers-reduced-motion: reduce) {
         .lot__bay,
-        .lot__floor {
+        .lot__floor,
+        .lot__cell--selected::after {
           transition: none !important;
+          animation: none !important;
         }
       }
     `,
@@ -782,6 +826,32 @@ export class LotMap {
     const g = bays[0]?.placement.geometry;
     return g ? g.y + g.h / 2 : 0;
   }
+
+  /** The right edge of the lift core, which the letters must clear. */
+  private readonly coreRight = computed(() => this.margin() * (1.35 + 1.5));
+
+  /** Where the bays begin: the left edge of the leftmost first bay on the level. */
+  private readonly baysLeft = computed(() => {
+    const xs = this.rows()
+      .map((r) => r.bays[0]?.placement.geometry.x)
+      .filter((x): x is number => x !== undefined);
+    return xs.length > 0 ? Math.min(...xs) : this.margin() * 4;
+  });
+
+  /**
+   * Every letter on one vertical line, centred in the gutter between the lift and the
+   * bays.
+   *
+   * It used to be a fixed `margin * 3`, which on the seeded deck put the letters three
+   * units off the lift's right wall: B and C, level with the lift, read as glued to it,
+   * while A and D, above and below it, read as floating - one column of letters that
+   * looked like two. Taken from the geometry, the gutter is the same for every row and
+   * stays right if the deck is redrawn.
+   */
+  readonly letterX = computed(() => Math.round((this.coreRight() + this.baysLeft()) / 2));
+
+  /** Lane paint starts at the bays, not across the letters' gutter. */
+  readonly aisleStart = computed(() => this.baysLeft() - Math.round(this.margin() * 0.15));
   readonly glyphOffset = computed(() => this.codeSize() * 1.25);
 
   constructor() {

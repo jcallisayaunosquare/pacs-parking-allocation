@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PACS · API Swagger</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js" crossorigin="anonymous"></script>
+  <script>
+    const basePath = window.location.pathname.replace(/\/docs\/?$/, '');
+    window.ui = SwaggerUIBundle({
+      url: basePath + '/openapi.yaml',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      persistAuthorization: false,
+      validatorUrl: null,
+      // Use this API, including a named Gateway stage, for Try it out.
+      plugins: [function () {
+        return { statePlugins: { spec: { wrapActions: {
+          updateJsonSpec: function (original) {
+            return function (spec) {
+              return original(Object.assign({}, spec, {
+                servers: [{ url: window.location.origin + basePath, description: 'API actual' }]
+              }));
+            };
+          }
+        } } } };
+      }]
+    });
+  </script>
+</body>
+</html>

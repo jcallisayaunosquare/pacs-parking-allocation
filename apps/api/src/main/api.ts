@@ -9,6 +9,7 @@ import { errorResponse } from '../shared/http/response';
 import { Router } from '../shared/http/router';
 import { getContainer } from './composition-root';
 import { buildRoutes } from './routes';
+import { documentationResponse } from './docs';
 
 /**
  * The lambdalith (ADR-014): one function, one composition root, every HTTP route.
@@ -35,6 +36,8 @@ export const handler = async (
   logger.addPersistentLogAttributes({ traceId });
 
   try {
+    const documentation = documentationResponse(event.requestContext.http.method, event.rawPath);
+    if (documentation) return documentation;
     const r = await getRouter();
     const response = await r.handle(event, traceId);
 

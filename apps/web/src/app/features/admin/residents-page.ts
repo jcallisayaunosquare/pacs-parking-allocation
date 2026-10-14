@@ -5,29 +5,30 @@ import { ConfirmService } from '../../shared/ui/confirm';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
-import { MatPaginatorIntl, MatPaginatorModule, type PageEvent } from '@angular/material/paginator';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSortModule, type Sort } from '@angular/material/sort';
 import { MatTableModule } from '@angular/material/table';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatIconModule } from '@angular/material/icon';
 import { ResidentsFacade } from '../../application/admin.facades';
-import type { Resident } from '../../domain/models';
+import type { Resident, Vehicle } from '../../domain/models';
 import type { ResidentSortField } from '../../domain/repositories';
-import { KeysetPaginatorIntl } from '../../shared/ui/keyset-paginator-intl';
+import { Pager } from '../../shared/ui/pager';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import {
   AddResidentDialog,
   EditResidentDialog,
   EligibilityDialog,
-  VehiclesDialog,
+  VehicleDetailDialog,
+  VehicleFormDialog,
 } from './residents-dialogs';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — the resident register. Sort, filter, page, edit, set eligibility (§17).
  *
- * Sorting and paging are server concerns here. `MatSort` and `MatPaginator` are driven
+ * Sorting and paging are server concerns here. `MatSort` and the shared pager are driven
  * from the facade rather than from a `MatTableDataSource`, because the client only ever
  * holds one page: sorting the fifteen rows in the browser would reorder fifteen rows out
  * of however many exist and call the list sorted.
@@ -39,13 +40,11 @@ import {
 @Component({
   selector: 'app-residents-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  providers: [{ provide: MatPaginatorIntl, useClass: KeysetPaginatorIntl }],
   imports: [
     FormsModule,
     MatButtonModule,
     MatFormFieldModule,
     MatInputModule,
-    MatPaginatorModule,
     MatSelectModule,
     MatSortModule,
     MatTableModule,
@@ -53,6 +52,7 @@ import {
     MatIconModule,
     StatusPill,
     ViewStateHost,
+    Pager,
   ],
   template: `
     <header class="head">
@@ -86,175 +86,201 @@ import {
       <button matButton type="button" (click)="facade.resetFilters()">Clear</button>
     </div>
 
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">
-        {{ e.message }}
-        @if (e.details?.length) {
-          <ul class="msg__list">
-            @for (d of e.details; track d.field) {
-              <li>{{ d.field }}: {{ d.issue }}</li>
-            }
-          </ul>
-        }
-      </div>
-    }
-
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="6"
+      [busy]="facade.busy()"
+      loadingLabel="Loading residents"
+      busyLabel="Saving the register"
       emptyTitle="No residents match"
       emptyBody="Clear the filters, or add the building's first resident to get started."
       emptyActionLabel="Add resident"
       (action)="openCreate()"
       (retry)="facade.refresh()"
     >
-      <table
-        mat-table
-        [dataSource]="rows()"
-        matSort
-        matSortDisableClear
-        [matSortActive]="facade.sort()"
-        [matSortDirection]="facade.dir()"
-        (matSortChange)="onSort($event)"
-      >
-        <!--
-          The row number. It is a position in the list and nothing else - it keeps
-          counting across pages through the facade's offset, and sorting or filtering
-          renumbers it, which is what a reader of a sorted list expects. The header is
-          hidden from screen readers rather than labelled, because "1" through "15" read
-          aloud in front of every name is noise to someone who cannot see the column.
-        -->
-        <ng-container matColumnDef="num">
-          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let r; let i = index" class="num" aria-hidden="true">
-            {{ facade.rowOffset() + i + 1 }}
-          </td>
-        </ng-container>
+      <div class="table-scroll">
+        <table
+          mat-table
+          [dataSource]="rows()"
+          matSort
+          matSortDisableClear
+          [matSortActive]="facade.sort()"
+          [matSortDirection]="facade.dir()"
+          (matSortChange)="onSort($event)"
+        >
+          <!--
+            The row number. It is a position in the list and nothing else - it keeps
+            counting across pages through the facade's offset, and sorting or filtering
+            renumbers it, which is what a reader of a sorted list expects. The header is
+            hidden from screen readers rather than labelled, because "1" through "15" read
+            aloud in front of every name is noise to someone who cannot see the column.
+          -->
+          <ng-container matColumnDef="num">
+            <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+            <td mat-cell *matCellDef="let r; let i = index" class="col-index" aria-hidden="true">
+              {{ facade.rowOffset() + i + 1 }}
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="name">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
-          <td mat-cell *matCellDef="let r" data-label="Name" class="name">{{ r.fullName }}</td>
-        </ng-container>
+          <ng-container matColumnDef="name">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
+            <td mat-cell *matCellDef="let r" data-label="Name" class="name">{{ r.fullName }}</td>
+          </ng-container>
 
-        <ng-container matColumnDef="unit">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Unit</th>
-          <td mat-cell *matCellDef="let r" data-label="Unit" class="unit">{{ r.unitNumber }}</td>
-        </ng-container>
+          <ng-container matColumnDef="unit">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Unit</th>
+            <td mat-cell *matCellDef="let r" data-label="Unit" class="unit">{{ r.unitNumber }}</td>
+          </ng-container>
 
-        <ng-container matColumnDef="email">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Email</th>
-          <td mat-cell *matCellDef="let r" data-label="Email" class="dim">{{ r.email }}</td>
-        </ng-container>
+          <ng-container matColumnDef="email">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Email</th>
+            <td mat-cell *matCellDef="let r" data-label="Email" class="dim">{{ r.email }}</td>
+          </ng-container>
 
-        <ng-container matColumnDef="eligibility">
-          <th mat-header-cell *matHeaderCellDef mat-sort-header>Eligibility</th>
-          <td mat-cell *matCellDef="let r" data-label="Eligibility">
-            <!--
-              No case for an administrator here: GET /residents does not return them.
-              This is the register of the people the allocation is for, and the account
-              that operates the raffle is not one of them - a row with a pill explaining
-              that was still a row.
-            -->
-            @if (r.isEligible) {
-              <app-status-pill label="Eligible" tone="held" />
-            } @else {
-              <app-status-pill label="Not eligible" tone="revoked" />
-              @if (r.ineligibleReason) {
-                <span class="reason">{{ r.ineligibleReason }}</span>
+          <ng-container matColumnDef="eligibility">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Eligibility</th>
+            <td mat-cell *matCellDef="let r" data-label="Eligibility">
+              <!--
+                No case for an administrator here: GET /residents does not return them.
+                This is the register of the people the allocation is for, and the account
+                that operates the raffle is not one of them - a row with a pill explaining
+                that was still a row.
+              -->
+              @if (r.isEligible) {
+                <app-status-pill label="Eligible" tone="held" />
+              } @else {
+                <app-status-pill label="Not eligible" tone="revoked" />
+                @if (r.ineligibleReason) {
+                  <span class="reason">{{ r.ineligibleReason }}</span>
+                }
               }
-            }
-          </td>
-        </ng-container>
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="accessible">
-          <th mat-header-cell *matHeaderCellDef>Accessible bay</th>
-          <td mat-cell *matCellDef="let r" data-label="Accessible bay">
-            @if (r.needsAccessibleSpot) {
-              <app-status-pill label="Required" tone="attention" />
-            } @else {
-              <span class="dim">No</span>
-            }
-          </td>
-        </ng-container>
+          <ng-container matColumnDef="accessible">
+            <th mat-header-cell *matHeaderCellDef>Accessible bay</th>
+            <td mat-cell *matCellDef="let r" data-label="Accessible bay">
+              @if (r.needsAccessibleSpot) {
+                <app-status-pill label="Required" tone="attention" />
+              } @else {
+                <span class="dim">No</span>
+              }
+            </td>
+          </ng-container>
 
-        <!--
-          The bay a resident holds right now. It earns a column because it is the one
-          fact that blocks a removal, and an administrator scanning the register for
-          someone to take off it should see the blocker in the row rather than meet it
-          in a dialog.
-        -->
-        <ng-container matColumnDef="bay">
-          <th mat-header-cell *matHeaderCellDef>Bay held</th>
-          <td mat-cell *matCellDef="let r" data-label="Bay held">
-            @if (r.currentSpotCode) {
-              <span class="code stencil">{{ r.currentSpotCode }}</span>
-            } @else {
-              <span class="dim">{{ dash }}</span>
-            }
-          </td>
-        </ng-container>
+          <!--
+            The bay a resident holds right now. It earns a column because it is the one
+            fact that blocks a removal, and an administrator scanning the register for
+            someone to take off it should see the blocker in the row rather than meet it
+            in a dialog.
+          -->
+          <ng-container matColumnDef="bay">
+            <th mat-header-cell *matHeaderCellDef>Bay held</th>
+            <td mat-cell *matCellDef="let r" data-label="Bay held">
+              @if (r.currentSpotCode) {
+                <span class="code stencil">{{ r.currentSpotCode }}</span>
+              } @else {
+                <span class="dim">{{ dash }}</span>
+              }
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="signin">
-          <th mat-header-cell *matHeaderCellDef>Sign-in</th>
-          <td mat-cell *matCellDef="let r" data-label="Sign-in">
-            @if (r.externalSubject) {
-              <app-status-pill label="Linked" tone="held" />
-            } @else {
-              <app-status-pill label="Not signed in yet" tone="idle" />
-            }
-          </td>
-        </ng-container>
+          <!--
+            The car, by the plate as it is painted - the string the gate reads against.
+            The icon opens the full record (make, model, year, colour) read-only; adding
+            or changing it is in the row's menu, so there is one way to edit a car.
+          -->
+          <ng-container matColumnDef="vehicles">
+            <th mat-header-cell *matHeaderCellDef>Vehicle</th>
+            <td mat-cell *matCellDef="let r" data-label="Vehicle">
+              @if (facade.vehiclesByResident() === undefined) {
+                <span class="dim">Loading…</span>
+              } @else if (carOf(r); as car) {
+                <button
+                  type="button"
+                  class="car"
+                  [attr.aria-label]="'Vehicle ' + car.plateDisplay + ' - show its details'"
+                  (click)="openVehicleDetail(r, car)"
+                >
+                  <mat-icon aria-hidden="true">directions_car</mat-icon>
+                  <span class="code plate">{{ car.plateDisplay }}</span>
+                </button>
+              } @else {
+                <span class="dim">None</span>
+              }
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="actions">
-          <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
-          <td mat-cell *matCellDef="let r" class="acts">
-            <!--
-              One trigger per row instead of three buttons, so a wide register reads as
-              rows of people rather than rows of controls. The menu carries the accessible
-              name of the person it acts on, because "more options" twenty times over tells
-              a screen-reader user nothing about which row they are on.
-            -->
-            <button
-              matIconButton
-              type="button"
-              [matMenuTriggerFor]="rowMenu"
-              [attr.aria-label]="'Actions for ' + r.fullName"
-            >
-<mat-icon>more_vert</mat-icon>
-            </button>
+          <ng-container matColumnDef="signin">
+            <th mat-header-cell *matHeaderCellDef>Sign-in</th>
+            <td mat-cell *matCellDef="let r" data-label="Sign-in">
+              @if (r.externalSubject) {
+                <app-status-pill label="Linked" tone="held" />
+              } @else {
+                <app-status-pill label="Not signed in yet" tone="idle" />
+              }
+            </td>
+          </ng-container>
 
-            <mat-menu #rowMenu="matMenu">
-              <button mat-menu-item type="button" (click)="openEdit(r)">Edit</button>
-              <button mat-menu-item type="button" (click)="openEligibility(r)">
-                Eligibility
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+            <td mat-cell *matCellDef="let r" class="acts">
+              <!--
+                One trigger per row instead of three buttons, so a wide register reads as
+                rows of people rather than rows of controls. The menu carries the accessible
+                name of the person it acts on, because "more options" twenty times over tells
+                a screen-reader user nothing about which row they are on.
+              -->
+              <button
+                matIconButton
+                type="button"
+                [matMenuTriggerFor]="rowMenu"
+                [attr.aria-label]="'Actions for ' + r.fullName"
+              >
+  <mat-icon>more_vert</mat-icon>
               </button>
-              <button mat-menu-item type="button" (click)="openVehicles(r)">Vehicles</button>
-              <button mat-menu-item type="button" class="danger" (click)="remove(r)">
-                Remove
-              </button>
-            </mat-menu>
-          </td>
-        </ng-container>
 
-        <tr mat-header-row *matHeaderRowDef="columns"></tr>
-        <tr mat-row *matRowDef="let row; columns: columns"></tr>
-      </table>
+              <mat-menu #rowMenu="matMenu">
+                <button mat-menu-item type="button" (click)="openEdit(r)">Edit</button>
+                <button mat-menu-item type="button" (click)="openEligibility(r)">
+                  Eligibility
+                </button>
+                <!-- Add or Edit, from whether the resident has a car: the words match the form. -->
+                <button
+                  mat-menu-item
+                  type="button"
+                  [disabled]="facade.vehiclesByResident() === undefined"
+                  (click)="openVehicleForm(r)"
+                >
+                  {{ carOf(r) ? 'Edit vehicle' : 'Add vehicle' }}
+                </button>
+                <button mat-menu-item type="button" class="danger" (click)="remove(r)">
+                  Remove
+                </button>
+              </mat-menu>
+            </td>
+          </ng-container>
 
-      <mat-paginator
-        [length]="pagerLength()"
-        [pageSize]="facade.limit()"
-        [pageIndex]="facade.pageNumber() - 1"
-        [hidePageSize]="true"
-        (page)="onPage($event)"
-      />
+          <tr mat-header-row *matHeaderRowDef="columns"></tr>
+          <tr mat-row *matRowDef="let row; columns: columns"></tr>
+        </table>
+      </div>
+
+      @if (facade.hasPrevious() || facade.hasNext()) {
+        <app-pager
+          [page]="facade.pageNumber()"
+          [pageSize]="facade.limit()"
+          [count]="facade.residents().length"
+          [hasPrevious]="facade.hasPrevious()"
+          [hasNext]="facade.hasNext()"
+          (previous)="facade.previousPage()"
+          (next)="facade.nextPage()"
+        />
+      }
     </app-view-state>
   `,
   styles: [
     `
-      /* The destructive item, so it does not read like the two above it. */
-      .danger {
-        color: var(--revoked);
-      }
       :host {
         /* This screen's measure. The shell is full-bleed; pages own their width. */
         width: 100%;
@@ -300,82 +326,8 @@ import {
         font-size: var(--t-fine);
       }
 
-      /*
-       * The register, set as a painted schedule rather than a Material data grid. Material
-       * ships its own surface, divider and hover colours; left alone they sit on top of the
-       * concrete palette and read as a different product. Every one is repointed at a token.
-       */
-      table {
-        width: 100%;
-        --mat-table-background-color: transparent;
-        --mat-table-row-item-outline-color: var(--rule-soft);
-        --mat-table-header-headline-color: var(--steel-soft);
-        --mat-table-row-item-label-text-color: var(--steel);
-        --mat-table-header-headline-size: var(--t-fine);
-        --mat-table-row-item-label-text-size: var(--t-small);
-        --mat-table-header-container-height: 3rem;
-        --mat-table-row-item-container-height: 3.5rem;
-      }
-
-      /* The header captions the columns; it is not a band of chrome. */
-      th.mat-mdc-header-cell {
-        border-bottom: 2px solid var(--steel);
-        font-weight: 600;
-        background: transparent;
-      }
-
-      td.mat-mdc-cell {
-        border-bottom-color: var(--rule-soft);
-      }
-
-      tr.mat-mdc-row {
-        transition: background-color 140ms ease;
-      }
-
-      /*
-       * Gated, or a touch device keeps the highlight on the last row tapped and the
-       * register looks like it has a selection it does not have. Enter is instant so the
-       * row answers the pointer; leaving fades, which is the quieter half.
-       */
-      @media (hover: hover) and (pointer: fine) {
-        tr.mat-mdc-row:hover {
-          background: var(--concrete-deep);
-          transition-duration: 0ms;
-        }
-      }
-
-      /*
-       * Keyboard position is marked with the painted line, the same mark the lot map uses
-       * for the bay that is yours. A background tint alone is too quiet to find by tabbing.
-       */
-      tr.mat-mdc-row:focus-within {
-        background: var(--concrete-deep);
-        box-shadow: inset 3px 0 0 var(--bay-line);
-        transition-duration: 0ms;
-      }
-
-      /*
-       * The overflow trigger is chrome: quiet until the row is under the pointer, and
-       * always solid for the keyboard, which cannot hover to discover it.
-       */
-      .acts button {
-        opacity: 0.55;
-        transition: opacity 140ms ease;
-      }
-
-      tr.mat-mdc-row:hover .acts button,
-      tr.mat-mdc-row:focus-within .acts button,
-      .acts button:focus-visible {
-        opacity: 1;
-        transition-duration: 0ms;
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        tr.mat-mdc-row,
-        .acts button {
-          transition: none;
-        }
-      }
+      /* The table itself is the shared one in styles.scss; only this register's own
+         cells are styled here. */
       .name {
         font-weight: 600;
       }
@@ -384,8 +336,46 @@ import {
           'wdth' 112,
           'wght' 620;
       }
-      .dim {
+      /* Plates side by side, wrapping under each other on a narrow column. */
+      /*
+       * The car: an icon and its plate, together one control that opens the detail. A
+       * quiet pressable - no frame until it is pointed at - because it sits in a row of
+       * text and must not read as a button bar.
+       */
+      .car {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--sp-2);
+        padding: var(--sp-1) var(--sp-2);
+        margin-left: calc(var(--sp-2) * -1);
+        font: inherit;
+        color: var(--steel);
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .car mat-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 20px;
         color: var(--steel-faint);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .car:hover {
+          background: var(--surface-3);
+        }
+        .car:hover mat-icon {
+          color: var(--signal);
+        }
+      }
+      .car:focus-visible {
+        outline: 2px solid var(--signal);
+        outline-offset: 2px;
+      }
+      .plate {
+        font-size: var(--t-small);
+        white-space: nowrap;
       }
       .reason {
         display: block;
@@ -400,19 +390,6 @@ import {
         color: var(--steel-faint);
         font-size: var(--t-fine);
         margin-top: var(--sp-1);
-      }
-      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
-         width of each digit, and narrow because it never holds more than a few. */
-      .num {
-        width: 3rem;
-        color: var(--steel-faint);
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        padding-right: var(--sp-2);
-      }
-      .acts {
-        white-space: nowrap;
-        text-align: right;
       }
 
       @media (max-width: 40rem) {
@@ -430,6 +407,8 @@ import {
 })
 export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly dialog = inject(MatDialog);
   private readonly confirm = inject(ConfirmService);
 
@@ -453,6 +432,7 @@ export default class ResidentsPage {
     'eligibility',
     'bay',
     'accessible',
+    'vehicles',
     'signin',
     'actions',
   ];
@@ -460,30 +440,9 @@ export default class ResidentsPage {
   /** Kept as an escape so the source file stays ASCII whatever opens it. */
   readonly dash = '\u2014';
 
-  /**
-   * What `MatPaginator` is told instead of a row count.
-   *
-   * It disables Next when the current page is the last one it can work out from
-   * `length`, so the number only has to put the boundary in the right place: one row
-   * past the end of this page while a cursor remains, and exactly the end of this page
-   * once the server stops sending one.
-   */
-  readonly pagerLength = computed(() => {
-    const size = this.facade.limit();
-    const index = this.facade.pageNumber() - 1;
-    return this.facade.hasNext()
-      ? (index + 1) * size + 1
-      : index * size + this.facade.residents().length;
-  });
-
   onSort(s: Sort): void {
     if (!s.direction) return;
     this.facade.setSort(s.active as ResidentSortField, s.direction);
-  }
-
-  onPage(e: PageEvent): void {
-    if (e.pageIndex > (e.previousPageIndex ?? 0)) this.facade.nextPage();
-    else this.facade.previousPage();
   }
 
   /** The select speaks strings, so the tri-state is mapped at the boundary. */
@@ -555,16 +514,33 @@ export default class ResidentsPage {
   }
 
   /**
-   * The resident's vehicles. Wider than the other dialogs because it holds a table as
-   * well as a form, and a plate column that wraps is a plate column nobody can read
-   * against what a camera produced.
+   * The resident's car, or null. The register shows and edits one: the API can hold
+   * more, and if a resident ever has several the first registered is the one shown.
    */
-  openVehicles(r: Resident): void {
-    this.dialog.open(VehiclesDialog, {
-      data: r,
-      width: '44rem',
+  carOf(r: Resident): Vehicle | null {
+    return this.facade.vehiclesByResident()?.get(r.id)?.[0] ?? null;
+  }
+
+  /** Read-only detail. Its Edit button hands over to the same form the menu opens. */
+  openVehicleDetail(r: Resident, car: Vehicle): void {
+    this.dialog
+      .open(VehicleDetailDialog, {
+        data: { resident: r, vehicle: car },
+        width: '26rem',
+        maxWidth: 'calc(100vw - 2rem)',
+      })
+      .afterClosed()
+      .subscribe((result) => {
+        if (result === 'edit') this.openVehicleForm(r);
+      });
+  }
+
+  /** Add when the resident has no car, edit - starting from the car on record - when they do. */
+  openVehicleForm(r: Resident): void {
+    this.dialog.open(VehicleFormDialog, {
+      data: { resident: r, vehicle: this.carOf(r) },
+      width: '32rem',
       maxWidth: 'calc(100vw - 2rem)',
-      autoFocus: 'first-tabbable',
     });
   }
 }

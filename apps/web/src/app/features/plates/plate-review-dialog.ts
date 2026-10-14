@@ -1,5 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, inject, signal } from '@angular/core';
+import {
+  FormField,
+  form,
+  maxLength,
+  pattern,
+  required,
+  submit as submitForm,
+} from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -7,6 +14,8 @@ import { MatInputModule } from '@angular/material/input';
 import { PlatesFacade } from '../../application/plates.facade';
 import type { PlateRead } from '../../domain/models';
 import { REASON_LABEL } from './reason-label';
+import { LoadingOverlay } from '../../shared/ui/loading-overlay';
+import { LIMITS, PLATE_CHARACTER, fieldError } from '../../shared/forms/limits';
 
 /**
  * Correcting a doubtful read.
@@ -26,102 +35,108 @@ import { REASON_LABEL } from './reason-label';
   selector: 'app-plate-review-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    FormsModule,
+    FormField,
     MatButtonModule,
     MatDialogModule,
     MatFormFieldModule,
     MatInputModule,
+    LoadingOverlay,
   ],
   template: `
     <h2 mat-dialog-title>Review read</h2>
 
-    <mat-dialog-content class="form">
-      <dl class="facts">
-        <div class="facts__row">
-          <dt>Read as</dt>
-          <dd class="num">{{ read.rawText || read.plate || '—' }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Canonical</dt>
-          <dd class="num">{{ read.plate || '—' }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>OCR confidence</dt>
-          <dd class="num">{{ pct(read.confidence) }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Crop quality</dt>
-          <dd class="num">{{ pct(read.quality) }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Fused</dt>
-          <dd class="num">{{ pct(read.fused) }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Why it is here</dt>
-          <dd>{{ reasonLabel }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Camera</dt>
-          <dd class="num">{{ read.cameraId }}</dd>
-        </div>
-        <div class="facts__row">
-          <dt>Capture</dt>
-          <dd class="num ref">{{ read.captureId }}</dd>
-        </div>
-      </dl>
+    <app-loading-overlay [active]="facade.busy()" [veil]="false" label="Saving the review">
+      <mat-dialog-content class="form">
+        <dl class="facts">
+          <div class="facts__row">
+            <dt>Read as</dt>
+            <dd class="num">{{ read.rawText || read.plate || '—' }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Canonical</dt>
+            <dd class="num">{{ read.plate || '—' }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>OCR confidence</dt>
+            <dd class="num">{{ pct(read.confidence) }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Crop quality</dt>
+            <dd class="num">{{ pct(read.quality) }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Fused</dt>
+            <dd class="num">{{ pct(read.fused) }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Why it is here</dt>
+            <dd>{{ reasonLabel }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Camera</dt>
+            <dd class="num">{{ read.cameraId }}</dd>
+          </div>
+          <div class="facts__row">
+            <dt>Capture</dt>
+            <dd class="num ref">{{ read.captureId }}</dd>
+          </div>
+        </dl>
 
-      @if (read.candidates.length > 0) {
-        <section class="pick">
-          <h3 class="pick__h">What the engine considered</h3>
-          <p class="pick__p">
-            Highest score first. Picking one fills the plate below; it is not submitted
-            until you choose an outcome.
-          </p>
-          <ul class="pick__list">
-            @for (c of read.candidates; track c.plate) {
-              <li>
-                <button
-                  type="button"
-                  class="cand"
-                  [class.cand--on]="plate() === c.plate"
-                  [attr.aria-pressed]="plate() === c.plate"
-                  (click)="plate.set(c.plate)"
-                >
-                  <span class="cand__plate num">{{ c.plate }}</span>
-                  <span class="cand__meta num">score {{ c.score.toFixed(0) }}</span>
-                </button>
-              </li>
-            }
-          </ul>
-        </section>
-      }
+        @if (read.candidates.length > 0) {
+          <section class="pick">
+            <h3 class="pick__h">What the engine considered</h3>
+            <p class="pick__p">
+              Highest score first. Picking one fills the plate below; it is not submitted
+              until you choose an outcome.
+            </p>
+            <ul class="pick__list">
+              @for (c of read.candidates; track c.plate) {
+                <li>
+                  <button
+                    type="button"
+                    class="cand"
+                    [class.cand--on]="plate() === c.plate"
+                    [attr.aria-pressed]="plate() === c.plate"
+                    (click)="pick(c.plate)"
+                  >
+                    <span class="cand__plate num">{{ c.plate }}</span>
+                    <span class="cand__meta num">score {{ c.score.toFixed(0) }}</span>
+                  </button>
+                </li>
+              }
+            </ul>
+          </section>
+        }
 
-      <mat-form-field appearance="outline" subscriptSizing="dynamic">
-        <mat-label>The plate it really was</mat-label>
-        <input
-          matInput
-          class="num"
-          [ngModel]="plate()"
-          (ngModelChange)="plate.set($event)"
-          placeholder="1234ABC"
-          cdkFocusInitial
-        />
-        <mat-hint>
-          Separators and case do not matter. Required to allow an entry — an access record
-          that names no plate cannot be contested later.
-        </mat-hint>
-      </mat-form-field>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>The plate it really was</mat-label>
+          <input
+            matInput
+            class="num"
+            [formField]="f.plate"
+            placeholder="1234ABC"
+            autocomplete="off"
+            spellcheck="false"
+            cdkFocusInitial
+          />
+          <mat-hint>
+            Separators and case do not matter. Required to allow an entry — an access record
+            that names no plate cannot be contested later.
+          </mat-hint>
+          <mat-error>{{ err(f.plate) }}</mat-error>
+        </mat-form-field>
 
-      <mat-form-field appearance="outline">
-        <mat-label>Note</mat-label>
-        <input matInput [ngModel]="note()" (ngModelChange)="note.set($event)" placeholder="Optional" />
-      </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Note</mat-label>
+          <input matInput [formField]="f.note" placeholder="Optional" />
+          <mat-error>{{ err(f.note) }}</mat-error>
+        </mat-form-field>
 
-      @if (facade.error(); as e) {
-        <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-      }
-    </mat-dialog-content>
+        @if (facade.error(); as e) {
+          <div class="msg msg--bad" role="alert">{{ e.message }}</div>
+        }
+      </mat-dialog-content>
+    </app-loading-overlay>
 
     <mat-dialog-actions class="acts">
       <!--
@@ -139,7 +154,8 @@ import { REASON_LABEL } from './reason-label';
       <button
         matButton="filled"
         type="button"
-        [disabled]="!canAllow() || facade.busy()"
+        [disabled]="facade.busy()"
+        [class.is-pending]="facade.busy()"
         (click)="submit('ALLOW')"
       >
         {{ facade.busy() ? 'Saving…' : 'This plate, allow' }}
@@ -262,16 +278,29 @@ export class PlateReviewDialog {
   readonly read = inject<PlateRead>(MAT_DIALOG_DATA);
 
   /** Pre-filled with the engine's best guess, which is right most of the time. */
-  readonly plate = signal('');
-  readonly note = signal('');
+  readonly model = signal({ plate: this.read.plate ?? '', note: '' });
+
+  /**
+   * The plate is required only to allow: Deny and Discard send none. Its rules sit on the
+   * field regardless, and only the Allow path asks the whole form to be valid.
+   */
+  readonly f = form(this.model, (p) => {
+    required(p.plate, { message: 'Type the plate to allow it. A record must name one.' });
+    pattern(p.plate, PLATE_CHARACTER, { message: 'A plate needs at least one letter or digit.' });
+    maxLength(p.plate, LIMITS.plate, { message: `Up to ${LIMITS.plate} characters.` });
+    maxLength(p.note, LIMITS.notes, { message: `Up to ${LIMITS.notes} characters.` });
+  });
+
+  readonly err = fieldError;
+
+  readonly plate = computed(() => this.model().plate);
 
   readonly reasonLabel: string;
 
-  readonly canAllow = computed(() => this.plate().trim().length > 0);
-
   constructor() {
     this.facade.dismissError();
-    this.plate.set(this.read.plate ?? '');
+    // Nor does it outlive the dialog: left set, the page behind would print it next.
+    inject(DestroyRef).onDestroy(() => this.facade.dismissError());
     this.reasonLabel = this.read.reason
       ? REASON_LABEL[this.read.reason] ?? this.read.reason
       : 'Low confidence';
@@ -281,8 +310,24 @@ export class PlateReviewDialog {
     return v === null ? '—' : `${(v * 100).toFixed(1)}%`;
   }
 
+  /** A candidate chip fills the field, as if typed, and counts as an answer to it. */
+  pick(plate: string): void {
+    this.model.update((m) => ({ ...m, plate }));
+    this.f.plate().markAsTouched();
+  }
+
   async submit(outcome: 'ALLOW' | 'DENY' | 'DISCARD'): Promise<void> {
-    const note = this.note().trim();
+    if (outcome === 'ALLOW') {
+      await submitForm(this.f, () => this.resolve(outcome));
+      return;
+    }
+    // Deny and Discard name no plate, so only the note has to hold.
+    this.f.note().markAsTouched();
+    if (this.f.note().valid()) await this.resolve(outcome);
+  }
+
+  private async resolve(outcome: 'ALLOW' | 'DENY' | 'DISCARD'): Promise<void> {
+    const note = this.model().note.trim();
     const done = await this.facade.resolve(this.read, {
       plate: outcome === 'ALLOW' ? this.plate().trim() : null,
       // The server resolves a typed plate to an active registration itself, so the

@@ -7,7 +7,7 @@ info:
     client's generated types and for the mock server the frontend develops against, so
     drift between this contract and the implementation fails CI rather than a demo.
 
-    Every route except `GET /health` requires a bearer token issued by the Cognito user
+    Business routes except `GET /health` require a bearer token issued by the Cognito user
     pool. `{id}` path parameters are UUIDs — never sequential integers, so records
     cannot be enumerated.
 
@@ -17,8 +17,8 @@ servers:
     variables:
       apiId:
         default: replace-me
-  - url: http://localhost:3000
-    description: Local runner
+  - url: http://localhost:4300
+    description: Local runner (Swagger UI uses the current API origin)
 
 security:
   - cognito: []

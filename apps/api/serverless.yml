@@ -1,4 +1,4 @@
-﻿service: pacs-api
+service: pacs-api
 frameworkVersion: '4'
 
 provider:
@@ -191,6 +191,9 @@ build:
     minify: true
     sourcemap: true
     target: node24
+    loader:
+      .yaml: text
+      .html: text
     external:
       - '@aws-sdk/*'
 
@@ -210,6 +213,15 @@ functions:
     events:
       - httpApi:
           path: /health
+          method: GET
+      - httpApi:
+          path: /docs
+          method: GET
+      - httpApi:
+          path: /docs/
+          method: GET
+      - httpApi:
+          path: /openapi.yaml
           method: GET
       # Methods are listed one by one on purpose. `method: '*'` creates an ANY route,
       # which also matches the browser's CORS preflight — and a preflight carries no

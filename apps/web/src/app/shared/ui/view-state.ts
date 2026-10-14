@@ -1,16 +1,33 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  input,
+  output,
+  signal,
+} from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
+import { dialogCovered } from './dialog-covered';
 import type { ViewState } from '../../domain/models';
+import { LoadingOverlay } from './loading-overlay';
 
 /**
  * One component for the five states §17 requires of every screen, so no page has to
  * remember all five and none of them drifts apart from the others.
  *
- *   loading    bars shaped like the content, so nothing jumps when it resolves
+ *   loading    bars shaped like the content under the spinner, so nothing jumps when
+ *              it resolves
  *   empty      says what will appear here and what to do about it
  *   error      names what failed and offers the trace id support will ask for
  *   forbidden  a product state, not a crash
- *   ready      projects the content, dimmed while revalidating rather than flashing
+ *   ready      projects the content, under the spinner while it revalidates or while a
+ *              change to it is being written
+ *
+ * Revalidating used to dim the content to half opacity. That was the only loading cue
+ * on a reload, and it failed twice: half-opacity text is under the 4.5:1 floor WCAG 2.2
+ * AA sets and PRODUCT.md makes non-negotiable, and a dimmed table does not say anything
+ * is happening - it looks broken. The overlay keeps the rows recognisable underneath and
+ * says what is being loaded.
  *
  * No boxes: these states are set off by a rule and whitespace, so a screen does not
  * become a grid of identical panels.
@@ -18,16 +35,17 @@ import type { ViewState } from '../../domain/models';
 @Component({
   selector: 'app-view-state',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatButtonModule],
+  imports: [MatButtonModule, LoadingOverlay],
   template: `
     @switch (state().kind) {
       @case ('loading') {
-        <div class="bars" aria-busy="true" aria-live="polite">
-          @for (row of rows(); track row) {
-            <span class="bars__row" [style.width.%]="80 - row * 9"></span>
-          }
-          <span class="sr-only">Loading</span>
-        </div>
+        <app-loading-overlay [active]="true" [label]="loadingLabel()">
+          <div class="bars" aria-hidden="true">
+            @for (row of rows(); track row) {
+              <span class="bars__row" [style.width.%]="80 - row * 9"></span>
+            }
+          </div>
+        </app-loading-overlay>
       }
 
       @case ('empty') {
@@ -70,9 +88,12 @@ import type { ViewState } from '../../domain/models';
       }
 
       @default {
-        <div [class.stale]="isStale()" [attr.aria-busy]="isStale()">
+        <app-loading-overlay
+          [active]="(isStale() || busy()) && !covered()"
+          [label]="activeLabel()"
+        >
           <ng-content />
-        </div>
+        </app-loading-overlay>
       }
     }
   `,
@@ -138,12 +159,6 @@ import type { ViewState } from '../../domain/models';
       .trace__hint {
         color: var(--steel-faint);
       }
-
-      /* Revalidating: keep the previous value, dimmed. Never a flash of empty. */
-      .stale {
-        opacity: 0.5;
-        transition: opacity 120ms ease-out;
-      }
     `,
   ],
 })
@@ -153,6 +168,31 @@ export class ViewStateHost {
   readonly emptyBody = input('This section fills in once there is something to show.');
   readonly emptyActionLabel = input<string | null>(null);
   readonly skeletonCount = input(3);
+
+  /**
+   * A write to what this region shows is in flight - a save, a removal, a draw. Pass the
+   * facade's `busy()`. The overlay covers the region so the rows a change is about to
+   * alter cannot be acted on again until it has landed.
+   */
+  readonly busy = input(false);
+  /** What the first load is fetching, in the screen's words. */
+  readonly loadingLabel = input('Loading');
+  /** What a write is doing, in the screen's words. */
+  readonly busyLabel = input('Saving');
+
+  /**
+   * A dialog is open over this region.
+   *
+   * Then the write in flight is the dialog's, and the dialog's pressed button is already
+   * showing it. A veil on the table behind the backdrop added a second loader nobody can
+   * see - and, held for its minimum, one that was still there when the dialog closed,
+   * which read as the form vanishing and a loader appearing in its place. The table is
+   * reloaded inside the write, so by the time the dialog closes it is already current.
+   */
+  readonly covered = dialogCovered();
+
+  /** A write outranks a revalidation: the reload that follows a save is part of it. */
+  readonly activeLabel = computed(() => (this.busy() ? this.busyLabel() : 'Updating'));
 
   readonly retry = output<void>();
   readonly action = output<void>();

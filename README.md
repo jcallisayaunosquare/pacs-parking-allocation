@@ -14,7 +14,24 @@ this README only covers how to run what is built.
 | IaC | Serverless Framework v4 |
 | Region | **us-east-2** — the only region the account's SCP permits |
 
-## Deployed (stage `dev`)
+## API documentation (Swagger UI)
+
+The API serves interactive documentation at `GET /docs` (also `/docs/`) and the
+OpenAPI 3.1 contract at `GET /openapi.yaml`. Both documentation endpoints are public;
+business endpoints retain their Cognito authorizer and role checks.
+
+For local use, run `pnpm --filter @pacs/api local` and open
+<http://localhost:4300/docs>. This server uses in-memory fixtures and stub authentication.
+After deploying this change, the same `/docs` path is available on the deployed API.
+
+Use **Authorize** to paste a Cognito access token without the `Bearer` prefix, then
+**Try it out** to call endpoints on the API serving the page. Tokens are not persisted
+across reloads. Calls can modify data according to the endpoint's normal permissions.
+Swagger UI loads its pinned JS/CSS version from UNPKG, so the browser needs internet.
+The contract is bundled directly from `packages/contracts/openapi.yaml`; no second copy
+is maintained. This adds a documentation viewer, not automatic route/contract generation.
+
+## Deployed configuration (stage `dev`)
 
 | | |
 |---|---|

@@ -43,6 +43,7 @@ import type { AllocationConfigVersion } from '../../domain/models';
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="4"
+      loadingLabel="Loading fairness data"
       emptyTitle="No fairness data yet"
       emptyBody="Scores appear after the first draw. Until then every resident sits at zero."
       (retry)="facade.refresh()"
@@ -142,7 +143,14 @@ import type { AllocationConfigVersion } from '../../domain/models';
     <section class="config">
       <h2 class="sec__h">Allocation rules</h2>
 
-      <app-view-state [state]="config.state()" [skeletonCount]="2" (retry)="config.refresh()">
+      <app-view-state
+        [state]="config.state()"
+        [skeletonCount]="2"
+        [busy]="config.busy()"
+        loadingLabel="Loading the rules"
+        busyLabel="Saving the rules"
+        (retry)="config.refresh()"
+      >
         @if (config.draft(); as c) {
           <p class="dist__p">
             In force: version {{ config.saved()?.version }}.
@@ -294,9 +302,10 @@ import type { AllocationConfigVersion } from '../../domain/models';
               matButton="filled"
               type="button"
               [disabled]="!config.dirty() || config.busy()"
+              [class.is-pending]="config.busy()"
               (click)="config.save()"
             >
-              {{ config.busy() ? 'Saving...' : 'Save rules' }}
+              {{ config.busy() ? 'Saving…' : 'Save rules' }}
             </button>
             <button
               matButton="outlined"
@@ -360,7 +369,7 @@ import type { AllocationConfigVersion } from '../../domain/models';
           [disabled]="cycles.busy()"
           (click)="runAllocation(c.id, c.label)"
         >
-          {{ cycles.busy() ? 'Running...' : 'Run the draw for ' + c.label }}
+          {{ cycles.busy() ? 'Running…' : 'Run the draw for ' + c.label }}
         </button>
       } @else {
         <p class="dist__p">

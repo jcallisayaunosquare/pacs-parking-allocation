@@ -1,22 +1,17 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
 import { FormsModule } from '@angular/forms';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CognitoService, type AuthOutcome } from '../../core/auth/cognito.service';
+import { DOTTED_DOMAIN } from '../../shared/forms/limits';
+import { environment } from '../../../environments/environment';
+import { QueueBoard } from './queue-board';
 
 /** The five things a sign-in can be, each one a real state Cognito can return. */
 type Step = 'sign-in' | 'new-password' | 'mfa' | 'reset-request' | 'reset-confirm';
-
-/** Illustrative, and the only invented content on either surface: no real unit is named. */
-const BOARD_ROWS = [
-  { pos: 1, unit: 'Unit 1104', wait: '214 d', bay: 'A04', on: false, past: false, cut: false },
-  { pos: 2, unit: 'Unit 503', wait: '186 d', bay: 'A11', on: false, past: false, cut: false },
-  { pos: 3, unit: 'Unit 211', wait: '173 d', bay: 'B02', on: true, past: false, cut: false },
-  { pos: 4, unit: 'Unit 902', wait: '168 d', bay: 'B07', on: false, past: false, cut: false },
-  { pos: 5, unit: 'Unit 406', wait: '91 d', bay: '', on: false, past: true, cut: true },
-  { pos: 6, unit: 'Unit 308', wait: '77 d', bay: '', on: false, past: true, cut: false },
-];
 
 
 /**
@@ -27,53 +22,83 @@ const BOARD_ROWS = [
 @Component({
   selector: 'app-login-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, MatIconModule, NgTemplateOutlet, QueueBoard],
   template: `
-    <div class="gate">
+    <div class="gate" [class.gate--out]="admitted()">
       <section class="gate__say">
-        <p class="gate__mark">PACS</p>
+        <p class="gate__mark rise" style="--i: 0">
+          <span class="gate__dot" aria-hidden="true"></span>PACS
+        </p>
 
+        <!--
+          Keyed by step: each case is a new block, so a change of step plays the heading
+          in again instead of swapping words under a still frame.
+        -->
         @switch (step()) {
           @case ('sign-in') {
-            <h1 class="gate__h">Your place in line for a parking bay.</h1>
-            <p class="gate__p">
-              Bays rotate every period. The longer you have waited, the higher you stand.
-            </p>
+            <div class="gate__copy" animate.enter="swap-in">
+              <h1 class="gate__h rise" style="--i: 1">Your place in line for a parking bay.</h1>
+              <p class="gate__p rise" style="--i: 2">
+                Bays rotate every period. The longer you have waited, the higher you stand.
+              </p>
+            </div>
           }
           @case ('new-password') {
-            <h1 class="gate__h">Set a password for this account.</h1>
-            <p class="gate__p">
-              The administration created this account with a temporary password. Choose
-              your own to finish signing in.
-            </p>
+            <div class="gate__copy" animate.enter="swap-in">
+              <h1 class="gate__h">Set a password for this account.</h1>
+              <p class="gate__p">
+                The administration created this account with a temporary password. Choose
+                your own to finish signing in.
+              </p>
+            </div>
           }
           @case ('mfa') {
-            <h1 class="gate__h">Enter the code.</h1>
-            <p class="gate__p">
-              {{ mfaDestination() ? 'Sent to ' + mfaDestination() + '.' : 'From your authenticator app.' }}
-            </p>
+            <div class="gate__copy" animate.enter="swap-in">
+              <h1 class="gate__h">Enter the code.</h1>
+              <p class="gate__p">
+                {{ mfaDestination() ? 'Sent to ' + mfaDestination() + '.' : 'From your authenticator app.' }}
+              </p>
+            </div>
           }
           @case ('reset-request') {
-            <h1 class="gate__h">Reset your password.</h1>
-            <p class="gate__p">We will email a code to the address on your account.</p>
+            <div class="gate__copy" animate.enter="swap-in">
+              <h1 class="gate__h">Reset your password.</h1>
+              <p class="gate__p">We will email a code to the address on your account.</p>
+            </div>
           }
           @case ('reset-confirm') {
-            <h1 class="gate__h">Enter the code and a new password.</h1>
-            <p class="gate__p">The code is in the email we just sent.</p>
+            <div class="gate__copy" animate.enter="swap-in">
+              <h1 class="gate__h">Enter the code and a new password.</h1>
+              <p class="gate__p">The code is in the email we just sent.</p>
+            </div>
           }
         }
 
         <!--
           The ticket: the one pale, soft object in the world, and the only thing on any
           screen with a torn edge. It holds what is yours, which at this moment is the way
-          in. One form element per line, labels above, because a sign-in is read top down.
+          in. It prints in on arrival, shakes on a refusal, and is stamped and torn off on
+          the way through. One form element per line, labels above.
         -->
-        <form class="ticket" (ngSubmit)="submit()" novalidate>
+        <form
+          class="ticket"
+          [class.ticket--printed]="printed()"
+          [class.ticket--shake]="shaking()"
+          [class.ticket--admitted]="admitted()"
+          (animationend)="onTicketAnimationEnd($event)"
+          (ngSubmit)="submit()"
+          novalidate
+        >
           <span class="ticket__tear" aria-hidden="true"></span>
 
           <div class="ticket__body">
+            <p class="ticket__no" aria-hidden="true">
+              <span>Admit one</span>
+              <span class="ticket__serial">No. {{ serial }}</span>
+            </p>
+
             @if (step() === 'sign-in' || step() === 'reset-request') {
-              <label class="f">
+              <label class="f" animate.enter="field-in">
                 <span class="f__l">Email</span>
                 <input
                   class="f__i"
@@ -82,7 +107,7 @@ const BOARD_ROWS = [
                   autocomplete="username"
                   inputmode="email"
                   spellcheck="false"
-                  [disabled]="busy()"
+                  [disabled]="busy() || admitted()"
                   [(ngModel)]="email"
                   required
                 />
@@ -90,37 +115,60 @@ const BOARD_ROWS = [
             }
 
             @if (step() === 'sign-in') {
-              <label class="f">
-                <span class="f__l">Password</span>
-                <input
-                  class="f__i"
-                  type="password"
-                  name="password"
-                  autocomplete="current-password"
-                  [disabled]="busy()"
-                  [(ngModel)]="password"
-                  required
-                />
-              </label>
+              <!-- A div, not a label: the show button sits beside the input and must not
+                   become part of its accessible name. -->
+              <div class="f" animate.enter="field-in" style="--d: 50ms">
+                <label class="f__l" for="login-password">Password</label>
+                <span class="f__w">
+                  <input
+                    id="login-password"
+                    class="f__i f__i--pw"
+                    [type]="showPassword() ? 'text' : 'password'"
+                    name="password"
+                    autocomplete="current-password"
+                    [disabled]="busy() || admitted()"
+                    [(ngModel)]="password"
+                    required
+                  />
+                  <ng-container [ngTemplateOutlet]="eye" />
+                </span>
+              </div>
             }
 
             @if (step() === 'new-password') {
-              <label class="f">
-                <span class="f__l">New password</span>
-                <input
-                  class="f__i"
-                  type="password"
-                  name="newPassword"
-                  autocomplete="new-password"
-                  [disabled]="busy()"
-                  [(ngModel)]="password"
-                  required
-                />
-              </label>
+              <div class="f" animate.enter="field-in">
+                <label class="f__l" for="login-new-password">New password</label>
+                <span class="f__w">
+                  <input
+                    id="login-new-password"
+                    class="f__i f__i--pw"
+                    [type]="showPassword() ? 'text' : 'password'"
+                    name="newPassword"
+                    autocomplete="new-password"
+                    [disabled]="busy() || admitted()"
+                    [(ngModel)]="password"
+                    required
+                  />
+                  <ng-container [ngTemplateOutlet]="eye" />
+                </span>
+              </div>
             }
 
+            <!-- Show or hide what was typed: a long password is mistyped more than guessed. -->
+            <ng-template #eye>
+              <button
+                class="f__eye"
+                type="button"
+                [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'"
+                [attr.aria-pressed]="showPassword()"
+                (click)="showPassword.set(!showPassword())"
+              >
+                <mat-icon>{{ showPassword() ? 'visibility_off' : 'visibility' }}</mat-icon>
+              </button>
+            </ng-template>
+
             @if (step() === 'mfa') {
-              <label class="f">
+              <label class="f" animate.enter="field-in">
                 <span class="f__l">Six-digit code</span>
                 <input
                   class="f__i f__i--code"
@@ -129,7 +177,7 @@ const BOARD_ROWS = [
                   autocomplete="one-time-code"
                   inputmode="numeric"
                   maxlength="6"
-                  [disabled]="busy()"
+                  [disabled]="busy() || admitted()"
                   [(ngModel)]="code"
                   required
                 />
@@ -137,7 +185,7 @@ const BOARD_ROWS = [
             }
 
             @if (step() === 'reset-confirm') {
-              <label class="f">
+              <label class="f" animate.enter="field-in">
                 <span class="f__l">Code from the email</span>
                 <input
                   class="f__i f__i--code"
@@ -150,7 +198,7 @@ const BOARD_ROWS = [
                   required
                 />
               </label>
-              <label class="f">
+              <label class="f" animate.enter="field-in" style="--d: 50ms">
                 <span class="f__l">New password</span>
                 <input
                   class="f__i"
@@ -165,14 +213,24 @@ const BOARD_ROWS = [
             }
 
             @if (error(); as e) {
-              <p class="ticket__err" role="alert">{{ e }}</p>
+              <p class="ticket__err" role="alert" animate.enter="msg-in">{{ e }}</p>
             }
             @if (notice(); as n) {
-              <p class="ticket__ok" role="status">{{ n }}</p>
+              <p class="ticket__ok" role="status" animate.enter="msg-in">{{ n }}</p>
             }
 
-            <button class="ticket__go" type="submit" [disabled]="busy()">
-              {{ busy() ? 'Working...' : actionLabel() }}
+            <button
+              class="ticket__go"
+              [class.ticket__go--busy]="busy()"
+              type="submit"
+              [disabled]="busy() || admitted()"
+            >
+              <span class="ticket__goLabel">
+                {{ admitted() ? 'Welcome' : busy() ? 'Checking…' : actionLabel() }}
+              </span>
+              @if (!busy() && !admitted()) {
+                <mat-icon class="ticket__arrow" aria-hidden="true">arrow_forward</mat-icon>
+              }
             </button>
 
             @if (step() === 'sign-in') {
@@ -185,54 +243,66 @@ const BOARD_ROWS = [
               </button>
             }
           </div>
+
+          <!-- The stamp that lands when the sign-in is accepted. -->
+          @if (admitted()) {
+            <span class="ticket__stamp" aria-hidden="true">Admitted</span>
+          }
         </form>
 
-        <p class="gate__fine">
+        <p class="gate__fine rise" style="--i: 5">
           The building administration issues accounts. If you do not have one yet, ask them
           to add you to the register.
         </p>
       </section>
 
-      <aside class="gate__board" aria-hidden="true">
-        <p class="gate__now">Period 2026-02 <span class="gate__sep">/</span> closes in 11 days</p>
-        <ol class="gate__rows">
-          @for (row of boardRows; track row.pos) {
-            @if (row.cut) {
-              <li class="gate__cut"><span>Bays run out here</span></li>
-            }
-            <li class="gate__row" [class.gate__row--on]="row.on" [class.gate__row--past]="row.past">
-              <span class="gate__pos">{{ row.pos }}</span>
-              <span class="gate__unit">{{ row.unit }}</span>
-              <span class="gate__wait">{{ row.wait }}</span>
-              <span class="gate__bay">{{ row.bay }}</span>
-            </li>
-          }
-        </ol>
-      </aside>
+      <app-queue-board class="gate__board" />
     </div>
   `,
   styles: [
     `
       :host {
         display: block;
+        --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
       }
 
       .gate {
         min-height: 100vh;
         min-height: 100dvh;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
+        grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
         background: var(--surface-2);
       }
 
+      /* Pinned from the top rather than centred, so an error line appearing in the
+         ticket grows it downward instead of nudging the whole column up. */
       .gate__say {
-        align-self: center;
+        align-self: start;
         justify-self: center;
+        width: 100%;
         max-width: 34rem;
-        padding: var(--sp-7) var(--sp-7);
+        padding: max(var(--sp-7), 11vh) var(--sp-7) var(--sp-7);
+      }
+
+      /* ------------------------------------------------------------ arrival */
+
+      /* Each piece of the left column arrives in reading order, one beat apart. */
+      .rise {
+        animation: rise 640ms var(--ease-out) both;
+        animation-delay: calc(var(--i, 0) * 70ms + 80ms);
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
       }
 
       .gate__mark {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-2);
         margin: 0 0 var(--sp-5);
         font-size: var(--t-body);
         font-variation-settings:
@@ -242,16 +312,37 @@ const BOARD_ROWS = [
         color: var(--ink-3);
       }
 
+      /* The one live thing in the mark: the signal, breathing, as on a board that is on. */
+      .gate__dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 50%;
+        background: var(--signal);
+        animation: breathe 2.4s ease-in-out infinite;
+      }
+
+      @keyframes breathe {
+        50% {
+          opacity: 0.35;
+          transform: scale(0.8);
+        }
+      }
+
+      .gate__copy {
+        min-height: 9.5rem;
+      }
+
       .gate__h {
         margin: 0 0 var(--sp-3);
-        font-size: clamp(1.9rem, 2.4vw, 2.5rem);
-        line-height: 1.08;
+        font-size: clamp(1.9rem, 2.6vw, 2.75rem);
+        line-height: 1.06;
         letter-spacing: -0.02em;
         font-variation-settings:
           'wdth' 104,
           'wght' 660;
         color: var(--ink-1);
         max-width: 18ch;
+        text-wrap: balance;
       }
 
       .gate__p {
@@ -268,6 +359,34 @@ const BOARD_ROWS = [
         line-height: 1.5;
         color: var(--ink-3);
         max-width: 46ch;
+      }
+
+      /* A change of step: the new words slide in from the right, as the next card would. */
+      .swap-in {
+        animation: swap-in 420ms var(--ease-out) both;
+      }
+
+      @keyframes swap-in {
+        from {
+          opacity: 0;
+          transform: translateX(18px);
+        }
+      }
+
+      .field-in {
+        animation: field-in 380ms var(--ease-out) both;
+        animation-delay: var(--d, 0ms);
+      }
+
+      @keyframes field-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+      }
+
+      .msg-in {
+        animation: field-in 260ms var(--ease-out) both;
       }
 
       /* ------------------------------------------------------------ the ticket */
@@ -288,12 +407,89 @@ const BOARD_ROWS = [
         --ticket-bad: #9b3f47; /*  6.0:1 on the stub */
         --ticket-good: #246a54; /*  5.6:1 on the stub */
 
+        position: relative;
         display: flex;
         background: var(--ticket);
         color: var(--ticket-ink);
         border: 1px solid var(--ticket-edge);
-        max-width: 23rem;
+        max-width: 24rem;
         overflow: hidden;
+        transform-origin: 50% 0;
+        /* Printed: it feeds out of the slot top-down. */
+        animation: print 760ms var(--ease-out) 260ms both;
+      }
+
+      @keyframes print {
+        from {
+          clip-path: inset(0 0 100% 0);
+          transform: translateY(-10px);
+        }
+        to {
+          clip-path: inset(0 0 0 0);
+        }
+      }
+
+      /* Printed once. Without this, dropping the shake class would print it again. */
+      .ticket--printed {
+        animation: none;
+      }
+
+      /* A refusal: the stub is pushed back, twice, the way a turnstile says no. */
+      .ticket--shake {
+        animation: shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+      }
+
+      @keyframes shake {
+        15%,
+        85% {
+          transform: translateX(-2px);
+        }
+        30%,
+        70% {
+          transform: translateX(5px);
+        }
+        45%,
+        55% {
+          transform: translateX(-7px);
+        }
+      }
+
+      /* Accepted: stamped, then torn off upward. */
+      .ticket--admitted {
+        animation: tear-off 520ms cubic-bezier(0.55, 0, 0.75, 0) 560ms both;
+      }
+
+      @keyframes tear-off {
+        to {
+          opacity: 0;
+          transform: translateY(-36px) rotate(-2.5deg);
+        }
+      }
+
+      .ticket__stamp {
+        position: absolute;
+        left: 50%;
+        top: 46%;
+        padding: var(--sp-2) var(--sp-4);
+        border: 3px solid var(--ticket-good);
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--ticket) 88%, transparent);
+        color: var(--ticket-good);
+        font-size: var(--t-title);
+        font-variation-settings:
+          'wdth' 112,
+          'wght' 760;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        transform: translate(-50%, -50%) rotate(-8deg);
+        animation: stamp 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      }
+
+      @keyframes stamp {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -50%) rotate(-8deg) scale(1.9);
+        }
       }
 
       /* The torn edge: the one soft contour in a world of hairlines and right angles. */
@@ -308,10 +504,27 @@ const BOARD_ROWS = [
 
       .ticket__body {
         flex: 1;
+        min-width: 0;
         padding: var(--sp-5);
         display: flex;
         flex-direction: column;
         gap: var(--sp-4);
+      }
+
+      .ticket__no {
+        display: flex;
+        justify-content: space-between;
+        margin: 0;
+        padding-bottom: var(--sp-3);
+        border-bottom: 1px dashed var(--ticket-rule);
+        font-size: var(--t-fine);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ticket-ink-dim);
+      }
+
+      .ticket__serial {
+        letter-spacing: 0.08em;
       }
 
       .f {
@@ -325,7 +538,14 @@ const BOARD_ROWS = [
         color: var(--ticket-ink-dim);
       }
 
+      .f__w {
+        position: relative;
+        display: flex;
+      }
+
       .f__i {
+        flex: 1;
+        min-width: 0;
         font: inherit;
         font-size: var(--t-body);
         min-height: 2.75rem;
@@ -334,15 +554,47 @@ const BOARD_ROWS = [
         background: var(--ticket-field);
         border: 1px solid var(--ticket-rule);
         border-radius: 2px;
+        transition:
+          border-color 160ms ease,
+          box-shadow 160ms ease;
+      }
+
+      .f__i:hover:not(:disabled) {
+        border-color: var(--ticket-ink-dim);
       }
 
       .f__i:focus-visible {
         outline: 3px solid var(--ticket-signal);
         outline-offset: 1px;
+        border-color: var(--ticket-signal);
       }
 
       .f__i:disabled {
         opacity: 0.6;
+      }
+
+      .f__i--pw {
+        padding-right: 3rem;
+      }
+
+      .f__eye {
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 2.75rem;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--ticket-ink-dim);
+        cursor: pointer;
+      }
+
+      .f__eye:focus-visible {
+        outline: 3px solid var(--ticket-signal);
+        outline-offset: -3px;
       }
 
       /* A code is read digit by digit, so it is set like one. */
@@ -352,6 +604,12 @@ const BOARD_ROWS = [
       }
 
       .ticket__go {
+        position: relative;
+        overflow: hidden;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--sp-2);
         font: inherit;
         font-size: var(--t-body);
         font-weight: 600;
@@ -362,31 +620,78 @@ const BOARD_ROWS = [
         color: #ffffff;
         cursor: pointer;
         touch-action: manipulation;
-        transition: background-color 140ms cubic-bezier(0.22, 1, 0.36, 1);
+        transition:
+          background-color 140ms ease,
+          transform 120ms ease;
+      }
+
+      .ticket__go:focus-visible {
+        outline: 3px solid var(--ticket-signal);
+        outline-offset: 2px;
+      }
+
+      .ticket__arrow {
+        width: 20px;
+        height: 20px;
+        font-size: 20px;
+        transition: transform 220ms var(--ease-out);
       }
 
       @media (hover: hover) and (pointer: fine) {
         .ticket__go:hover:not(:disabled) {
           background: var(--ticket-signal-deep);
-          transition-duration: 0ms;
+        }
+        .ticket__go:hover:not(:disabled) .ticket__arrow {
+          transform: translateX(4px);
         }
       }
 
+      .ticket__go:active:not(:disabled) {
+        transform: scale(0.985);
+      }
+
       .ticket__go:disabled {
-        opacity: 0.65;
         cursor: default;
+      }
+
+      /* Working: a band of light runs along the button, the same mark as waiting elsewhere. */
+      .ticket__go--busy::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 3px;
+        width: 40%;
+        background: rgb(255 255 255 / 75%);
+        animation: run 1s ease-in-out infinite;
+      }
+
+      @keyframes run {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(260%);
+        }
       }
 
       .ticket__alt {
         font: inherit;
         font-size: var(--t-small);
         align-self: flex-start;
+        min-height: 1.5rem;
         padding: 0;
         border: 0;
         background: none;
         color: var(--ticket-ink-dim);
         text-decoration: underline;
+        text-underline-offset: 3px;
         cursor: pointer;
+      }
+
+      .ticket__alt:focus-visible {
+        outline: 3px solid var(--ticket-signal);
+        outline-offset: 2px;
       }
 
       .ticket__err {
@@ -402,100 +707,13 @@ const BOARD_ROWS = [
         color: var(--ticket-good);
       }
 
-      /* ------------------------------------------------------------- the board */
-
-      .gate__board {
-        background: var(--board);
-        color: var(--board-ink);
-        padding: var(--sp-7);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        gap: var(--sp-4);
-        overflow: hidden;
+      /* Leaving: the whole board dims as the ticket is torn off, then the route takes over. */
+      .gate--out .gate__board {
+        transition: opacity 400ms ease 700ms;
+        opacity: 0.4;
       }
 
-      .gate__now {
-        margin: 0;
-        font-size: var(--t-fine);
-        letter-spacing: 0.2em;
-        color: var(--board-ink-dim);
-      }
-
-      .gate__sep {
-        color: var(--board-rule);
-        padding: 0 0.4em;
-      }
-
-      .gate__rows {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        border-top: 1px solid var(--board-rule);
-      }
-
-      /* Columns never move, whatever a row says. */
-      .gate__row {
-        display: grid;
-        grid-template-columns: 3.5ch 1fr 7ch 5ch;
-        gap: var(--sp-4);
-        align-items: baseline;
-        padding: var(--sp-3) 0;
-        border-bottom: 1px solid var(--board-rule);
-        font-size: var(--t-small);
-      }
-
-      .gate__pos {
-        font-size: var(--t-body);
-        font-variation-settings:
-          'wdth' 112,
-          'wght' 620;
-        color: var(--board-ink-dim);
-        text-align: right;
-      }
-
-      .gate__unit {
-        color: var(--board-ink);
-      }
-
-      .gate__wait,
-      .gate__bay {
-        color: var(--board-ink-dim);
-        text-align: right;
-      }
-
-      .gate__row--on,
-      .gate__row--on .gate__pos,
-      .gate__row--on .gate__unit,
-      .gate__row--on .gate__wait,
-      .gate__row--on .gate__bay {
-        color: var(--signal-on-board);
-      }
-
-      .gate__row--past {
-        opacity: 0.55;
-      }
-
-      .gate__cut {
-        display: flex;
-        align-items: center;
-        gap: var(--sp-3);
-        padding: var(--sp-4) 0 var(--sp-3);
-        font-size: var(--t-fine);
-        letter-spacing: 0.18em;
-        color: var(--board-ink-dim);
-      }
-
-      .gate__cut::after {
-        content: '';
-        flex: 1;
-        height: 1px;
-        background: repeating-linear-gradient(
-          to right,
-          var(--board-rule) 0 6px,
-          transparent 6px 12px
-        );
-      }
+      /* ------------------------------------------------------------- narrow */
 
       @media (max-width: 62rem) {
         .gate {
@@ -503,21 +721,47 @@ const BOARD_ROWS = [
         }
 
         .gate__say {
-          justify-self: start;
-          padding: var(--sp-6) var(--sp-5);
+          justify-self: stretch;
+          max-width: 36rem;
+          margin: 0 auto;
+          padding: var(--sp-6) var(--sp-5) var(--sp-7);
+        }
+
+        .gate__copy {
+          min-height: 0;
         }
 
         .ticket {
           max-width: none;
         }
+      }
 
-        .gate__board {
-          padding: var(--sp-6) var(--sp-5);
+      @media (max-width: 30rem) {
+        .gate__say {
+          padding: var(--sp-6) var(--sp-4) var(--sp-6);
+        }
+
+        .ticket__body {
+          padding: var(--sp-4);
         }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .ticket__go {
+        .rise,
+        .swap-in,
+        .field-in,
+        .msg-in,
+        .ticket,
+        .ticket--shake,
+        .ticket--admitted,
+        .ticket__stamp,
+        .gate__dot,
+        .ticket__go--busy::after {
+          animation: none;
+        }
+        .ticket__go,
+        .ticket__arrow,
+        .f__i {
           transition: none;
         }
       }
@@ -537,11 +781,37 @@ export class LoginPage {
   readonly notice = signal<string | null>(null);
   readonly mfaDestination = signal<string | null>(null);
 
+  /** The ticket's motion: printed once on arrival, shaken on a refusal, torn off on entry. */
+  readonly printed = signal(false);
+  readonly shaking = signal(false);
+  readonly admitted = signal(false);
+  readonly showPassword = signal(false);
+
   email = '';
   password = '';
   code = '';
 
-  readonly boardRows = BOARD_ROWS;
+  /** Printed on the stub. Decoration only: it identifies nothing. */
+  readonly serial = String(Math.floor(100000 + Math.random() * 900000));
+
+  private readonly reducedMotion =
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  onTicketAnimationEnd(e: AnimationEvent): void {
+    // Children animate too (fields, the stamp) and their ends bubble up here.
+    if (e.target !== e.currentTarget) return;
+    if (e.animationName.includes('print')) this.printed.set(true);
+    if (e.animationName.includes('shake')) this.shaking.set(false);
+  }
+
+  /** Report a refusal, and shake the ticket - restarting the shake if one is running. */
+  private fail(message: string): void {
+    this.error.set(message);
+    if (this.reducedMotion) return;
+    this.printed.set(true);
+    this.shaking.set(false);
+    requestAnimationFrame(() => this.shaking.set(true));
+  }
 
   /** The control names its action, and keeps that name through the whole flow. */
   actionLabel(): string {
@@ -563,15 +833,62 @@ export class LoginPage {
     this.step.set(step);
     this.error.set(null);
     this.notice.set(null);
+    this.showPassword.set(false);
     this.password = '';
     this.code = '';
   }
 
+  /**
+   * What is missing or malformed in the step on screen, before Cognito is asked.
+   *
+   * An empty email sent to Cognito comes back as a generic failure that reads like a
+   * wrong password; a weak new password comes back as Cognito's own policy text, after a
+   * round trip. Both are known here. The password rules are the user pool's, copied from
+   * apps/api/serverless.yml (PasswordPolicy), so the two cannot disagree silently - a
+   * change there must be made here.
+   */
+  private problem(): string | null {
+    const step = this.step();
+    const email = this.email.trim();
+    if (step === 'sign-in' || step === 'reset-request') {
+      if (!email) return 'Enter your email.';
+      // The offline stub's two accounts live at `@local`, which has no dot to find.
+      if (!environment.localAuth && !DOTTED_DOMAIN.test(email)) {
+        return 'Enter an address like name@example.com.';
+      }
+    }
+    if (step === 'sign-in' && !this.password) return 'Enter your password.';
+    if (step === 'mfa' && !/^\d{6}$/.test(this.code.trim())) {
+      return 'Enter the six digits from your authenticator app.';
+    }
+    if (step === 'reset-confirm' && !/^\d+$/.test(this.code.trim())) {
+      return 'Enter the code from the email, digits only.';
+    }
+    if (step === 'new-password' || step === 'reset-confirm') {
+      const p = this.password;
+      if (
+        p.length < 12 ||
+        !/[a-z]/.test(p) ||
+        !/[A-Z]/.test(p) ||
+        !/\d/.test(p) ||
+        !/[^A-Za-z0-9]/.test(p)
+      ) {
+        return 'Use at least 12 characters, with a lower-case and an upper-case letter, a digit and a symbol.';
+      }
+    }
+    return null;
+  }
+
   async submit(): Promise<void> {
     if (this.busy()) return;
+    this.notice.set(null);
+    const problem = this.problem();
+    if (problem) {
+      this.fail(problem);
+      return;
+    }
     this.busy.set(true);
     this.error.set(null);
-    this.notice.set(null);
 
     try {
       switch (this.step()) {
@@ -589,7 +906,7 @@ export class LoginPage {
           if (r.ok) {
             this.go('reset-confirm');
             this.notice.set(r.message);
-          } else this.error.set(r.message);
+          } else this.fail(r.message);
           break;
         }
         case 'reset-confirm': {
@@ -601,7 +918,7 @@ export class LoginPage {
           if (r.ok) {
             this.go('sign-in');
             this.notice.set(r.message);
-          } else this.error.set(r.message);
+          } else this.fail(r.message);
           break;
         }
       }
@@ -624,7 +941,7 @@ export class LoginPage {
         this.step.set('mfa');
         break;
       case 'failed':
-        this.error.set(outcome.message);
+        this.fail(outcome.message);
         break;
     }
   }
@@ -632,6 +949,12 @@ export class LoginPage {
   /** Back to where they were heading before the guard sent them here. */
   private async finish(): Promise<void> {
     await this.auth.adopt();
+    // Stamp and tear off the ticket before the route changes; the board stays behind.
+    if (!this.reducedMotion) {
+      this.printed.set(true);
+      this.admitted.set(true);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
     const returnUrl = this.route.snapshot.queryParamMap.get('returnUrl') ?? '/';
     await this.router.navigateByUrl(returnUrl);
   }
@@ -880,7 +1203,7 @@ export class ForbiddenPage {
 @Component({
   selector: 'app-welcome-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [RouterLink, QueueBoard],
   template: `
     <div class="gate">
       <section class="gate__say">
@@ -910,22 +1233,7 @@ export class ForbiddenPage {
         </p>
       </section>
 
-      <aside class="gate__board" aria-hidden="true">
-        <p class="gate__now">Period 2026-02 <span class="gate__sep">/</span> closes in 11 days</p>
-        <ol class="gate__rows">
-          @for (row of boardRows; track row.pos) {
-            @if (row.cut) {
-              <li class="gate__cut"><span>Bays run out here</span></li>
-            }
-            <li class="gate__row" [class.gate__row--on]="row.on" [class.gate__row--past]="row.past">
-              <span class="gate__pos">{{ row.pos }}</span>
-              <span class="gate__unit">{{ row.unit }}</span>
-              <span class="gate__wait">{{ row.wait }}</span>
-              <span class="gate__bay">{{ row.bay }}</span>
-            </li>
-          }
-        </ol>
-      </aside>
+      <app-queue-board class="gate__board" />
     </div>
   `,
   styles: [
@@ -987,7 +1295,7 @@ export class ForbiddenPage {
         padding: 0 var(--sp-6);
         border-radius: 3px;
         background: var(--signal);
-        color: #ffffff;
+        color: var(--on-primary);
         text-decoration: none;
         touch-action: manipulation;
         transition: background-color 140ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -1036,98 +1344,6 @@ export class ForbiddenPage {
         max-width: 46ch;
       }
 
-      .gate__board {
-        background: var(--board);
-        color: var(--board-ink);
-        padding: var(--sp-7);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        gap: var(--sp-4);
-        overflow: hidden;
-      }
-
-      .gate__now {
-        margin: 0;
-        font-size: var(--t-fine);
-        letter-spacing: 0.2em;
-        color: var(--board-ink-dim);
-      }
-
-      .gate__sep {
-        color: var(--board-rule);
-        padding: 0 0.4em;
-      }
-
-      .gate__rows {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        border-top: 1px solid var(--board-rule);
-      }
-
-      .gate__row {
-        display: grid;
-        grid-template-columns: 3.5ch 1fr 7ch 5ch;
-        gap: var(--sp-4);
-        align-items: baseline;
-        padding: var(--sp-3) 0;
-        border-bottom: 1px solid var(--board-rule);
-        font-size: var(--t-small);
-      }
-
-      .gate__pos {
-        font-size: var(--t-body);
-        font-variation-settings:
-          'wdth' 112,
-          'wght' 620;
-        color: var(--board-ink-dim);
-        text-align: right;
-      }
-
-      .gate__unit {
-        color: var(--board-ink);
-      }
-
-      .gate__wait,
-      .gate__bay {
-        color: var(--board-ink-dim);
-        text-align: right;
-      }
-
-      .gate__row--on,
-      .gate__row--on .gate__pos,
-      .gate__row--on .gate__unit,
-      .gate__row--on .gate__wait,
-      .gate__row--on .gate__bay {
-        color: var(--signal-on-board);
-      }
-
-      .gate__row--past {
-        opacity: 0.55;
-      }
-
-      .gate__cut {
-        display: flex;
-        align-items: center;
-        gap: var(--sp-3);
-        padding: var(--sp-4) 0 var(--sp-3);
-        font-size: var(--t-fine);
-        letter-spacing: 0.18em;
-        color: var(--board-ink-dim);
-      }
-
-      .gate__cut::after {
-        content: '';
-        flex: 1;
-        height: 1px;
-        background: repeating-linear-gradient(
-          to right,
-          var(--board-rule) 0 6px,
-          transparent 6px 12px
-        );
-      }
-
       @media (max-width: 62rem) {
         .gate {
           grid-template-columns: minmax(0, 1fr);
@@ -1135,10 +1351,6 @@ export class ForbiddenPage {
 
         .gate__say {
           justify-self: start;
-          padding: var(--sp-6) var(--sp-5);
-        }
-
-        .gate__board {
           padding: var(--sp-6) var(--sp-5);
         }
       }
@@ -1151,6 +1363,4 @@ export class ForbiddenPage {
     `,
   ],
 })
-export class WelcomePage {
-  readonly boardRows = BOARD_ROWS;
-}
+export class WelcomePage {}

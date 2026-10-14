@@ -5,22 +5,28 @@ import {
   computed,
   effect,
   inject,
+  linkedSignal,
   signal,
   viewChild,
 } from '@angular/core';
 import { LotFacade } from '../../application/lot.facade';
 import { DatePipe } from '@angular/common';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatIconModule } from '@angular/material/icon';
+import { MatSelectModule } from '@angular/material/select';
 import { LotMap } from '../../shared/ui/lot-map';
 import { LotScene } from '../../shared/ui/lot-scene';
 import { ViewStateHost } from '../../shared/ui/view-state';
+import { Pager } from '../../shared/ui/pager';
 import type { Bay, LotFilter, NavKey } from '../../domain/lot-layout';
 
-const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] = [
-  { value: 'ALL', label: 'All bays' },
-  { value: 'FREE', label: 'Free' },
-  { value: 'HELD', label: 'Occupied' },
-  { value: 'MINE', label: 'Mine' },
-  { value: 'EV', label: 'EV' },
+/** How the plan is drawn. The WebGL scene is a third projection as far as a person cares. */
+type Perspective = 'plan' | 'isometric' | 'webgl';
+
+const PERSPECTIVES: readonly { readonly value: Perspective; readonly label: string }[] = [
+  { value: 'plan', label: 'Plan, from above' },
+  { value: 'isometric', label: '2.5D' },
+  { value: 'webgl', label: '3D (WebGL)' },
 ];
 
 /**
@@ -33,52 +39,49 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
  * sortable and exportable view, and it is what renders when the layout has not been seeded
  * or the plate fails to load. Under 600 px it is the default, because a 200-bay level at
  * fit-to-width cannot give every bay a 24 px target (SC 2.5.8) on a 320 px screen.
+ *
+ * The controls were three rows of filled buttons - levels, five filters, three
+ * projections - plus a Map/Table pair in the header, all in the signal colour when on: a
+ * dozen loud controls above a plan whose job is to be read. They are now one toolbar of
+ * labelled controls. View, the one choice that changes the whole screen, stays a visible
+ * two-way switch; the rest are selects, because each is one answer from a short list and
+ * a select states the answer in force without showing every alternative all the time.
  */
 @Component({
   selector: 'app-lot-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [LotMap, LotScene, ViewStateHost, DatePipe],
+  imports: [
+    DatePipe,
+    LotMap,
+    LotScene,
+    MatFormFieldModule,
+    MatIconModule,
+    MatSelectModule,
+    Pager,
+    ViewStateHost,
+  ],
   host: { '(keydown.escape)': 'close()' },
   template: `
-    <a class="skip" [href]="'#lot-detail'">Skip map, go to bay detail</a>
+    @if (view() === 'map') {
+      <a class="skip" [href]="'#lot-detail'">Skip map, go to bay detail</a>
+    }
 
     <header class="head">
-      <div>
-        <h1 class="head__h">The lot</h1>
-        <!--
-          The sentence has to match what the viewer will actually get. Promising "who
-          holds it" to a resident, who is never shown an occupant, reads as a screen that
-          is broken rather than as a rule being kept.
-        -->
-        <p class="head__p">
-          Every bay on the level, as it stands now.
-          @if (facade.showsOccupants()) {
-            Select a bay for its detail and who holds it.
-          } @else {
-            Select a bay for its detail. Who holds a bay is shown to building
-            administrators only.
-          }
-        </p>
-      </div>
-
-      <div class="head__views" role="group" aria-label="View">
-        <button
-          type="button"
-          [class.on]="view() === 'map'"
-          [attr.aria-pressed]="view() === 'map'"
-          (click)="view.set('map')"
-        >
-          Map
-        </button>
-        <button
-          type="button"
-          [class.on]="view() === 'table'"
-          [attr.aria-pressed]="view() === 'table'"
-          (click)="view.set('table')"
-        >
-          Table
-        </button>
-      </div>
+      <h1 class="head__h">The lot</h1>
+      <!--
+        The sentence has to match what the viewer will actually get. Promising "who
+        holds it" to a resident, who is never shown an occupant, reads as a screen that
+        is broken rather than as a rule being kept.
+      -->
+      <p class="head__p">
+        Every bay on the level, as it stands now.
+        @if (facade.showsOccupants()) {
+          Select a bay for its detail and who holds it.
+        } @else {
+          Select a bay for its detail. Who holds a bay is shown to building
+          administrators only.
+        }
+      </p>
     </header>
 
     <!--
@@ -89,64 +92,80 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
     -->
     <p class="sr-only" role="status" aria-live="polite">{{ facade.announcement() }}</p>
 
-    <app-view-state [state]="facade.state()" emptyTitle="No layout yet" (action)="facade.refresh()">
+    <app-view-state
+      [state]="facade.state()"
+      loadingLabel="Loading the lot plan"
+      emptyTitle="No layout yet"
+      (action)="facade.refresh()"
+    >
       @if (facade.level(); as level) {
-        <div class="bar">
-          @if (facade.levels().length > 1) {
-          <div class="bar__group" role="group" aria-label="Level">
-            @for (l of facade.levels(); track l.levelId) {
-              <button
-                type="button"
-                [class.on]="l.levelId === level.levelId"
-                [attr.aria-pressed]="l.levelId === level.levelId"
-                (click)="facade.selectLevel(l.levelId)"
-              >
-                {{ l.label }}
-              </button>
-            }
+        <div class="tools">
+          <!--
+            View is a switch, not a select: it changes the whole screen, so both ways of
+            seeing the lot stay on show. Same hairline pair as the gate's capture modes.
+          -->
+          <div class="seg" role="group" aria-label="View">
+            <button
+              class="seg__b"
+              type="button"
+              [attr.aria-pressed]="view() === 'map'"
+              (click)="setView('map')"
+            >
+              <mat-icon aria-hidden="true">map</mat-icon>
+              Map
+            </button>
+            <button
+              class="seg__b"
+              type="button"
+              [attr.aria-pressed]="view() === 'table'"
+              (click)="setView('table')"
+            >
+              <mat-icon aria-hidden="true">table_rows</mat-icon>
+              Table
+            </button>
           </div>
+
+          @if (facade.levels().length > 1) {
+            <mat-form-field appearance="outline" subscriptSizing="dynamic" class="tools__f">
+              <mat-label>Level</mat-label>
+              <mat-select
+                [value]="level.levelId"
+                (selectionChange)="facade.selectLevel($event.value)"
+              >
+                @for (l of facade.levels(); track l.levelId) {
+                  <mat-option [value]="l.levelId">{{ l.label }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
           }
 
-          <div class="bar__group" role="group" aria-label="Filter">
-            @for (f of filters; track f.value) {
-              <button
-                type="button"
-                [class.on]="f.value === facade.filter()"
-                [attr.aria-pressed]="f.value === facade.filter()"
-                (click)="facade.setFilter(f.value)"
-              >
-                {{ f.label }}
-              </button>
-            }
-          </div>
+          <!-- Each option carries its count, so choosing a filter is also reading the lot. -->
+          <mat-form-field appearance="outline" subscriptSizing="dynamic" class="tools__f">
+            <mat-label>Show</mat-label>
+            <mat-select
+              [value]="facade.filter()"
+              (selectionChange)="facade.setFilter($event.value)"
+            >
+              @for (f of filterOptions(); track f.value) {
+                <mat-option [value]="f.value">
+                  {{ f.label }} <span class="opt__n">{{ f.count }}</span>
+                </mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
 
           @if (view() === 'map') {
-            <div class="bar__group" role="group" aria-label="Projection">
-              <button
-                type="button"
-                [class.on]="!webgl() && facade.projection() === 'plan'"
-                [attr.aria-pressed]="!webgl() && facade.projection() === 'plan'"
-                (click)="webgl.set(false); facade.setProjection('plan')"
+            <mat-form-field appearance="outline" subscriptSizing="dynamic" class="tools__f">
+              <mat-label>Perspective</mat-label>
+              <mat-select
+                [value]="perspective()"
+                (selectionChange)="setPerspective($event.value)"
               >
-                Plan
-              </button>
-              <button
-                type="button"
-                [class.on]="!webgl() && facade.projection() === 'isometric'"
-                [attr.aria-pressed]="!webgl() && facade.projection() === 'isometric'"
-                (click)="webgl.set(false); facade.setProjection('isometric')"
-              >
-                2.5D
-              </button>
-              <button
-                type="button"
-                [class.on]="webgl()"
-                [attr.aria-pressed]="webgl()"
-                (click)="webgl.set(true)"
-              >
-                3D &middot; WebGL
-              </button>
-            </div>
+                @for (p of perspectives; track p.value) {
+                  <mat-option [value]="p.value">{{ p.label }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
           }
         </div>
 
@@ -157,87 +176,150 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
           {{ facade.counts().closed }} out of service
         </p>
 
-        <div class="layout">
-          <div class="layout__main">
-            @if (view() === 'map' && webgl()) {
-              @defer (when webgl()) {
-                <app-lot-scene
-                  #scene
+        @if (view() === 'map') {
+          <div class="layout view-in">
+            <div class="layout__main">
+              @if (webgl()) {
+                @defer (when webgl()) {
+                  <app-lot-scene
+                    #scene
+                    [level]="level"
+                    [bays]="facade.bays()"
+                    [visible]="facade.visible()"
+                    [selected]="facade.selected()?.placement.spotId ?? null"
+                    [focused]="facade.focused()"
+                    (activate)="onActivate($event)"
+                    (focusMove)="facade.focus($event)"
+                    (navigate)="onNavigate($event)"
+                    (search)="onSearch($event)"
+                  />
+                } @loading {
+                  <p class="hint">Loading the 3D renderer&hellip;</p>
+                } @placeholder {
+                  <p class="hint">3D view</p>
+                }
+
+                <p class="hint">
+                  The 3D view downloads a WebGL renderer the plan view does not need. A canvas
+                  has no accessibility tree, so the same invisible grid sits over it: arrow
+                  keys, type-ahead and Enter behave exactly as they do on the plan.
+                </p>
+              } @else {
+                <app-lot-map
+                  #map
                   [level]="level"
                   [bays]="facade.bays()"
                   [visible]="facade.visible()"
+                  [projection]="facade.projection()"
                   [selected]="facade.selected()?.placement.spotId ?? null"
                   [focused]="facade.focused()"
+                  [busy]="facade.occupancyState().kind === 'loading'"
                   (activate)="onActivate($event)"
                   (focusMove)="facade.focus($event)"
                   (navigate)="onNavigate($event)"
                   (search)="onSearch($event)"
                 />
-              } @loading {
-                <p class="hint">Loading the 3D renderer&hellip;</p>
-              } @placeholder {
-                <p class="hint">3D view</p>
+
+                <!--
+                  The legend states every status in shape, pattern, glyph and words, so the
+                  map is readable in greyscale and by anyone who does not distinguish the
+                  fills (SC 1.4.1).
+                -->
+                <ul class="legend">
+                  <li>
+                    <span class="sw sw--free" aria-hidden="true"></span>
+                    <span><strong>Free</strong> &mdash; no resident holds this bay. It goes
+                    into the next draw.</span>
+                  </li>
+                  <li>
+                    <span class="sw sw--held" aria-hidden="true"></span>
+                    <span><strong>Occupied</strong> &mdash; assigned to a resident for the
+                    current period.</span>
+                  </li>
+                  <li>
+                    <span class="sw sw--mine" aria-hidden="true"></span>
+                    <span><strong>Yours</strong> &mdash; the bay assigned to you, until the
+                    date in the detail panel.</span>
+                  </li>
+                  <li>
+                    <span class="sw sw--closed" aria-hidden="true"></span>
+                    <span><strong>Out of service</strong> &mdash; unusable, for works or
+                    repairs. Left out of the draw.</span>
+                  </li>
+                  <li>
+                    <span class="sw sw--glyph" aria-hidden="true">&#9889;</span>
+                    <span><strong>EV</strong> &mdash; has a charging point.</span>
+                  </li>
+                </ul>
+
+                <p class="hint">
+                  Arrow keys move between bays, Enter opens the detail, Escape closes it, and
+                  typing a bay number jumps straight to that bay.
+                </p>
               }
+            </div>
 
-              <p class="hint">
-                The 3D view downloads a WebGL renderer the plan view does not need. A canvas
-                has no accessibility tree, so the same invisible grid sits over it: arrow
-                keys, type-ahead and Enter behave exactly as they do on the plan.
-              </p>
-            } @else if (view() === 'map') {
-              <app-lot-map
-                #map
-                [level]="level"
-                [bays]="facade.bays()"
-                [visible]="facade.visible()"
-                [projection]="facade.projection()"
-                [selected]="facade.selected()?.placement.spotId ?? null"
-                [focused]="facade.focused()"
-                [busy]="facade.occupancyState().kind === 'loading'"
-                (activate)="onActivate($event)"
-                (focusMove)="facade.focus($event)"
-                (navigate)="onNavigate($event)"
-                (search)="onSearch($event)"
-              />
+            <!--
+              A panel rather than a modal: the plan is the context for the detail, and a
+              dialog would cover the thing being inspected and trap focus away from it. Focus
+              moves here on selection and returns to the bay on Escape.
 
+              Map only. In the table every one of these facts is already a column of the
+              row, so the panel beside it repeated the row in larger type.
+            -->
+            <aside class="panel" id="lot-detail" tabindex="-1" #panel aria-labelledby="lot-detail-h">
               <!--
-                The legend states every status in shape, pattern, glyph and words, so the
-                map is readable in greyscale and by anyone who does not distinguish the
-                fills (SC 1.4.1).
+                Keyed on the bay, so choosing another one replaces the block and its entry
+                plays again: the detail visibly changes to the new bay instead of its text
+                being swapped in place where the change is easy to miss.
               -->
-              <ul class="legend">
-                <li>
-                  <span class="sw sw--free" aria-hidden="true"></span>
-                  <span><strong>Free</strong> &mdash; no resident holds this bay. It goes
-                  into the next draw.</span>
-                </li>
-                <li>
-                  <span class="sw sw--held" aria-hidden="true"></span>
-                  <span><strong>Occupied</strong> &mdash; assigned to a resident for the
-                  current period.</span>
-                </li>
-                <li>
-                  <span class="sw sw--mine" aria-hidden="true"></span>
-                  <span><strong>Yours</strong> &mdash; the bay assigned to you, until the
-                  date in the detail panel.</span>
-                </li>
-                <li>
-                  <span class="sw sw--closed" aria-hidden="true"></span>
-                  <span><strong>Out of service</strong> &mdash; unusable, for works or
-                  repairs. Left out of the draw.</span>
-                </li>
-                <li>
-                  <span class="sw sw--glyph" aria-hidden="true">&#9889;</span>
-                  <span><strong>EV</strong> &mdash; has a charging point.</span>
-                </li>
-              </ul>
+              @for (bay of selectedList(); track bay.placement.spotId) {
+                <div class="panel__in">
+                  <h2 class="panel__h stencil" id="lot-detail-h">{{ bay.placement.spotCode }}</h2>
+                  <p class="panel__status">{{ statusWord(bay) }}</p>
 
-              <p class="hint">
-                Arrow keys move between bays, Enter opens the detail, Escape closes it, and
-                typing a bay number jumps straight to that bay.
-              </p>
-            } @else {
-              <table class="table">
+                  <dl class="panel__dl">
+                    <dt>Type</dt>
+                    <dd>{{ typeWord(bay) }}</dd>
+                    <dt>Aisle</dt>
+                    <dd>Row {{ bay.placement.row }}, position {{ bay.placement.col }}</dd>
+                    <dt>Zone</dt>
+                    <dd>{{ bay.placement.zoneId ?? dash }}</dd>
+                    @if (bay.occupant) {
+                      <dt>Held by</dt>
+                      <dd>{{ bay.occupant.displayName }}{{ middot }}unit {{ bay.occupant.unit }}</dd>
+                    }
+                    @if (bay.validUntil) {
+                      <dt>Until</dt>
+                      <dd>{{ bay.validUntil | date: 'longDate' }}</dd>
+                    }
+                  </dl>
+
+                  @if (!bay.occupant && bay.status === 'HELD') {
+                    <p class="panel__note">
+                      Who holds a bay is shown to building administrators only.
+                    </p>
+                  }
+
+                  <button type="button" class="link" (click)="close()">Close detail (Esc)</button>
+                </div>
+              } @empty {
+                <div class="panel__in">
+                  <h2 class="panel__h panel__h--quiet" id="lot-detail-h">No bay selected</h2>
+                  <p class="panel__note">Select a bay on the plan to see its detail.</p>
+                  @if (facade.mine(); as mine) {
+                    <button type="button" class="link" (click)="onActivate(mine.placement.spotId)">
+                      Go to my bay, {{ mine.placement.spotCode }}
+                    </button>
+                  }
+                </div>
+              }
+            </aside>
+          </div>
+        } @else {
+          <div class="view-in">
+            <div class="table-scroll">
+              <table class="data-table">
                 <!--
                   The "Held by" column exists only for a viewer who may be told. For a
                   resident it would be a column of em dashes, which is not privacy kept
@@ -261,10 +343,19 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
                   </tr>
                 </thead>
                 <tbody>
-                  @for (bay of tableRows(); track bay.placement.spotId) {
+                  @for (bay of pagedRows(); track bay.placement.spotId) {
                     <tr [class.on]="bay.placement.spotId === facade.selected()?.placement.spotId">
                       <th scope="row">
-                        <button type="button" class="link" (click)="onActivate(bay.placement.spotId)">
+                        <!--
+                          A row and its bay on the plan are one object, reachable from either
+                          side: the code takes you to the bay, selected, on the map.
+                        -->
+                        <button
+                          type="button"
+                          class="link code"
+                          [attr.aria-label]="'Show ' + bay.placement.spotCode + ' on the map'"
+                          (click)="showOnMap(bay.placement.spotId)"
+                        >
                           {{ bay.placement.spotCode }}
                         </button>
                       </th>
@@ -279,56 +370,22 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
                   }
                 </tbody>
               </table>
+            </div>
+
+            <!-- The same pager, in the same place, as every other register. -->
+            @if (pageCount() > 1) {
+              <app-pager
+                [page]="page()"
+                [pageSize]="pageSize"
+                [count]="pagedRows().length"
+                [hasPrevious]="page() > 1"
+                [hasNext]="page() < pageCount()"
+                (previous)="previousPage()"
+                (next)="nextPage()"
+              />
             }
           </div>
-
-          <!--
-            A panel rather than a modal: the plan is the context for the detail, and a dialog
-            would cover the thing being inspected and trap focus away from it. Focus moves
-            here on selection and returns to the bay on Escape.
-          -->
-          <aside class="panel" id="lot-detail" tabindex="-1" #panel aria-labelledby="lot-detail-h">
-            @if (facade.selected(); as bay) {
-              <h2 class="panel__h stencil" id="lot-detail-h">{{ bay.placement.spotCode }}</h2>
-              <p class="panel__status">{{ statusWord(bay) }}</p>
-
-              <dl class="panel__dl">
-                <dt>Type</dt>
-                <dd>{{ typeWord(bay) }}</dd>
-                <dt>Aisle</dt>
-                <dd>Row {{ bay.placement.row }}, position {{ bay.placement.col }}</dd>
-                <dt>Zone</dt>
-                <dd>{{ bay.placement.zoneId ?? dash }}</dd>
-                @if (bay.occupant) {
-                  <dt>Held by</dt>
-                  <dd>{{ bay.occupant.displayName }}{{ middot }}unit {{ bay.occupant.unit }}</dd>
-                }
-                @if (bay.validUntil) {
-                  <dt>Until</dt>
-                  <dd>{{ bay.validUntil | date: 'longDate' }}</dd>
-                }
-              </dl>
-
-              @if (!bay.occupant && bay.status === 'HELD') {
-                <p class="panel__note">
-                  Who holds a bay is shown to building administrators only.
-                </p>
-              }
-
-              <button type="button" class="link" (click)="close()">Close detail (Esc)</button>
-            } @else {
-              <h2 class="panel__h panel__h--quiet" id="lot-detail-h">No bay selected</h2>
-              <p class="panel__note">
-                Select a bay on the {{ view() === 'map' ? 'plan' : 'list' }} to see its detail.
-              </p>
-              @if (facade.mine(); as mine) {
-                <button type="button" class="link" (click)="onActivate(mine.placement.spotId)">
-                  Go to my bay, {{ mine.placement.spotCode }}
-                </button>
-              }
-            }
-          </aside>
-        </div>
+        }
       }
     </app-view-state>
   `,
@@ -356,11 +413,6 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
       }
 
       .head {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: var(--sp-5);
-        flex-wrap: wrap;
         border-bottom: 1px solid var(--rule);
         padding-bottom: var(--sp-4);
       }
@@ -374,53 +426,111 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
         max-width: 54ch;
       }
 
-      .bar {
+      /* ----------------------------------------------------------------- tools */
+
+      .tools {
         display: flex;
-        gap: var(--sp-5);
+        align-items: center;
+        gap: var(--sp-4);
         flex-wrap: wrap;
         margin: var(--sp-5) 0 var(--sp-3);
       }
-      .bar__group,
-      .head__views {
-        display: flex;
-        gap: 2px;
+
+      .tools__f {
+        width: 12rem;
       }
 
-      button {
+      .opt__n {
+        margin-left: var(--sp-2);
+        color: var(--ink-3);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Two buttons in one hairline frame, so the pair reads as one control. */
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--rule);
+        border-radius: 3px;
+      }
+
+      .seg__b {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--sp-2);
         font: inherit;
         font-size: var(--t-small);
         /* 44 px of height, so a pointer target is comfortable and 2.5.8 is not in play. */
         min-height: 44px;
         padding: 0 var(--sp-4);
-        border: 1px solid var(--rule);
-        background: var(--slab);
-        color: var(--steel);
-        border-radius: 3px;
+        background: transparent;
+        color: var(--ink-3);
+        border: 0;
+        border-radius: 0;
         cursor: pointer;
+        transition:
+          color 140ms ease,
+          box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1);
       }
-      button.on {
-        background: var(--signal);
-        border-color: var(--signal);
-        color: var(--on-primary);
+
+      .seg__b + .seg__b {
+        border-left: 1px solid var(--rule);
       }
-      button:focus-visible {
-        outline: 3px solid var(--bay-line);
+
+      .seg__b mat-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 20px;
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .seg__b:hover {
+          color: var(--ink-1);
+        }
+      }
+
+      /* The one in force is darker and heavier, with the signal under it - not a fill. */
+      .seg__b[aria-pressed='true'] {
+        color: var(--ink-1);
+        font-variation-settings: 'wght' 620;
+        box-shadow: inset 0 -3px 0 0 var(--signal);
+      }
+
+      .seg__b:focus-visible,
+      .link:focus-visible {
+        outline: 2px solid var(--signal);
         outline-offset: 2px;
       }
 
       .link {
-        min-height: 0;
+        font: inherit;
         padding: 0;
         border: 0;
         background: none;
         text-decoration: underline;
+        text-underline-offset: 3px;
         color: var(--steel);
+        cursor: pointer;
       }
 
       .counts {
         margin: 0 0 var(--sp-4);
         color: var(--steel-soft);
         font-size: var(--t-small);
+      }
+
+      /*
+       * Switching view brings the new one in with a short rise rather than a hard cut,
+       * so the change reads as the same lot seen another way.
+       */
+      .view-in {
+        animation: view-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      @keyframes view-in {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
       }
 
       .layout {
@@ -460,9 +570,11 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
         outline: 2px solid var(--bay-held-edge);
         outline-offset: -2px;
       }
+      /* The same edge the map gives your bay, so the key matches the plan. Inset, so the
+         swatch keeps its 18px width like the others. */
       .sw--mine {
         background: var(--bay-mine);
-        border-left: 5px solid var(--bay-mine-edge);
+        box-shadow: inset 5px 0 0 var(--bay-mine-edge);
       }
       .sw--closed {
         background: var(--bay-closed);
@@ -482,11 +594,27 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
       .panel {
         border-left: 3px solid var(--steel);
         padding: 0 0 0 var(--sp-5);
+        /* Sticky beside a tall plan, so the detail stays in view while the map scrolls. */
+        position: sticky;
+        top: var(--sp-4);
       }
       .panel:focus-visible {
         outline: 3px solid var(--bay-line);
         outline-offset: 4px;
       }
+
+      /* Each bay's detail slides in from the plan's side as it is chosen. */
+      .panel__in {
+        animation: panel-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      @keyframes panel-in {
+        from {
+          opacity: 0;
+          transform: translateX(-10px);
+        }
+      }
+
       .panel__h {
         margin: 0;
         font-size: var(--t-head);
@@ -518,24 +646,9 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
         color: var(--steel-soft);
       }
 
-      .table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: var(--t-small);
-      }
-      .table th,
-      .table td {
-        text-align: left;
-        padding: var(--sp-3) var(--sp-3);
-        border-bottom: 1px solid var(--rule-soft);
-      }
-      .table thead th {
-        color: var(--steel-faint);
-        font-size: var(--t-fine);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-      .table tr.on {
+      /* The list is the shared .data-table; only the selected bay is marked here, with
+         the same tint the map's selection uses. */
+      .data-table tr.on {
         background: var(--concrete-deep);
       }
 
@@ -545,9 +658,26 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
           grid-template-columns: minmax(0, 1fr);
         }
         .panel {
+          position: static;
           border-left: 0;
           border-top: 3px solid var(--steel);
           padding: var(--sp-4) 0 0;
+        }
+      }
+
+      @media (max-width: 40rem) {
+        .tools__f {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .view-in,
+        .panel__in {
+          animation: none;
+        }
+        .seg__b {
+          transition: none;
         }
       }
     `,
@@ -556,7 +686,7 @@ const FILTERS: readonly { readonly value: LotFilter; readonly label: string }[] 
 })
 export default class LotPage {
   readonly facade = inject(LotFacade);
-  readonly filters = FILTERS;
+  readonly perspectives = PERSPECTIVES;
 
   private readonly map = viewChild<LotMap>('map');
   private readonly scene = viewChild<LotScene>('scene');
@@ -572,11 +702,71 @@ export default class LotPage {
       : 'map',
   );
 
+  /** The selected bay as a list of zero or one, so the panel can key its entry on it. */
+  readonly selectedList = computed(() => {
+    const bay = this.facade.selected();
+    return bay ? [bay] : [];
+  });
+
+  /** The two projections and the WebGL scene, as the one answer the select shows. */
+  readonly perspective = computed<Perspective>(() =>
+    this.webgl() ? 'webgl' : this.facade.projection(),
+  );
+
+  /**
+   * The filter choices, each with how many bays it would show. Counted from the level's
+   * bays here rather than from facade.counts(), because two of the choices - Mine and
+   * EV - are not statuses the counts carry.
+   */
+  readonly filterOptions = computed(() => {
+    const bays = this.facade.bays();
+    const count = (pick: (b: Bay) => boolean) => bays.filter(pick).length;
+    const options: { value: LotFilter; label: string; count: number }[] = [
+      { value: 'ALL', label: 'All bays', count: bays.length },
+      { value: 'FREE', label: 'Free', count: count((b) => b.status === 'FREE') },
+      { value: 'HELD', label: 'Occupied', count: count((b) => b.status === 'HELD') },
+      { value: 'MINE', label: 'Mine', count: count((b) => b.isMine) },
+      { value: 'EV', label: 'EV', count: count((b) => b.placement.type === 'EV') },
+    ];
+    return options;
+  });
+
   /** The table shows the filter as a filter: hiding rows there loses nothing. */
   readonly tableRows = computed(() => {
     const keep = this.facade.visible();
     return this.facade.bays().filter((b) => keep.has(b.placement.spotId));
   });
+
+  /** The gate log's page size: the lot is a register of similar length. */
+  readonly pageSize = 25;
+
+  /**
+   * The table page, back to 1 whenever the filter or the level changes. A page number
+   * belongs to one particular list; carried into another it can point past its end and
+   * show an empty table over bays that exist. linkedSignal resets it from those sources
+   * and leaves it writable for Previous and Next.
+   */
+  readonly page = linkedSignal({
+    source: () => ({ filter: this.facade.filter(), level: this.facade.level()?.levelId }),
+    computation: () => 1,
+  });
+
+  readonly pageCount = computed(() =>
+    Math.max(1, Math.ceil(this.tableRows().length / this.pageSize)),
+  );
+
+  readonly pagedRows = computed(() => {
+    const start = (this.page() - 1) * this.pageSize;
+    return this.tableRows().slice(start, start + this.pageSize);
+  });
+
+  previousPage(): void {
+    this.page.update((p) => Math.max(1, p - 1));
+  }
+
+  nextPage(): void {
+    this.page.update((p) => Math.min(this.pageCount(), p + 1));
+  }
 
   constructor() {
     // Focus follows the model: when the facade moves the current cell, the real element
@@ -589,6 +779,28 @@ export default class LotPage {
       if (this.webgl()) scene?.focusCell(id);
       else map?.focusCell(id);
     });
+  }
+
+  setView(view: 'map' | 'table'): void {
+    this.view.set(view);
+  }
+
+  setPerspective(p: Perspective): void {
+    if (p === 'webgl') {
+      this.webgl.set(true);
+      return;
+    }
+    this.webgl.set(false);
+    this.facade.setProjection(p);
+  }
+
+  /** From a table row to its bay: the map, with that bay selected and its detail open. */
+  showOnMap(spotId: string): void {
+    this.view.set('map');
+    this.facade.select(spotId);
+    this.facade.focus(spotId);
+    // After the map has rendered, so the panel it moves focus to exists.
+    queueMicrotask(() => this.panel()?.nativeElement.focus());
   }
 
   onActivate(spotId: string): void {
@@ -618,8 +830,8 @@ export default class LotPage {
    * characters so the source file stays ASCII and cannot be mangled by a tool that
    * guesses its encoding wrongly.
    */
-  readonly dash = '\u2014';
-  readonly middot = ' \u00b7 ';
+  readonly dash = '—';
+  readonly middot = ' · ';
 
   occupantLine(bay: Bay): string {
     return bay.occupant
