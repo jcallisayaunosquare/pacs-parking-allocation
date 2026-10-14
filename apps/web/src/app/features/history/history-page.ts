@@ -29,6 +29,7 @@ import type { HistoryEntry } from '../../domain/models';
     <app-view-state
       [state]="facade.historyState()"
       [skeletonCount]="5"
+      loadingLabel="Loading your history"
       emptyTitle="You have not been in a draw yet"
       emptyBody="Once a draw runs with you entered, the result appears here along with the waiting time it was decided on."
       (retry)="facade.refresh()"

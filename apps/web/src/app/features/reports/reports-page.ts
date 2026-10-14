@@ -80,6 +80,7 @@ const toCsv = (columns: readonly string[], rows: readonly Row[]): string =>
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="6"
+      loadingLabel="Loading the report"
       [emptyTitle]="'Nothing to report yet'"
       [emptyBody]="emptyBody()"
       (retry)="facade.refresh()"
@@ -307,9 +308,6 @@ const toCsv = (columns: readonly string[], rows: readonly Row[]): string =>
         font-variant-numeric: tabular-nums;
       }
 
-      .dim {
-        color: var(--steel-faint);
-      }
       .seed {
         font-size: var(--t-fine);
         word-break: break-all;

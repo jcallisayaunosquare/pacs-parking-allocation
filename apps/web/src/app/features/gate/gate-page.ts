@@ -6,6 +6,7 @@ import {
   effect,
   inject,
   signal,
+  untracked,
   viewChild,
   type ElementRef,
 } from '@angular/core';
@@ -15,6 +16,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { GateFacade } from '../../application/gate.facade';
 import { ArrivalsFacade } from '../../application/arrivals.facade';
+import { PlatesFacade } from '../../application/plates.facade';
 import { AuthStore } from '../../core/auth/auth.store';
 import type { PlateRead } from '../../domain/models';
 import { REASON_LABEL } from '../plates/reason-label';
@@ -963,6 +965,8 @@ interface Verdict {
 export default class GatePage implements OnDestroy {
   readonly facade = inject(GateFacade);
   readonly arrivals = inject(ArrivalsFacade);
+  /** The register embedded below - the same root instance the table reads from. */
+  private readonly plates = inject(PlatesFacade);
   private readonly auth = inject(AuthStore);
 
   /** True only under `ng serve --configuration offline`. */
@@ -1031,6 +1035,8 @@ export default class GatePage implements OnDestroy {
 
   private stream: MediaStream | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** The last arrival the register was refetched for, so one arrival is one refetch. */
+  private loggedArrival: string | null = null;
 
   constructor() {
     /*
@@ -1062,6 +1068,30 @@ export default class GatePage implements OnDestroy {
       }
       const id = setInterval(() => this.focus.set(this.measureFocus()), FOCUS_POLL_MS);
       onCleanup(() => clearInterval(id));
+    });
+
+    /*
+     * A new verdict above means a new row below.
+     *
+     * The register used to be fetched once, when the page loaded, so the plate just
+     * printed in display type was missing from the log directly under it until somebody
+     * reloaded the whole page - which also stopped the camera. Keyed on the arrival the
+     * verdict is showing, so the two halves of the screen change together and only when
+     * a plate was actually recognised: an empty lane sends a frame every two seconds, and
+     * refetching the log for each of those would churn the table all shift.
+     *
+     * Only on the first page. Newest first means a new read lands on page one, and an
+     * administrator who has paged back into the history is reading something - pulling
+     * the table out from under them for a car they are not looking at is worse than one
+     * row arriving a moment late. The refresh icon is there for that case.
+     */
+    effect(() => {
+      const id = this.arrivals.current()?.id ?? null;
+      if (id === null || id === this.loggedArrival) return;
+      this.loggedArrival = id;
+      untracked(() => {
+        if (!this.plates.hasPrevious()) this.plates.refresh();
+      });
     });
   }
 

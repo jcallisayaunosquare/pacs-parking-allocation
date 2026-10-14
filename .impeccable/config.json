@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "apps/web/src/app/features/gate/gate-page.ts"
+        ],
+        "createdAt": "2026-10-14T01:25:24.966Z",
+        "reason": "Claude triage: drop__img has a bound [src] to a blob object URL and renders only inside @if (filePreview(); as src), so it can never be empty"
+      }
+    ]
+  }
+}

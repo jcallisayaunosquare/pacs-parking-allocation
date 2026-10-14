@@ -4,6 +4,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { FormsModule } from '@angular/forms';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CognitoService, type AuthOutcome } from '../../core/auth/cognito.service';
+import { DOTTED_DOMAIN } from '../../shared/forms/limits';
 
 /** The five things a sign-in can be, each one a real state Cognito can return. */
 type Step = 'sign-in' | 'new-password' | 'mfa' | 'reset-request' | 'reset-confirm';
@@ -172,7 +173,7 @@ const BOARD_ROWS = [
             }
 
             <button class="ticket__go" type="submit" [disabled]="busy()">
-              {{ busy() ? 'Working...' : actionLabel() }}
+              {{ busy() ? 'Working…' : actionLabel() }}
             </button>
 
             @if (step() === 'sign-in') {
@@ -567,11 +568,54 @@ export class LoginPage {
     this.code = '';
   }
 
+  /**
+   * What is missing or malformed in the step on screen, before Cognito is asked.
+   *
+   * An empty email sent to Cognito comes back as a generic failure that reads like a
+   * wrong password; a weak new password comes back as Cognito's own policy text, after a
+   * round trip. Both are known here. The password rules are the user pool's, copied from
+   * apps/api/serverless.yml (PasswordPolicy), so the two cannot disagree silently - a
+   * change there must be made here.
+   */
+  private problem(): string | null {
+    const step = this.step();
+    const email = this.email.trim();
+    if (step === 'sign-in' || step === 'reset-request') {
+      if (!email) return 'Enter your email.';
+      if (!DOTTED_DOMAIN.test(email)) return 'Enter an address like name@example.com.';
+    }
+    if (step === 'sign-in' && !this.password) return 'Enter your password.';
+    if (step === 'mfa' && !/^\d{6}$/.test(this.code.trim())) {
+      return 'Enter the six digits from your authenticator app.';
+    }
+    if (step === 'reset-confirm' && !/^\d+$/.test(this.code.trim())) {
+      return 'Enter the code from the email, digits only.';
+    }
+    if (step === 'new-password' || step === 'reset-confirm') {
+      const p = this.password;
+      if (
+        p.length < 12 ||
+        !/[a-z]/.test(p) ||
+        !/[A-Z]/.test(p) ||
+        !/\d/.test(p) ||
+        !/[^A-Za-z0-9]/.test(p)
+      ) {
+        return 'Use at least 12 characters, with a lower-case and an upper-case letter, a digit and a symbol.';
+      }
+    }
+    return null;
+  }
+
   async submit(): Promise<void> {
     if (this.busy()) return;
+    this.notice.set(null);
+    const problem = this.problem();
+    if (problem) {
+      this.error.set(problem);
+      return;
+    }
     this.busy.set(true);
     this.error.set(null);
-    this.notice.set(null);
 
     try {
       switch (this.step()) {

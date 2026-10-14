@@ -11,6 +11,7 @@ import { ConfirmService } from '../../shared/ui/confirm';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — periods and draws (UC-04, UC-05, §17).
@@ -48,10 +49,6 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
       </div>
       <button matButton="filled" type="button" (click)="openCreate()">New period</button>
     </header>
-
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-    }
 
     @if (facade.runnable(); as c) {
       <section class="ready">
@@ -135,6 +132,9 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="4"
+      [busy]="facade.busy()"
+      loadingLabel="Loading periods"
+      busyLabel="Saving the period"
       emptyTitle="No periods yet"
       emptyBody="A period sets when it begins and when registration runs. Its end comes from Period length in the rules."
       emptyActionLabel="New period"
@@ -148,8 +148,8 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
           readers because the period's label is already the name of the row.
         -->
         <ng-container matColumnDef="num">
-          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let c; let i = index" class="num" aria-hidden="true">
+          <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let c; let i = index" class="col-index" aria-hidden="true">
             {{ i + 1 }}
           </td>
         </ng-container>
@@ -206,7 +206,7 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
             decides what is inside it: a period that has drawn offers nothing but its
             name, because its dates and its result are the record.
           -->
-          <td mat-cell *matCellDef="let c">
+          <td mat-cell *matCellDef="let c" class="acts">
             <button
               matIconButton
               type="button"
@@ -256,11 +256,6 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
   `,
   styles: [
     `
-      /* The destructive item, so it does not read like the ones above it. */
-      .danger {
-        color: var(--revoked);
-      }
-
       :host {
         /* This screen's measure. The shell is full-bleed; pages own their width. */
         width: 100%;
@@ -373,26 +368,6 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
         max-width: 64ch;
       }
 
-      .code {
-        font-size: 1.05rem;
-      }
-      .dim {
-        color: var(--steel-faint);
-      }
-      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
-         width of each digit. */
-      .num {
-        width: 3rem;
-        color: var(--steel-faint);
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        padding-right: var(--sp-2);
-      }
-
-      table {
-        width: 100%;
-      }
-
       @media (max-width: 40rem) {
         .head {
           flex-direction: column;
@@ -408,6 +383,8 @@ import { NewCycleDialog, RenameCycleDialog } from './cycles-dialogs';
 })
 export default class CyclesPage {
   readonly facade = inject(CyclesFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly confirm = inject(ConfirmService);
   private readonly dialog = inject(MatDialog);
 

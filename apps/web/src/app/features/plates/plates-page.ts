@@ -7,13 +7,17 @@ import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
+import { LiveAnnouncer } from '@angular/cdk/a11y';
+import { MatMenuModule } from '@angular/material/menu';
 import { MatTableModule } from '@angular/material/table';
 import { PlatesFacade } from '../../application/plates.facade';
 import type { PlateRead } from '../../domain/models';
 import { StatusPill, type PillTone } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
+import { Pager } from '../../shared/ui/pager';
 import { PlateReviewDialog } from './plate-review-dialog';
 import { DECISION_LABEL, REASON_LABEL } from './reason-label';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — the gate log (M-7).
@@ -48,9 +52,11 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
+    MatMenuModule,
     MatTableModule,
     StatusPill,
     ViewStateHost,
+    Pager,
   ],
   template: `
     @if (!embedded()) {
@@ -61,7 +67,6 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
             What the cameras read, what it was matched to, and what was decided.
           </p>
         </div>
-        <button matButton="outlined" type="button" (click)="facade.refresh()">Refresh</button>
       </header>
     }
 
@@ -120,15 +125,56 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
           placeholder="gate-north"
         />
       </mat-form-field>
-    </div>
 
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-    }
+      <!--
+        The refresh, beside the filters rather than in the page header.
+        It is the same kind of control they are - something that changes what the table
+        shows - and the header does not exist in the gate screen, where this component is
+        embedded under a live camera. A log that cannot be refetched where it is actually
+        read was the defect: a plate was decided, the verdict printed above, and the
+        register below still showed only what was there when the page loaded.
+        It reloads the two resources behind this table and nothing else. The camera keeps
+        streaming, the arrival on screen stays, and no route is navigated - the resource
+        holds the previous rows while it refetches, so the table updates in place instead
+        of collapsing to a skeleton. (No backticks in comments here: this is inside a
+        template literal.)
+      -->
+      <div class="refresh">
+        <button
+          matIconButton
+          type="button"
+          [disabled]="facade.refreshing()"
+          [attr.aria-label]="label()"
+          (click)="facade.refresh()"
+        >
+          <!--
+            The signal colour while the fetch is in flight, and nothing else: that colour
+            carries action in this world, and a fetch is the one action this control has.
+            Deliberately not a spinning icon - the screen above this one rejected a
+            pulsing dot for the same reason, which is that a gate log is watched for hours
+            and anything that moves forever gets covered over.
+          -->
+          <mat-icon aria-hidden="true" [class.refresh__i--on]="facade.refreshing()">
+            refresh
+          </mat-icon>
+        </button>
+        <!--
+          Announced but not drawn: the rows change under the reader without anything
+          moving, so somebody who refreshed and saw no new row needs to be told the fetch
+          happened. The sighted reader reads the same fact off the first row's Captured
+          column, which is why no timestamp is printed beside the icon - the table already
+          says how fresh it is, in the fixed column where that figure lives.
+        -->
+        <span class="sr-only" role="status">{{ label() }}</span>
+      </div>
+    </div>
 
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="8"
+      [busy]="facade.busy()"
+      loadingLabel="Loading the gate log"
+      busyLabel="Saving the review"
       [emptyTitle]="facade.onlyReview() ? 'Nothing waiting for review' : 'No reads yet'"
       [emptyBody]="
         facade.onlyReview()
@@ -138,16 +184,27 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
       (retry)="facade.refresh()"
     >
       <table mat-table [dataSource]="facade.reads()">
+        <!--
+          The row number, as in every other register: a position, hidden from screen
+          readers because "1" through "25" read before each plate is noise.
+        -->
+        <ng-container matColumnDef="index">
+          <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let r; let i = index" class="col-index" aria-hidden="true">
+            {{ facade.rowOffset() + i + 1 }}
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="read">
           <th mat-header-cell *matHeaderCellDef>Read as</th>
-          <td mat-cell *matCellDef="let r" data-label="Read as" class="num plate">
+          <td mat-cell *matCellDef="let r" data-label="Read as" class="code">
             {{ r.rawText || '—' }}
           </td>
         </ng-container>
 
         <ng-container matColumnDef="plate">
           <th mat-header-cell *matHeaderCellDef>Canonical</th>
-          <td mat-cell *matCellDef="let r" data-label="Canonical" class="num plate">
+          <td mat-cell *matCellDef="let r" data-label="Canonical" class="code">
             {{ r.plate || '—' }}
             @if (r.correctedPlate && r.correctedPlate !== r.plate) {
               <span class="corrected num">corrected to {{ r.correctedPlate }}</span>
@@ -194,6 +251,9 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
               <span class="dim">Not an entry</span>
             }
             <span class="sub">{{ reason(r) }}</span>
+            @if (r.reviewedAt) {
+              <span class="sub">Reviewed</span>
+            }
           </td>
         </ng-container>
 
@@ -212,22 +272,32 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
           </td>
         </ng-container>
 
+        <!--
+          The same ⋮ menu every register has. It used to be an outlined Review button on
+          some rows and the word "reviewed" on others, which made this the one table whose
+          last column changed shape row by row. The queue is still findable at a glance by
+          the mark down the left edge of a row that needs review.
+        -->
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
-          <td mat-cell *matCellDef="let r">
-            @if (r.needsReview) {
-              <button
-                matButton="outlined"
-                type="button"
-                [disabled]="facade.busy()"
-                [attr.aria-label]="'Review the read ' + (r.plate || r.captureId)"
-                (click)="review(r)"
-              >
-                Review
+          <td mat-cell *matCellDef="let r" class="acts">
+            <button
+              matIconButton
+              type="button"
+              [disabled]="facade.busy()"
+              [matMenuTriggerFor]="rowMenu"
+              [attr.aria-label]="'Actions for the read ' + (r.plate || r.captureId)"
+            >
+              <mat-icon>more_vert</mat-icon>
+            </button>
+            <mat-menu #rowMenu="matMenu">
+              @if (r.needsReview) {
+                <button mat-menu-item type="button" (click)="review(r)">Review</button>
+              }
+              <button mat-menu-item type="button" (click)="copyRef(r)">
+                Copy capture reference
               </button>
-            } @else if (r.reviewedAt) {
-              <span class="dim sub">reviewed</span>
-            }
+            </mat-menu>
           </td>
         </ng-container>
 
@@ -240,25 +310,15 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
       </table>
 
       @if (facade.hasPrevious() || facade.hasNext()) {
-        <nav class="pager" aria-label="Pages">
-          <button
-            matButton
-            type="button"
-            [disabled]="!facade.hasPrevious()"
-            (click)="facade.previousPage()"
-          >
-            Previous
-          </button>
-          <span class="pager__n num">Page {{ facade.pageNumber() }}</span>
-          <button
-            matButton
-            type="button"
-            [disabled]="!facade.hasNext()"
-            (click)="facade.nextPage()"
-          >
-            Next
-          </button>
-        </nav>
+        <app-pager
+          [page]="facade.pageNumber()"
+          [pageSize]="facade.limit()"
+          [count]="facade.reads().length"
+          [hasPrevious]="facade.hasPrevious()"
+          [hasNext]="facade.hasNext()"
+          (previous)="facade.previousPage()"
+          (next)="facade.nextPage()"
+        />
       }
     </app-view-state>
   `,
@@ -339,18 +399,27 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
         width: 12rem;
       }
 
-      table {
-        width: 100%;
+      /* Pushed to the far end of the filter row: it acts on the whole table, not on one
+         field, so it does not sit in the run of fields. */
+      .refresh {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-3);
+        margin-left: auto;
       }
-      .plate {
-        font-size: 1.05rem;
-        letter-spacing: 0.04em;
+      /* In flight, the glyph takes the signal colour - the one colour this world spends
+         on action - and holds still. No spinner: the gate screen above this table refused
+         a pulsing dot for the same reason, which is that a log watched for hours covers
+         over anything that moves forever. */
+      /* Both selectors, and the disabled one is not redundant: the control disables
+         itself while the fetch runs, and Material paints a disabled icon in its own
+         grey - which is the one moment this glyph has something to say. */
+      .refresh .refresh__i--on,
+      .refresh button:disabled .refresh__i--on {
+        color: var(--signal);
       }
-      .sub {
-        display: block;
-        font-size: var(--t-fine);
-        color: var(--steel-soft);
-      }
+
+      /* The table and its shared cells (.code, .sub, .dim, .acts) are styles.scss's. */
       .who {
         display: block;
       }
@@ -365,24 +434,9 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
         word-break: break-all;
         max-width: 14rem;
       }
-      .dim {
-        color: var(--steel-faint);
-      }
       /* A left rule, not a tinted row: the queue is marked, not highlighted. */
       .row--review td:first-child {
         box-shadow: inset 3px 0 0 var(--signal);
-      }
-
-      .pager {
-        display: flex;
-        align-items: center;
-        gap: var(--sp-4);
-        padding-top: var(--sp-4);
-        border-top: 1px solid var(--rule);
-      }
-      .pager__n {
-        font-size: var(--t-fine);
-        color: var(--steel-soft);
       }
 
       @media (max-width: 40rem) {
@@ -395,6 +449,9 @@ import { DECISION_LABEL, REASON_LABEL } from './reason-label';
         }
         .filters mat-form-field {
           width: 100%;
+        }
+        .refresh {
+          margin-left: 0;
         }
         .ref {
           max-width: none;
@@ -415,9 +472,13 @@ export default class PlatesPage {
   readonly embedded = input(false);
 
   readonly facade = inject(PlatesFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly dialog = inject(MatDialog);
+  private readonly announcer = inject(LiveAnnouncer);
 
   readonly columns = [
+    'index',
     'read',
     'plate',
     'confidence',
@@ -427,6 +488,22 @@ export default class PlatesPage {
     'capture',
     'actions',
   ];
+
+  /**
+   * The icon's accessible name, and what is announced once a fetch has finished.
+   *
+   * The name carries the freshness because a glyph cannot: it says "refresh" and not
+   * "these rows are four minutes old", and somebody who presses it and sees no new row
+   * has no way to tell a working control from a quiet gate. The sighted reader takes that
+   * from the first row's Captured column rather than from a second clock on the screen.
+   */
+  readonly label = computed(() => {
+    if (this.facade.refreshing()) return 'Refreshing the table';
+    const at = this.facade.refreshedAt();
+    return at === null
+      ? 'Refresh the table'
+      : `Refresh the table. Rows as at ${at.toLocaleTimeString()}`;
+  });
 
   /** Null-safe, because the server may not have sent a figure this build knows about. */
   readonly matchRate = computed(() => {
@@ -467,6 +544,21 @@ export default class PlatesPage {
         return 'attention';
       default:
         return 'idle';
+    }
+  }
+
+  /**
+   * The capture reference is what support and the evidence store are keyed on, and the
+   * column prints it in fine type that is tedious to select by hand. The confirmation is
+   * announced rather than toasted: this product has no toasts, and a copy is otherwise
+   * silent for a screen-reader user.
+   */
+  async copyRef(r: PlateRead): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(r.captureId);
+      void this.announcer.announce(`Capture reference ${r.captureId} copied`);
+    } catch {
+      void this.announcer.announce('The browser did not allow copying to the clipboard');
     }
   }
 

@@ -54,6 +54,9 @@ import { ConfirmService } from '../../shared/ui/confirm';
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="4"
+      [busy]="facade.busy()"
+      loadingLabel="Loading your parking"
+      busyLabel="Updating your registration"
       emptyTitle="No parking activity yet"
       emptyBody="When the building opens registration for the next period, you can enter the draw from this page."
       (retry)="facade.refresh()"

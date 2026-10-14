@@ -1,4 +1,11 @@
-import { computed, type ResourceRef, type Signal } from '@angular/core';
+import {
+  computed,
+  effect,
+  type EffectRef,
+  type Injector,
+  type ResourceRef,
+  type Signal,
+} from '@angular/core';
 import type { ApiError, ViewState } from '../domain/models';
 import { toApiError } from '../core/http/api-error';
 
@@ -53,6 +60,41 @@ export function viewState<T>(
  */
 export function peek<T>(res: ResourceRef<T | undefined>): T | undefined {
   return res.status() === 'error' ? undefined : res.value();
+}
+
+/**
+ * Reload resources and resolve once every one of them has finished - with data or with
+ * an error, either way.
+ *
+ * A write is not over when the server accepts it; it is over when the screen shows it.
+ * The mutations used to fire `reload()` and return, so the dialog that started the write
+ * closed on the old table and the reload's own loader appeared a moment later, under the
+ * place the form had been. Awaiting this inside the mutation keeps the pressed button in
+ * its pending state, and the form locked, until the row is actually on the table - and
+ * the dialog then closes onto a table that is already right.
+ *
+ * Never rejects: a failed reload is the resource's own error state, which the screen
+ * already renders. The write itself succeeded, and that is what the caller is told.
+ */
+export function reloaded(
+  injector: Injector,
+  ...resources: ResourceRef<unknown>[]
+): Promise<void> {
+  for (const r of resources) r.reload();
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const watch: EffectRef = effect(
+      () => {
+        if (done || resources.some((r) => r.isLoading())) return;
+        done = true;
+        resolve();
+        // Destroyed on the next tick rather than here: the reference is only safe to read
+        // once effect() has returned and assigned it.
+        queueMicrotask(() => watch.destroy());
+      },
+      { injector, manualCleanup: true },
+    );
+  });
 }
 
 /** The error of a resource, as the domain's shape, or null. */

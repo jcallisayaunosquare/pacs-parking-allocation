@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, resource, signal } from '@angular/core';
+import { Injectable, Injector, computed, inject, resource, signal } from '@angular/core';
 import { AllocationConfigRepository } from '../domain/repositories';
 import type {
   AllocationConfig,
@@ -7,7 +7,27 @@ import type {
   ApiError,
 } from '../domain/models';
 import { toApiError } from '../core/http/api-error';
-import { peek, viewState } from './async-state';
+import { peek, reloaded, viewState } from './async-state';
+
+/**
+ * The policy values' allowed ranges, from the contract (openapi.yaml:1051-1055), each
+ * with the sentence the field shows. Whole numbers only: every one of these is a count.
+ */
+const RANGES = {
+  allocationDurationMonths: {
+    min: 1,
+    max: 60,
+    message: 'A whole number of months, from 1 to 60.',
+  },
+  earlyWaitingBiasHours: {
+    min: 0,
+    max: 8760,
+    message: 'A whole number of hours, from 0 to 8760 (a year). 0 switches it off.',
+  },
+  waitQuantumMinutes: { min: 1, max: undefined, message: 'A whole number of minutes, 1 or more.' },
+  absenceResetPeriods: { min: 1, max: undefined, message: 'A whole number of periods, 1 or more.' },
+  totalBays: { min: 0, max: undefined, message: 'A whole number of bays, 0 or more.' },
+} as const;
 
 /**
  * Rule A's configuration, as an editable form over a versioned server record.
@@ -21,6 +41,7 @@ import { peek, viewState } from './async-state';
 @Injectable({ providedIn: 'root' })
 export class AllocationConfigFacade {
   private readonly repo = inject(AllocationConfigRepository);
+  private readonly injector = inject(Injector);
 
   private readonly res = resource({ loader: () => this.repo.current() });
 
@@ -92,14 +113,21 @@ export class AllocationConfigFacade {
   async save(): Promise<boolean> {
     const patch = this.changes();
     if (Object.keys(patch).length === 0) return true;
+    // Each objection is already printed under its field; sending would only earn a 400.
+    if (this.clientIssues().size > 0) return false;
 
     this._error.set(null);
     this._busy.set(true);
     try {
       const view = await this.repo.patch(patch);
+      /*
+       * Reload first, clear the draft after. The other order cleared the edits while the
+       * saved value was still the old one, so for the length of the reload the form showed
+       * the numbers from before the save - a revert, on screen, of a save that worked.
+       */
+      await reloaded(this.injector, this.res);
       this._draft.set({});
       this._savedVersion.set(view.config.version);
-      this.res.reload();
       if (this._versions() !== null) void this.reloadHistory();
       return true;
     } catch (e) {
@@ -132,9 +160,31 @@ export class AllocationConfigFacade {
    * sides, so a rejected save names the field it rejected - and the form has to put that
    * message next to the input rather than dropping it into one banner at the top.
    */
+  /**
+   * What is wrong with the numbers typed so far, before anything is sent.
+   *
+   * Only fields that have been edited are checked - the draft holds exactly those - so
+   * opening the form shows no errors, and a field speaks up the moment it goes out of
+   * range. The ranges are the contract's (see RANGES); the server checks the same ones.
+   */
+  readonly clientIssues = computed(() => {
+    const map = new Map<string, string>();
+    for (const [field, value] of Object.entries(this._draft())) {
+      const range = RANGES[field as keyof typeof RANGES];
+      if (!range || value === null) continue;
+      const n = value as number;
+      if (!Number.isInteger(n) || n < range.min || (range.max !== undefined && n > range.max)) {
+        map.set(field, range.message);
+      }
+    }
+    return map;
+  });
+
+  /** The client's objection to a field first, then the server's, one message per field. */
   readonly issues = computed(() => {
     const map = new Map<string, string>();
     for (const d of this._error()?.details ?? []) map.set(d.field, d.issue);
+    for (const [field, issue] of this.clientIssues()) map.set(field, issue);
     return map;
   });
 

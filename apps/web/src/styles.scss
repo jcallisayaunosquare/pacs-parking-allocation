@@ -598,6 +598,61 @@ code {
   border: 0;
 }
 
+/**
+ * A submit in flight: a small spinner inside the button that was pressed, before its
+ * pending label ("Adding…").
+ *
+ * In the button and not over the form, because that is where the eye already is - the
+ * person just clicked there - and because a veil over a short form covers the fields they
+ * filled in with a slab of a different tone. Drawn in the label's own colour, so it
+ * follows the filled, outlined and disabled treatments without a rule for each; on the
+ * label rather than the button host, whose pseudo-elements belong to Material's state
+ * layer.
+ */
+/*
+ * The button is disabled while it works, so it cannot be pressed twice - but it is not
+ * unavailable, it is busy, and Material's disabled treatment (a grey slab, label at 38%)
+ * said the wrong thing and drew the spinner grey on grey. A pending button keeps the
+ * colours it had when it was pressed.
+ */
+.is-pending {
+  --mat-button-filled-disabled-container-color: var(--mat-button-filled-container-color);
+  --mat-button-filled-disabled-label-text-color: var(--mat-button-filled-label-text-color);
+  --mat-button-outlined-disabled-label-text-color: var(--mat-button-outlined-label-text-color);
+  --mat-button-outlined-disabled-outline-color: var(--mat-button-outlined-outline-color);
+}
+
+.is-pending .mdc-button__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.is-pending .mdc-button__label::before {
+  content: '';
+  flex: none;
+  width: 0.95em;
+  height: 0.95em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: is-pending-turn 0.7s linear infinite;
+}
+
+@keyframes is-pending-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* With motion reduced the arc would freeze into a stray mark; the label already says
+   "Adding…", which is the information. */
+@media (prefers-reduced-motion: reduce) {
+  .is-pending .mdc-button__label::before {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -634,40 +689,70 @@ html {
   );
 }
 
+/**
+ * One table, everywhere.
+ *
+ * Every register used to restyle itself: the residents page carried its own tokens,
+ * hover and focus mark, the gate log its own type sizes, the vehicle list its own header,
+ * and the reports page used a `.code` class nobody had defined for it. Six tables, six
+ * small dialects - and the eye re-learnt each one. All of it lives here now; a page keeps
+ * only what is genuinely its own (a struck-through bay, the review queue's mark).
+ *
+ * `.data-table` is the same look for a native table, which the lot plan's list view is:
+ * it needs real <th scope> rows for a screen reader, and Material's table cannot give it
+ * those.
+ */
 .mat-mdc-table {
+  --mat-table-background-color: transparent;
+  --mat-table-row-item-outline-color: var(--rule-soft);
+  --mat-table-header-headline-color: var(--steel-soft);
+  --mat-table-row-item-label-text-color: var(--steel);
+  --mat-table-header-headline-size: var(--t-fine);
+  --mat-table-row-item-label-text-size: var(--t-small);
+}
+
+.mat-mdc-table,
+.data-table {
   width: 100%;
   background: transparent;
   font-size: var(--t-small);
+  border-collapse: collapse;
 }
 
 .mat-mdc-header-row {
   background: transparent;
 }
 
-.mat-mdc-header-cell {
+/* The header captions the columns; it is a painted rule, not a band of chrome. */
+.mat-mdc-header-cell,
+.data-table thead th {
   padding: 0 var(--sp-3) var(--sp-2);
   border-bottom: 2px solid var(--steel);
+  background: transparent;
   font-size: var(--t-fine);
   font-weight: 600;
   color: var(--steel-soft);
   letter-spacing: 0;
   white-space: nowrap;
+  text-align: left;
 }
 
-.mat-mdc-cell {
+.mat-mdc-cell,
+.data-table tbody td,
+.data-table tbody th {
   padding: var(--sp-3);
   border-bottom: 1px solid var(--rule-soft);
   color: var(--steel);
   vertical-align: baseline;
   letter-spacing: 0;
-}
-
-.mat-mdc-row:hover .mat-mdc-cell {
-  background: var(--slab);
+  font-weight: inherit;
+  text-align: left;
 }
 
 .mat-mdc-header-cell:first-of-type,
-.mat-mdc-cell:first-of-type {
+.mat-mdc-cell:first-of-type,
+.data-table th:first-child,
+.data-table td:first-child {
   padding-left: 0;
 }
 
@@ -677,15 +762,116 @@ html {
   text-align: right;
 }
 
+.mat-mdc-row,
+.data-table tbody tr {
+  transition: background-color 140ms ease;
+}
+
+/*
+ * Gated, or a touch device keeps the highlight on the last row tapped and the register
+ * looks like it has a selection it does not have. Enter is instant so the row answers
+ * the pointer; leaving fades, which is the quieter half.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .mat-mdc-row:hover,
+  .data-table tbody tr:hover {
+    background: var(--concrete-deep);
+    transition-duration: 0ms;
+  }
+}
+
+/*
+ * Keyboard position is marked with the painted line, the same mark the lot map uses for
+ * the bay that is yours. A background tint alone is too quiet to find by tabbing.
+ */
+.mat-mdc-row:focus-within,
+.data-table tbody tr:focus-within {
+  background: var(--concrete-deep);
+  box-shadow: inset 3px 0 0 var(--bay-line);
+  transition-duration: 0ms;
+}
+
+/* ---- the cells every register shares ---- */
+
+/* The row number: a position in the list, narrow, tabular, quiet. */
+.mat-mdc-table .col-index,
+.data-table .col-index {
+  width: 3rem;
+  padding-right: var(--sp-2);
+  color: var(--steel-faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A code read character by character - a bay, a period, a plate - so it lines up. */
+.mat-mdc-table .code,
+.data-table .code {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* Absent or secondary values: a dash, "No", an email beside a name. */
+.mat-mdc-table .dim,
+.data-table .dim {
+  color: var(--steel-faint);
+}
+
+/* A second line under a value: the camera under a time, the inputs under a score. */
+.mat-mdc-table .sub,
+.data-table .sub {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: var(--t-fine);
+  color: var(--steel-soft);
+}
+
+/*
+ * The row's ⋮ menu. One trigger per row instead of a row of buttons, so a register reads
+ * as rows of records rather than rows of controls. Quiet until the row is under the
+ * pointer, and always solid for the keyboard, which cannot hover to discover it.
+ */
+/*
+ * Centred on the row, unlike the text cells. Those sit on the baseline so a value and its
+ * second line read together; a control has no baseline worth sharing, and on a row of
+ * two- and three-line cells (the gate log) the baseline put the trigger up at the top.
+ */
+.mat-mdc-table .acts {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.mat-mdc-table .acts button {
+  opacity: 0.55;
+  transition: opacity 140ms ease;
+}
+
+.mat-mdc-row:hover .acts button,
+.mat-mdc-row:focus-within .acts button,
+.mat-mdc-table .acts button:focus-visible {
+  opacity: 1;
+  transition-duration: 0ms;
+}
+
+/* The destructive item in a row menu, so it does not read like the ones above it. */
+.mat-mdc-menu-item.danger {
+  --mat-menu-item-label-text-color: var(--revoked);
+  color: var(--revoked);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mat-mdc-row,
+  .data-table tbody tr,
+  .mat-mdc-table .acts button {
+    transition: none;
+  }
+}
+
 /* The sort arrow is Material's; it only needs to stop being grey on grey. */
 .mat-sort-header-arrow {
   color: var(--steel);
-}
-
-.mat-mdc-paginator {
-  background: transparent;
-  color: var(--steel-soft);
-  font-size: var(--t-fine);
 }
 
 /**

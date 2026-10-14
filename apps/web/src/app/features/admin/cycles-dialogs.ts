@@ -1,6 +1,22 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  DestroyRef,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import {
+  FormField,
+  form,
+  maxLength,
+  pattern,
+  required,
+  submit as submitForm,
+} from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
@@ -10,6 +26,8 @@ import { provideNativeDateAdapter } from '@angular/material/core';
 import { CyclesFacade } from '../../application/admin.facades';
 import { AllocationConfigFacade } from '../../application/allocation-config.facade';
 import type { Cycle } from '../../domain/models';
+import { LoadingOverlay } from '../../shared/ui/loading-overlay';
+import { LIMITS, NOT_BLANK, fieldError } from '../../shared/forms/limits';
 
 /**
  * The day a picker hands back, as the `yyyy-MM-dd` string the contract speaks.
@@ -30,6 +48,13 @@ const addMonths = (d: Date, months: number): Date => {
   return out;
 };
 
+interface NewCycleForm {
+  label: string;
+  startsOn: Date | null;
+  opensAt: Date | null;
+  closesAt: Date | null;
+}
+
 /**
  * Creating a period.
  *
@@ -49,82 +74,93 @@ const addMonths = (d: Date, months: number): Date => {
   providers: [provideNativeDateAdapter()],
   imports: [
     DatePipe,
-    FormsModule,
+    FormField,
     MatButtonModule,
     MatDatepickerModule,
     MatDialogModule,
     MatFormFieldModule,
     MatInputModule,
+    LoadingOverlay,
   ],
   template: `
     <h2 mat-dialog-title>New period</h2>
 
-    <mat-dialog-content class="form">
-      <mat-form-field appearance="outline">
-        <mat-label>Name</mat-label>
-        <input matInput [(ngModel)]="label" maxlength="20" [placeholder]="derivedLabel()" />
-        <mat-hint>Optional. Left empty, the building names it {{ derivedLabel() }}.</mat-hint>
-      </mat-form-field>
+    <app-loading-overlay [active]="facade.busy()" [veil]="false" label="Creating the period">
+      <mat-dialog-content class="form">
+        <mat-form-field appearance="outline">
+          <mat-label>Name</mat-label>
+          <input
+            matInput
+            [formField]="f.label"
+            [placeholder]="derivedLabel()"
+            autocomplete="off"
+          />
+          <mat-hint>Optional. Left empty, the building names it {{ derivedLabel() }}.</mat-hint>
+          <mat-error>{{ err(f.label) }}</mat-error>
+        </mat-form-field>
 
-      <!--
-        A real datepicker rather than a bare text field: an administrator picking the
-        quarter a building rotates on should see the month, not type eight characters
-        and hope.
-      -->
-      <mat-form-field appearance="outline">
-        <mat-label>Period begins</mat-label>
-        <input
-          matInput
-          [matDatepicker]="startPicker"
-          [(ngModel)]="startsOn"
-          cdkFocusInitial
-          (ngModelChange)="onStartChange()"
-        />
-        <mat-datepicker-toggle matIconSuffix [for]="startPicker" />
-        <mat-datepicker #startPicker />
-      </mat-form-field>
+        <!--
+          A real datepicker rather than a bare text field: an administrator picking the
+          quarter a building rotates on should see the month, not type eight characters
+          and hope.
+        -->
+        <mat-form-field appearance="outline">
+          <mat-label>Period begins</mat-label>
+          <input matInput [matDatepicker]="startPicker" [formField]="f.startsOn" cdkFocusInitial />
+          <mat-datepicker-toggle matIconSuffix [for]="startPicker" />
+          <mat-datepicker #startPicker />
+          <mat-error>{{ err(f.startsOn) }}</mat-error>
+        </mat-form-field>
 
-      <p class="derived">
-        @if (endsOn(); as end) {
-          Ends <strong>{{ end | date: 'longDate' }}</strong>
-          &middot; {{ months() }} months, from Period length in the rules
-        } @else if (startsOn()) {
-          The end date comes from Period length in the rules, which could not be read.
-          The server will still work it out.
-        } @else {
-          Pick a start date and the end follows from Period length in the rules.
+        <p class="derived">
+          @if (endsOn(); as end) {
+            Ends <strong>{{ end | date: 'longDate' }}</strong>
+            &middot; {{ months() }} months, from Period length in the rules
+          } @else if (startsOn()) {
+            The end date comes from Period length in the rules, which could not be read.
+            The server will still work it out.
+          } @else {
+            Pick a start date and the end follows from Period length in the rules.
+          }
+        </p>
+
+        <div class="dates">
+          <mat-form-field appearance="outline">
+            <mat-label>Registration opens</mat-label>
+            <input matInput [matDatepicker]="opensPicker" [formField]="f.opensAt" />
+            <mat-datepicker-toggle matIconSuffix [for]="opensPicker" />
+            <mat-datepicker #opensPicker />
+            <mat-error>{{ err(f.opensAt) }}</mat-error>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Registration closes</mat-label>
+            <input matInput [matDatepicker]="closesPicker" [formField]="f.closesAt" />
+            <mat-datepicker-toggle matIconSuffix [for]="closesPicker" />
+            <mat-datepicker #closesPicker />
+            <mat-error>{{ err(f.closesAt) }}</mat-error>
+          </mat-form-field>
+        </div>
+
+        @if (windowProblem(); as problem) {
+          <p class="msg msg--warn" role="alert">{{ problem }}</p>
         }
-      </p>
 
-      <div class="dates">
-        <mat-form-field appearance="outline">
-          <mat-label>Registration opens</mat-label>
-          <input matInput [matDatepicker]="opensPicker" [(ngModel)]="opensAt" />
-          <mat-datepicker-toggle matIconSuffix [for]="opensPicker" />
-          <mat-datepicker #opensPicker />
-        </mat-form-field>
-
-        <mat-form-field appearance="outline">
-          <mat-label>Registration closes</mat-label>
-          <input matInput [matDatepicker]="closesPicker" [(ngModel)]="closesAt" />
-          <mat-datepicker-toggle matIconSuffix [for]="closesPicker" />
-          <mat-datepicker #closesPicker />
-        </mat-form-field>
-      </div>
-
-      @if (windowProblem(); as problem) {
-        <p class="msg msg--warn" role="alert">{{ problem }}</p>
-      }
-
-      @if (facade.error(); as e) {
-        <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-      }
-    </mat-dialog-content>
+        @if (facade.error(); as e) {
+          <div class="msg msg--bad" role="alert">{{ e.message }}</div>
+        }
+      </mat-dialog-content>
+    </app-loading-overlay>
 
     <mat-dialog-actions align="end">
       <button matButton mat-dialog-close>Cancel</button>
-      <button matButton="filled" [disabled]="!valid() || facade.busy()" (click)="submit()">
-        {{ facade.busy() ? 'Creating...' : 'Create period' }}
+      <button
+        matButton="filled"
+        [disabled]="facade.busy()"
+        [class.is-pending]="facade.busy()"
+        (click)="submit()"
+      >
+        {{ facade.busy() ? 'Creating…' : 'Create period' }}
       </button>
     </mat-dialog-actions>
   `,
@@ -167,10 +203,29 @@ export class NewCycleDialog {
   private readonly config = inject(AllocationConfigFacade);
   private readonly ref = inject(MatDialogRef<NewCycleDialog>);
 
-  readonly label = signal('');
-  readonly startsOn = signal<Date | null>(null);
-  readonly opensAt = signal<Date | null>(null);
-  readonly closesAt = signal<Date | null>(null);
+  readonly model = signal<NewCycleForm>({
+    label: '',
+    startsOn: null,
+    opensAt: null,
+    closesAt: null,
+  });
+
+  /**
+   * Required dates and the name's length. The two orderings in `windowProblem` stay a
+   * warning rather than a rule - see there.
+   */
+  readonly f = form(this.model, (p) => {
+    maxLength(p.label, LIMITS.cycleLabel, { message: `Up to ${LIMITS.cycleLabel} characters.` });
+    required(p.startsOn, { message: 'Pick the day the period begins.' });
+    required(p.opensAt, { message: 'Pick the day registration opens.' });
+    required(p.closesAt, { message: 'Pick the day registration closes.' });
+  });
+
+  readonly err = fieldError;
+
+  readonly startsOn = computed(() => this.model().startsOn);
+  private readonly opensAt = computed(() => this.model().opensAt);
+  private readonly closesAt = computed(() => this.model().closesAt);
 
   /** Period length, when the rules could be read. Null means "ask the server". */
   readonly months = computed(() => this.config.saved()?.allocationDurationMonths ?? null);
@@ -211,38 +266,46 @@ export class NewCycleDialog {
 
   constructor() {
     this.facade.dismissError();
-  }
+    // Nor does it outlive the dialog: left set, the page behind would print it next.
+    inject(DestroyRef).onDestroy(() => this.facade.dismissError());
 
-  /** Opening the picker for a window with no dates yet should not start from nowhere. */
-  onStartChange(): void {
-    const start = this.startsOn();
-    if (!start) return;
-    if (!this.closesAt()) {
-      const closes = new Date(start);
-      closes.setDate(closes.getDate() - 1);
-      this.closesAt.set(closes);
-    }
-    if (!this.opensAt()) this.opensAt.set(new Date());
-  }
-
-  valid(): boolean {
-    return Boolean(this.startsOn() && this.opensAt() && this.closesAt());
+    /*
+     * Opening the picker for a window with no dates yet should not start from nowhere.
+     * Keyed on the start date alone, and the window read untracked: clearing a window
+     * date by hand must stay cleared, not be refilled because the model changed.
+     */
+    effect(() => {
+      const start = this.startsOn();
+      if (!start) return;
+      untracked(() => {
+        const v = this.model();
+        if (v.closesAt && v.opensAt) return;
+        const closes = new Date(start);
+        closes.setDate(closes.getDate() - 1);
+        this.model.update((m) => ({
+          ...m,
+          closesAt: m.closesAt ?? closes,
+          opensAt: m.opensAt ?? new Date(),
+        }));
+      });
+    });
   }
 
   async submit(): Promise<void> {
-    if (!this.valid()) return;
-    const name = this.label().trim();
-
-    const created = await this.facade.create({
-      // Omitted on purpose: the server derives both from Period length, and a value sent
-      // from here would be this screen's opinion competing with the rule.
-      ...(name ? { label: name } : {}),
-      startsOn: toDay(this.startsOn()!),
-      // The window is a timestamp in the contract; the chosen day, whole, in UTC.
-      registrationOpensAt: new Date(`${toDay(this.opensAt()!)}T00:00:00Z`).toISOString(),
-      registrationClosesAt: new Date(`${toDay(this.closesAt()!)}T23:59:59Z`).toISOString(),
+    await submitForm(this.f, async () => {
+      const v = this.model();
+      const name = v.label.trim();
+      const created = await this.facade.create({
+        // Omitted on purpose: the server derives both from Period length, and a value sent
+        // from here would be this screen's opinion competing with the rule.
+        ...(name ? { label: name } : {}),
+        startsOn: toDay(v.startsOn!),
+        // The window is a timestamp in the contract; the chosen day, whole, in UTC.
+        registrationOpensAt: new Date(`${toDay(v.opensAt!)}T00:00:00Z`).toISOString(),
+        registrationClosesAt: new Date(`${toDay(v.closesAt!)}T23:59:59Z`).toISOString(),
+      });
+      if (created) this.ref.close(true);
     });
-    if (created) this.ref.close(true);
   }
 }
 
@@ -257,31 +320,47 @@ export class NewCycleDialog {
 @Component({
   selector: 'app-rename-cycle-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  imports: [
+    DatePipe,
+    FormField,
+    MatButtonModule,
+    MatDialogModule,
+    MatFormFieldModule,
+    MatInputModule,
+    LoadingOverlay,
+  ],
   template: `
     <h2 mat-dialog-title>Rename period</h2>
 
-    <mat-dialog-content class="form">
-      <mat-form-field appearance="outline">
-        <mat-label>Name</mat-label>
-        <input matInput [(ngModel)]="label" maxlength="20" cdkFocusInitial />
-      </mat-form-field>
+    <app-loading-overlay [active]="facade.busy()" [veil]="false" label="Renaming the period">
+      <mat-dialog-content class="form">
+        <mat-form-field appearance="outline">
+          <mat-label>Name</mat-label>
+          <input matInput [formField]="f.label" autocomplete="off" cdkFocusInitial />
+          <mat-error>{{ err(f.label) }}</mat-error>
+        </mat-form-field>
 
-      <p class="fixed">
-        Runs {{ cycle.startsOn | date: 'd MMM y' }} to {{ cycle.endsOn | date: 'd MMM y' }}.
-        Those dates are stamped on every assignment this period made, so they do not
-        change here.
-      </p>
+        <p class="fixed">
+          Runs {{ cycle.startsOn | date: 'd MMM y' }} to {{ cycle.endsOn | date: 'd MMM y' }}.
+          Those dates are stamped on every assignment this period made, so they do not
+          change here.
+        </p>
 
-      @if (facade.error(); as e) {
-        <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-      }
-    </mat-dialog-content>
+        @if (facade.error(); as e) {
+          <div class="msg msg--bad" role="alert">{{ e.message }}</div>
+        }
+      </mat-dialog-content>
+    </app-loading-overlay>
 
     <mat-dialog-actions align="end">
       <button matButton mat-dialog-close>Cancel</button>
-      <button matButton="filled" [disabled]="!dirty() || facade.busy()" (click)="submit()">
-        {{ facade.busy() ? 'Saving...' : 'Save name' }}
+      <button
+        matButton="filled"
+        [disabled]="!dirty() || facade.busy()"
+        [class.is-pending]="facade.busy()"
+        (click)="submit()"
+      >
+        {{ facade.busy() ? 'Saving…' : 'Save name' }}
       </button>
     </mat-dialog-actions>
   `,
@@ -313,21 +392,35 @@ export class RenameCycleDialog {
   private readonly ref = inject(MatDialogRef<RenameCycleDialog>);
   readonly cycle = inject<Cycle>(MAT_DIALOG_DATA);
 
-  readonly label = signal('');
+  readonly model = signal({ label: this.cycle.label });
+
+  readonly f = form(this.model, (p) => {
+    required(p.label, { message: 'A period needs a name.' });
+    pattern(p.label, NOT_BLANK, { message: 'A period needs a name.' });
+    maxLength(p.label, LIMITS.cycleLabel, { message: `Up to ${LIMITS.cycleLabel} characters.` });
+  });
+
+  readonly err = fieldError;
 
   constructor() {
     this.facade.dismissError();
-    this.label.set(this.cycle.label);
+    // Nor does it outlive the dialog: left set, the page behind would print it next.
+    inject(DestroyRef).onDestroy(() => this.facade.dismissError());
   }
 
+  /**
+   * Something other than the current name. An emptied field counts as a change, so the
+   * button stays live and pressing it says why an empty name cannot be saved.
+   */
   dirty(): boolean {
-    const next = this.label().trim();
-    return next.length > 0 && next !== this.cycle.label;
+    return this.model().label.trim() !== this.cycle.label;
   }
 
   async submit(): Promise<void> {
-    if (!this.dirty()) return;
-    const saved = await this.facade.rename(this.cycle.id, this.label().trim());
-    if (saved) this.ref.close(true);
+    await submitForm(this.f, async () => {
+      if (!this.dirty()) return;
+      const saved = await this.facade.rename(this.cycle.id, this.model().label.trim());
+      if (saved) this.ref.close(true);
+    });
   }
 }

@@ -14,6 +14,7 @@ import type { ParkingSpot, SpotType } from '../../domain/models';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import { AddBayDialog, EditBayDialog } from './spots-dialogs';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — the bay inventory (FR-16, §17).
@@ -91,13 +92,12 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
       </mat-checkbox>
     </div>
 
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">{{ e.message }}</div>
-    }
-
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="6"
+      [busy]="facade.busy()"
+      loadingLabel="Loading bays"
+      busyLabel="Saving the inventory"
       emptyTitle="No bays in the inventory"
       emptyBody="A draw needs at least one bay in service. Add the first one before opening a cycle."
       emptyActionLabel="Add bay"
@@ -123,8 +123,8 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
           code tells someone who cannot see the column nothing.
         -->
         <ng-container matColumnDef="num">
-          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let s; let i = index" class="num" aria-hidden="true">
+          <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let s; let i = index" class="col-index" aria-hidden="true">
             {{ i + 1 }}
           </td>
         </ng-container>
@@ -183,7 +183,7 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
         -->
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
-          <td mat-cell *matCellDef="let s">
+          <td mat-cell *matCellDef="let s" class="acts">
             <button
               matIconButton
               type="button"
@@ -267,27 +267,10 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
         width: 13rem;
       }
 
-      table {
-        width: 100%;
-      }
-      .code {
-        font-size: 1.05rem;
-      }
+      /* A bay out of service: still listed, visibly not in the draw. */
       .row--out .code {
         color: var(--steel-faint);
         text-decoration: line-through;
-      }
-      .dim {
-        color: var(--steel-faint);
-      }
-      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
-         width of each digit. */
-      .num {
-        width: 3rem;
-        color: var(--steel-faint);
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        padding-right: var(--sp-2);
       }
 
       @media (max-width: 40rem) {
@@ -307,6 +290,8 @@ import { AddBayDialog, EditBayDialog } from './spots-dialogs';
 })
 export default class SpotsPage {
   readonly facade = inject(SpotsFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly dialog = inject(MatDialog);
 
   readonly columns = ['num', 'code', 'level', 'type', 'status', 'notes', 'actions'];

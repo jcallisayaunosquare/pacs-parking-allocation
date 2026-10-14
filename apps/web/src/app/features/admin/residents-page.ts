@@ -5,7 +5,6 @@ import { ConfirmService } from '../../shared/ui/confirm';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
-import { MatPaginatorIntl, MatPaginatorModule, type PageEvent } from '@angular/material/paginator';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSortModule, type Sort } from '@angular/material/sort';
 import { MatTableModule } from '@angular/material/table';
@@ -14,7 +13,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { ResidentsFacade } from '../../application/admin.facades';
 import type { Resident } from '../../domain/models';
 import type { ResidentSortField } from '../../domain/repositories';
-import { KeysetPaginatorIntl } from '../../shared/ui/keyset-paginator-intl';
+import { Pager } from '../../shared/ui/pager';
 import { StatusPill } from '../../shared/ui/status-pill';
 import { ViewStateHost } from '../../shared/ui/view-state';
 import {
@@ -23,11 +22,12 @@ import {
   EligibilityDialog,
   VehiclesDialog,
 } from './residents-dialogs';
+import { toastFacadeErrors } from '../../shared/ui/toast';
 
 /**
  * Admin — the resident register. Sort, filter, page, edit, set eligibility (§17).
  *
- * Sorting and paging are server concerns here. `MatSort` and `MatPaginator` are driven
+ * Sorting and paging are server concerns here. `MatSort` and the shared pager are driven
  * from the facade rather than from a `MatTableDataSource`, because the client only ever
  * holds one page: sorting the fifteen rows in the browser would reorder fifteen rows out
  * of however many exist and call the list sorted.
@@ -39,13 +39,11 @@ import {
 @Component({
   selector: 'app-residents-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  providers: [{ provide: MatPaginatorIntl, useClass: KeysetPaginatorIntl }],
   imports: [
     FormsModule,
     MatButtonModule,
     MatFormFieldModule,
     MatInputModule,
-    MatPaginatorModule,
     MatSelectModule,
     MatSortModule,
     MatTableModule,
@@ -53,6 +51,7 @@ import {
     MatIconModule,
     StatusPill,
     ViewStateHost,
+    Pager,
   ],
   template: `
     <header class="head">
@@ -86,22 +85,12 @@ import {
       <button matButton type="button" (click)="facade.resetFilters()">Clear</button>
     </div>
 
-    @if (facade.error(); as e) {
-      <div class="msg msg--bad" role="alert">
-        {{ e.message }}
-        @if (e.details?.length) {
-          <ul class="msg__list">
-            @for (d of e.details; track d.field) {
-              <li>{{ d.field }}: {{ d.issue }}</li>
-            }
-          </ul>
-        }
-      </div>
-    }
-
     <app-view-state
       [state]="facade.state()"
       [skeletonCount]="6"
+      [busy]="facade.busy()"
+      loadingLabel="Loading residents"
+      busyLabel="Saving the register"
       emptyTitle="No residents match"
       emptyBody="Clear the filters, or add the building's first resident to get started."
       emptyActionLabel="Add resident"
@@ -125,8 +114,8 @@ import {
           aloud in front of every name is noise to someone who cannot see the column.
         -->
         <ng-container matColumnDef="num">
-          <th mat-header-cell *matHeaderCellDef class="num" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let r; let i = index" class="num" aria-hidden="true">
+          <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+          <td mat-cell *matCellDef="let r; let i = index" class="col-index" aria-hidden="true">
             {{ facade.rowOffset() + i + 1 }}
           </td>
         </ng-container>
@@ -194,6 +183,33 @@ import {
           </td>
         </ng-container>
 
+        <!--
+          The cars this resident may bring in, by the plate as it is painted - the string
+          the gate reads against. The full record (make, model, colour) is one click away
+          in Vehicles; the register only needs to say whether there is a car and which.
+        -->
+        <ng-container matColumnDef="vehicles">
+          <th mat-header-cell *matHeaderCellDef>Vehicles</th>
+          <td mat-cell *matCellDef="let r" data-label="Vehicles">
+            @if (facade.vehiclesByResident(); as fleet) {
+              @let cars = fleet.get(r.id) ?? [];
+              @if (cars.length > 0) {
+                <span class="plates">
+                  @for (v of cars; track v.id) {
+                    <span class="code plate">{{ v.plateDisplay }}</span>
+                  }
+                </span>
+              } @else {
+                <button type="button" class="add-car" (click)="openVehicles(r)">
+                  Add a vehicle
+                </button>
+              }
+            } @else {
+              <span class="dim">Loading…</span>
+            }
+          </td>
+        </ng-container>
+
         <ng-container matColumnDef="signin">
           <th mat-header-cell *matHeaderCellDef>Sign-in</th>
           <td mat-cell *matCellDef="let r" data-label="Sign-in">
@@ -240,21 +256,21 @@ import {
         <tr mat-row *matRowDef="let row; columns: columns"></tr>
       </table>
 
-      <mat-paginator
-        [length]="pagerLength()"
-        [pageSize]="facade.limit()"
-        [pageIndex]="facade.pageNumber() - 1"
-        [hidePageSize]="true"
-        (page)="onPage($event)"
-      />
+      @if (facade.hasPrevious() || facade.hasNext()) {
+        <app-pager
+          [page]="facade.pageNumber()"
+          [pageSize]="facade.limit()"
+          [count]="facade.residents().length"
+          [hasPrevious]="facade.hasPrevious()"
+          [hasNext]="facade.hasNext()"
+          (previous)="facade.previousPage()"
+          (next)="facade.nextPage()"
+        />
+      }
     </app-view-state>
   `,
   styles: [
     `
-      /* The destructive item, so it does not read like the two above it. */
-      .danger {
-        color: var(--revoked);
-      }
       :host {
         /* This screen's measure. The shell is full-bleed; pages own their width. */
         width: 100%;
@@ -300,82 +316,8 @@ import {
         font-size: var(--t-fine);
       }
 
-      /*
-       * The register, set as a painted schedule rather than a Material data grid. Material
-       * ships its own surface, divider and hover colours; left alone they sit on top of the
-       * concrete palette and read as a different product. Every one is repointed at a token.
-       */
-      table {
-        width: 100%;
-        --mat-table-background-color: transparent;
-        --mat-table-row-item-outline-color: var(--rule-soft);
-        --mat-table-header-headline-color: var(--steel-soft);
-        --mat-table-row-item-label-text-color: var(--steel);
-        --mat-table-header-headline-size: var(--t-fine);
-        --mat-table-row-item-label-text-size: var(--t-small);
-        --mat-table-header-container-height: 3rem;
-        --mat-table-row-item-container-height: 3.5rem;
-      }
-
-      /* The header captions the columns; it is not a band of chrome. */
-      th.mat-mdc-header-cell {
-        border-bottom: 2px solid var(--steel);
-        font-weight: 600;
-        background: transparent;
-      }
-
-      td.mat-mdc-cell {
-        border-bottom-color: var(--rule-soft);
-      }
-
-      tr.mat-mdc-row {
-        transition: background-color 140ms ease;
-      }
-
-      /*
-       * Gated, or a touch device keeps the highlight on the last row tapped and the
-       * register looks like it has a selection it does not have. Enter is instant so the
-       * row answers the pointer; leaving fades, which is the quieter half.
-       */
-      @media (hover: hover) and (pointer: fine) {
-        tr.mat-mdc-row:hover {
-          background: var(--concrete-deep);
-          transition-duration: 0ms;
-        }
-      }
-
-      /*
-       * Keyboard position is marked with the painted line, the same mark the lot map uses
-       * for the bay that is yours. A background tint alone is too quiet to find by tabbing.
-       */
-      tr.mat-mdc-row:focus-within {
-        background: var(--concrete-deep);
-        box-shadow: inset 3px 0 0 var(--bay-line);
-        transition-duration: 0ms;
-      }
-
-      /*
-       * The overflow trigger is chrome: quiet until the row is under the pointer, and
-       * always solid for the keyboard, which cannot hover to discover it.
-       */
-      .acts button {
-        opacity: 0.55;
-        transition: opacity 140ms ease;
-      }
-
-      tr.mat-mdc-row:hover .acts button,
-      tr.mat-mdc-row:focus-within .acts button,
-      .acts button:focus-visible {
-        opacity: 1;
-        transition-duration: 0ms;
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        tr.mat-mdc-row,
-        .acts button {
-          transition: none;
-        }
-      }
+      /* The table itself is the shared one in styles.scss; only this register's own
+         cells are styled here. */
       .name {
         font-weight: 600;
       }
@@ -384,8 +326,31 @@ import {
           'wdth' 112,
           'wght' 620;
       }
-      .dim {
-        color: var(--steel-faint);
+      /* Plates side by side, wrapping under each other on a narrow column. */
+      .plates {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-1) var(--sp-3);
+      }
+      .plate {
+        font-size: var(--t-small);
+        white-space: nowrap;
+      }
+      /* An empty register is an invitation, not a dash: it opens the vehicle register. */
+      .add-car {
+        font: inherit;
+        font-size: var(--t-fine);
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--steel-soft);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        cursor: pointer;
+      }
+      .add-car:focus-visible {
+        outline: 2px solid var(--signal);
+        outline-offset: 2px;
       }
       .reason {
         display: block;
@@ -400,19 +365,6 @@ import {
         color: var(--steel-faint);
         font-size: var(--t-fine);
         margin-top: var(--sp-1);
-      }
-      /* Tabular figures, so the column of numbers lines up rather than wobbling with the
-         width of each digit, and narrow because it never holds more than a few. */
-      .num {
-        width: 3rem;
-        color: var(--steel-faint);
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        padding-right: var(--sp-2);
-      }
-      .acts {
-        white-space: nowrap;
-        text-align: right;
       }
 
       @media (max-width: 40rem) {
@@ -430,6 +382,8 @@ import {
 })
 export default class ResidentsPage {
   readonly facade = inject(ResidentsFacade);
+  /** A refused row action is answered by a toast; a dialog's error stays in the dialog. */
+  private readonly errorToasts = toastFacadeErrors(this.facade);
   private readonly dialog = inject(MatDialog);
   private readonly confirm = inject(ConfirmService);
 
@@ -453,6 +407,7 @@ export default class ResidentsPage {
     'eligibility',
     'bay',
     'accessible',
+    'vehicles',
     'signin',
     'actions',
   ];
@@ -460,30 +415,9 @@ export default class ResidentsPage {
   /** Kept as an escape so the source file stays ASCII whatever opens it. */
   readonly dash = '\u2014';
 
-  /**
-   * What `MatPaginator` is told instead of a row count.
-   *
-   * It disables Next when the current page is the last one it can work out from
-   * `length`, so the number only has to put the boundary in the right place: one row
-   * past the end of this page while a cursor remains, and exactly the end of this page
-   * once the server stops sending one.
-   */
-  readonly pagerLength = computed(() => {
-    const size = this.facade.limit();
-    const index = this.facade.pageNumber() - 1;
-    return this.facade.hasNext()
-      ? (index + 1) * size + 1
-      : index * size + this.facade.residents().length;
-  });
-
   onSort(s: Sort): void {
     if (!s.direction) return;
     this.facade.setSort(s.active as ResidentSortField, s.direction);
-  }
-
-  onPage(e: PageEvent): void {
-    if (e.pageIndex > (e.previousPageIndex ?? 0)) this.facade.nextPage();
-    else this.facade.previousPage();
   }
 
   /** The select speaks strings, so the tri-state is mapped at the boundary. */
@@ -560,11 +494,15 @@ export default class ResidentsPage {
    * against what a camera produced.
    */
   openVehicles(r: Resident): void {
-    this.dialog.open(VehiclesDialog, {
-      data: r,
-      width: '44rem',
-      maxWidth: 'calc(100vw - 2rem)',
-      autoFocus: 'first-tabbable',
-    });
+    this.dialog
+      .open(VehiclesDialog, {
+        data: r,
+        width: '44rem',
+        maxWidth: 'calc(100vw - 2rem)',
+        autoFocus: 'first-tabbable',
+      })
+      // The dialog edits the register; the Vehicles column reads it, so it catches up.
+      .afterClosed()
+      .subscribe(() => this.facade.refreshVehicles());
   }
 }
