@@ -29,7 +29,7 @@ export interface SpotRepository {
   remove(id: string): Promise<boolean>;
   /** Every bay on a level with its live (ACTIVE) assignment, if it has one. */
   occupancy(level: string): Promise<readonly BayRow[]>;
-  /** The levels the inventory has bays on, with how many each, in level order. */
+  /** Levels with at least one bay in service, with how many bays each, in level order. */
   levels(): Promise<readonly { readonly level: string; readonly bays: number }[]>;
 }
 

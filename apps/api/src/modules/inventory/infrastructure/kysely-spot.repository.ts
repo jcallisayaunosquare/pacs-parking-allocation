@@ -1,3 +1,4 @@
+import { sql } from 'kysely';
 import type { Kysely } from 'kysely';
 import type { Database } from '../../../shared/db/schema';
 import type { SpotType } from '../../allocation/domain/types';
@@ -170,11 +171,17 @@ export class KyselySpotRepository implements SpotRepository {
     }));
   }
 
+  /*
+   * Only levels with at least one bay in service. A level whose every bay is retired is
+   * not part of the building any more - and in dev it was a single retired bay saved
+   * with a mistyped level ("232"), which put a level nobody added in the plan's selector.
+   */
   async levels() {
     const rows = await this.db
       .selectFrom('parking_spot')
       .select(['level', (eb) => eb.fn.countAll<string>().as('bays')])
       .groupBy('level')
+      .having(sql<boolean>`bool_or(is_active)`)
       .orderBy('level')
       .execute();
     return rows.map((r) => ({ level: r.level, bays: Number(r.bays) }));

@@ -296,6 +296,16 @@ import type { DecidedBy } from '../../domain/models';
                     Replay in draw order
                   </button>
                 }
+                <!-- Reads the run's assignments and the lot again from the server. -->
+                <button
+                  type="button"
+                  class="link"
+                  [disabled]="facade.refreshing()"
+                  (click)="facade.refreshResult()"
+                >
+                  <mat-icon class="link__i">refresh</mat-icon>
+                  {{ facade.refreshing() ? 'Refreshing…' : 'Refresh' }}
+                </button>
               </p>
             </div>
 
