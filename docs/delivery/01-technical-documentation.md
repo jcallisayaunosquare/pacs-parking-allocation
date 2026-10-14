@@ -82,7 +82,7 @@ code/
 ├── pipeline/dev/             CloudFormation: CodePipeline, CodeBuild, S3 + CloudFront
 ├── .github/workflows/ci.yml  the six pull request checks
 ├── .githooks/pre-commit      the local gate
-└── docs/                     analisis.html (the original specification) and this set
+└── docs/                     analysis.html (the original specification) and this set
 ```
 
 Inside every backend module the same three rings, with source dependencies pointing inward
@@ -1083,7 +1083,7 @@ next request rather than after the five-minute cache expires.
 ### 7.3 The draw
 
 **This is rules A–H, deterministic. It is not a weighted lottery.** Sections 12 and 13 of
-`docs/analisis.html` describe an earlier probabilistic model with accumulating scores; it
+`docs/analysis.html` describe an earlier probabilistic model with accumulating scores; it
 was replaced and is not what runs. §31 of the same document states all eight rules in one
 place, each with its arithmetic and a worked example.
 
@@ -1866,7 +1866,7 @@ them is a surprise waiting to be found.
   `aws cognito-idp describe-user-pool` on 2026-10-14). Self sign-up is therefore off, which
   is what the product wants — residents are created by an administrator — but the next
   deploy that touches the pool will turn it back on. The template should say `true`.
-- `docs/analisis.html` sections 12 and 13 describe the probabilistic weighted lottery that
+- `docs/analysis.html` sections 12 and 13 describe the probabilistic weighted lottery that
   rules A–F replaced. Section 10 still says `us-east-1`, private subnets, per-function IAM
   roles, a master password in SSM and the `*.handler.ts` filename convention — none of which
   is what runs.

@@ -25,7 +25,7 @@ That is the core of the fairness policy. Two rules sit on top of it, and both on
 the start of a resident's wait: giving a bay up — withdrawing, declining, releasing — costs
 what holding one costs, and sitting a period out restarts the clock. The technical
 documentation states all eight rules, A to H, in one table (§7.3). It is not a lottery with weights, and if you find a
-document in this repository describing one — `docs/analisis.html` sections 12 and 13 —
+document in this repository describing one — `docs/analysis.html` sections 12 and 13 —
 you have found a superseded design.
 
 Two vocabulary notes, because they are enforced in code review:
@@ -51,9 +51,9 @@ need them.
 | 4 | `apps/api/src/modules/allocation/domain/allocate.ts` | How that key becomes an allocation: one sort, three passes, and the hashes that make a run contestable | 20 min |
 | 5 | `apps/api/src/main/routes.ts` | The whole API surface in one file, with the two authorisation guards that a route's role list cannot express. Skim the presentation functions; read the guards properly | 30 min |
 | 6 | `apps/api/migrations/1759600000000_init-schema.ts` and `…_waiting-time-fairness.ts` | The schema, as raw SQL with the reasoning in comments. The second one is also a worked example of expand / migrate / contract in a single migration | 30 min |
-| 7 | The root `README.md`, especially "Where this deviates from analisis.html" | Why the deployed reality differs from the specification. Every row is a constraint, not a preference | 15 min |
+| 7 | The root `README.md`, especially "Where this deviates from analysis.html" | Why the deployed reality differs from the specification. Every row is a constraint, not a preference | 15 min |
 
-**Deliberately not on that list:** `docs/analisis.html`. It is the original specification,
+**Deliberately not on that list:** `docs/analysis.html`. It is the original specification,
 it is 280 kB, and parts of it have been superseded by the code. Read it when you need the
 history of a decision, and read it knowing that where it and the code disagree, the code
 wins.

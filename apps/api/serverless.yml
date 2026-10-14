@@ -5,7 +5,7 @@ provider:
   name: aws
   runtime: nodejs24.x
   architecture: arm64
-  # us-east-2 is the only region the account's SCP allows. §10 of analisis.html still
+  # us-east-2 is the only region the account's SCP allows. §10 of analysis.html still
   # says us-east-1; the document is the thing that needs updating, not this file.
   region: us-east-2
   stage: ${opt:stage, 'dev'}

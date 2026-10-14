@@ -3,7 +3,7 @@ info:
   title: PACS — Parking Allocation Context System
   version: 0.1.0
   description: |
-    The endpoint inventory of analisis.html §16. This file is the single source for the
+    The endpoint inventory of analysis.html §16. This file is the single source for the
     client's generated types and for the mock server the frontend develops against, so
     drift between this contract and the implementation fails CI rather than a demo.
 

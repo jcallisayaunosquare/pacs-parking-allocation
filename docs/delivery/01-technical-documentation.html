@@ -256,7 +256,7 @@ compromised application credential still cannot rewrite why somebody lost.</li>
 ├── pipeline/dev/             CloudFormation: CodePipeline, CodeBuild, S3 + CloudFront
 ├── .github/workflows/ci.yml  the six pull request checks
 ├── .githooks/pre-commit      the local gate
-└── docs/                     analisis.html (the original specification) and this set
+└── docs/                     analysis.html (the original specification) and this set
 </code></pre>
 <p>Inside every backend module the same three rings, with source dependencies pointing inward
 only:</p>
@@ -1324,7 +1324,7 @@ invalidates every cached dashboard (<code>dashboard:</code> prefix), so the chan
 next request rather than after the five-minute cache expires.</p>
 <h3>7.3 The draw</h3>
 <p><strong>This is rules A–H, deterministic. It is not a weighted lottery.</strong> Sections 12 and 13 of
-<code>docs/analisis.html</code> describe an earlier probabilistic model with accumulating scores; it
+<code>docs/analysis.html</code> describe an earlier probabilistic model with accumulating scores; it
 was replaced and is not what runs. §31 of the same document states all eight rules in one
 place, each with its arithmetic and a worked example.</p>
 <table>
@@ -2334,7 +2334,7 @@ repeat the mistake — <code>access_event.reason</code> is a stable code and the
 <code>aws cognito-idp describe-user-pool</code> on 2026-10-14). Self sign-up is therefore off, which
 is what the product wants — residents are created by an administrator — but the next
 deploy that touches the pool will turn it back on. The template should say <code>true</code>.</li>
-<li><code>docs/analisis.html</code> sections 12 and 13 describe the probabilistic weighted lottery that
+<li><code>docs/analysis.html</code> sections 12 and 13 describe the probabilistic weighted lottery that
 rules A–F replaced. Section 10 still says <code>us-east-1</code>, private subnets, per-function IAM
 roles, a master password in SSM and the <code>*.handler.ts</code> filename convention — none of which
 is what runs.</li>

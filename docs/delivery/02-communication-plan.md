@@ -191,7 +191,7 @@ What a reviewer is actually reading for, in rough order of value on this codebas
 |---|---|
 | Why this code is shaped this way | A comment above it. This is the default and it is the strongest convention in the repository |
 | Why this product rule exists | `apps/web/PRODUCT.md` — users, jobs, the mechanism, the durable constraints |
-| Why this technology, at the scale of the whole system | An ADR in `docs/analisis.html`. ADR-014 lambdalith, ADR-016 no NAT, ADR-017 DynamoDB as cache, and so on |
+| Why this technology, at the scale of the whole system | An ADR in `docs/analysis.html`. ADR-014 lambdalith, ADR-016 no NAT, ADR-017 DynamoDB as cache, and so on |
 | Why this release did what it did | The pull request body and the conventional commit subject |
 | Why the deployed reality differs from the specification | The deviations table in the root `README.md`, and §13 of the technical documentation |
 
@@ -349,7 +349,7 @@ and what reactivation should do for a resident who leaves and returns. Writing a
 down as open is a decision; leaving it undiscussed is not.
 
 **Decisions are revisited when the evidence arrives, and the revision replaces the
-original.** The fairness model is the example that matters: `docs/analisis.html` sections 12
+original.** The fairness model is the example that matters: `docs/analysis.html` sections 12
 and 13 describe a probabilistic weighted lottery that was superseded by the deterministic
 rules A–F, later extended to A–H when the building settled how withdrawing and sitting a
 period out should count. The lesson the team took from it is in this plan: when a decision is replaced,
@@ -370,7 +370,7 @@ person.
 | **Jira** (`PACS` project) | The backlog: outcome, the rule or screen it touches, the observable that says it is done. Status of work in flight | Updated when the state changes, not at the end of the sprint | Design discussion — link the pull request or the ADR instead |
 | **Team chat** | Blockers, "I am about to release", "I am demonstrating on dev until 15:00", quick questions | Within the hour during working time | Anything someone will need to find in a month. If it matters, it moves to the PR, Jira or a document, and the chat links it |
 | **The written daily** | Three lines in the team channel: what moved, what is next, what is blocked | Read by everyone before noon | Status theatre. A day with nothing to report says so in one line |
-| **The repository's documents** | Product rules (`PRODUCT.md`), architecture (ADRs in `docs/analisis.html`), this set | Changed in the same pull request as the behaviour they describe | Plans that are not yet decisions |
+| **The repository's documents** | Product rules (`PRODUCT.md`), architecture (ADRs in `docs/analysis.html`), this set | Changed in the same pull request as the behaviour they describe | Plans that are not yet decisions |
 
 Two announcements are **mandatory** in the team channel, because each one changes the
 environment under somebody else:

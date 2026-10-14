@@ -11,7 +11,7 @@ those diagrams rendered.
 
 **Second edition, 2026-10-14**, verified against `development` at `3d02e2b`. Everything in these documents was checked against the code in this repository, and the
 parts that concern deployed infrastructure were checked against the `dev` account. Where
-the code and the original specification (`../analisis.html`) disagree, the code is treated
+the code and the original specification (`../analysis.html`) disagree, the code is treated
 as correct and the disagreement is named — see §13 of the technical documentation.
 
 ## Regenerating the PDFs

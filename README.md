@@ -14,7 +14,7 @@ Start here. Each document is Markdown (readable on GitHub, diagrams included) an
 | **[Communication plan](docs/delivery/02-communication-plan.md)** · [PDF](docs/delivery/02-communication-plan.pdf) | Code review, sprint planning, how decisions are made, channels, a real incident from report to release | On the team, or asking how work gets agreed |
 | **[Onboarding guide](docs/delivery/03-onboarding-guide.md)** · [PDF](docs/delivery/03-onboarding-guide.pdf) | From a fresh clone to a merged pull request, the conventions and why, a first issue, and how a junior developer is guided | Joining the project |
 | [Product brief](apps/web/PRODUCT.md) | Who the users are, what they need, what may never change | Deciding what to build |
-| [Original specification](docs/analisis.html) | The analysis the project started from, with the ADRs. Where it and the code disagree, the code wins — see §13 of the technical documentation | Tracing the history of a decision |
+| [Original specification](docs/analysis.html) | The analysis the project started from, with the ADRs. Where it and the code disagree, the code wins — see §13 of the technical documentation | Tracing the history of a decision |
 | [API contract](packages/contracts/openapi.yaml) | OpenAPI 3.1; served as Swagger UI at `GET /docs` on the API | Calling the API |
 
 **Live (dev):** app <https://d2gamvhpvfk16e.cloudfront.net> ·
@@ -437,7 +437,7 @@ Errors use one shape, with a `traceId` matching the log correlation id:
 }
 ```
 
-## Where this deviates from analisis.html rev 2.2
+## Where this deviates from analysis.html rev 2.2
 
 Each of these is a decision forced by the real account, not a design change. Section 10 of
 the document still needs updating to match.
