@@ -1241,6 +1241,33 @@ on('GET', '/spots', (q, _b, p) => {
   return ok({ items: spots.filter((s) => !level || s.level === level) });
 });
 
+// The lot plan's live state, as the real API derives it: inventory plus ACTIVE
+// assignments, occupants named to an administrator only, `isMine` for the viewer.
+on('GET', '/lots/{levelId}/occupancy', (_q, _b, p, params) => {
+  if (!p) return err(401, 'UNAUTHENTICATED', 'No token');
+  const admin = p.roles.includes('ADMIN');
+  const byCode = new Map();
+  for (const [residentId, a] of assignments) {
+    if (a.state === 'ACTIVE') byCode.set(a.spotCode, { residentId, validUntil: a.validUntil });
+  }
+  const items = spots
+    .filter((s) => s.level === params.levelId)
+    .map((s) => {
+      const a = s.isActive ? byCode.get(s.spotCode) : undefined;
+      const holder = a ? residents.find((r) => r.id === a.residentId) : undefined;
+      return {
+        spotId: s.id,
+        spotCode: s.spotCode,
+        type: s.type,
+        status: !s.isActive ? 'OUT_OF_SERVICE' : a ? 'HELD' : 'FREE',
+        occupant: a && admin && holder ? { displayName: holder.fullName, unit: holder.unitNumber } : null,
+        validUntil: a ? a.validUntil : null,
+        isMine: Boolean(a && !admin && p.resident && a.residentId === p.resident.id),
+      };
+    });
+  return ok({ items });
+});
+
 on('POST', '/spots', (_q, body, p) => {
   const bad = needAdmin(p);
   if (bad) return bad;

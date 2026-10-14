@@ -35,3 +35,64 @@ export function spotRemovalBlocker(input: {
   }
   return null;
 }
+
+/* ------------------------------------------------------------ lot occupancy */
+
+export type BayStatus = 'FREE' | 'HELD' | 'OUT_OF_SERVICE';
+
+/** One bay as the occupancy query reads it: the inventory row and its live assignment. */
+export interface BayRow {
+  readonly spotId: string;
+  readonly spotCode: string;
+  readonly type: string;
+  readonly isActive: boolean;
+  readonly assignment: {
+    readonly residentId: string;
+    readonly fullName: string;
+    readonly unitNumber: string;
+    readonly validUntil: Date;
+  } | null;
+}
+
+export interface BayOccupancy {
+  readonly spotId: string;
+  readonly spotCode: string;
+  readonly type: string;
+  readonly status: BayStatus;
+  /** Who holds it - an administrator's fact only. Always null for anyone else. */
+  readonly occupant: { readonly displayName: string; readonly unit: string } | null;
+  readonly validUntil: Date | null;
+  /** Whether the viewer is the one holding it. The only identity a resident is told. */
+  readonly isMine: boolean;
+}
+
+/**
+ * What a viewer may know about each bay on a level.
+ *
+ * Status is the inventory and the live assignment, nothing invented: a retired bay is
+ * out of service, an active assignment makes a bay held, anything else is free. Who
+ * holds a bay is the building's parking register - and, bay by bay, who is away and who
+ * is home - so it leaves the server only for an administrator. A resident learns one
+ * identity, their own, as `isMine`.
+ */
+export function lotOccupancy(
+  rows: readonly BayRow[],
+  viewer: { readonly residentId: string | null; readonly isAdmin: boolean },
+): readonly BayOccupancy[] {
+  return rows.map((r) => {
+    const held = r.isActive && r.assignment !== null;
+    const status: BayStatus = !r.isActive ? 'OUT_OF_SERVICE' : held ? 'HELD' : 'FREE';
+    return {
+      spotId: r.spotId,
+      spotCode: r.spotCode,
+      type: r.type,
+      status,
+      occupant:
+        held && viewer.isAdmin
+          ? { displayName: r.assignment!.fullName, unit: r.assignment!.unitNumber }
+          : null,
+      validUntil: held ? r.assignment!.validUntil : null,
+      isMine: held && viewer.residentId !== null && r.assignment!.residentId === viewer.residentId,
+    };
+  });
+}

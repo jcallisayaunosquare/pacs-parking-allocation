@@ -45,7 +45,7 @@ import {
   HttpSpotRepository,
   HttpVehicleRepository,
 } from './data/http.repositories';
-import { SeedLotRepository } from './data/seed-lot.repository';
+import { HttpLotRepository } from './data/http-lot.repository';
 
 /**
  * The composition root of the frontend (§10): the one place that binds the domain's
@@ -92,11 +92,11 @@ export const appConfig: ApplicationConfig = {
     { provide: AllocationConfigRepository, useClass: HttpAllocationConfigRepository },
 
     /**
-     * The lot geometry has no endpoint yet, so the map runs against a generated layout.
-     * One line changes when `GET /lots/{id}/layout` lands, and nothing above the data ring
-     * knows the difference — which is the whole reason the contract is an abstract class.
+     * Status, types and the viewer's own bay come from `GET /lots/{id}/occupancy`; the
+     * geometry is still generated, because there are no geometry tables yet. One line
+     * changes again when `GET /lots/{id}/layout` lands.
      */
-    { provide: LotRepository, useClass: SeedLotRepository },
+    { provide: LotRepository, useClass: HttpLotRepository },
 
     /**
      * Resolve the session before the first route renders. Without this, a reload on a

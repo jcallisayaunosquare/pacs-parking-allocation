@@ -2,7 +2,7 @@ import { fail } from '../../../shared/errors';
 import { ok, type Result } from '../../../shared/result';
 import type { Clock } from '../../../shared/clock';
 import type { SpotType } from '../../allocation/domain/types';
-import { spotRemovalBlocker } from '../domain/spot';
+import { lotOccupancy, spotRemovalBlocker, type BayRow } from '../domain/spot';
 
 export interface ParkingSpot {
   readonly id: string;
@@ -27,6 +27,8 @@ export interface SpotRepository {
   isCurrentlyAssigned(id: string): Promise<boolean>;
   consequences(id: string): Promise<{ assignments: number; historyRows: number }>;
   remove(id: string): Promise<boolean>;
+  /** Every bay on a level with its live (ACTIVE) assignment, if it has one. */
+  occupancy(level: string): Promise<readonly BayRow[]>;
 }
 
 export class SpotUseCases {
@@ -37,6 +39,14 @@ export class SpotUseCases {
 
   async list(input: { activeOnly?: boolean; type?: SpotType }) {
     return ok(await this.repo.list(input));
+  }
+
+  /** The lot plan's live state for one level, redacted for who is asking. */
+  async occupancy(
+    level: string,
+    viewer: { residentId: string | null; isAdmin: boolean },
+  ) {
+    return ok(lotOccupancy(await this.repo.occupancy(level), viewer));
   }
 
   /** FR-16 — spot codes are the human identifier and must stay unique. */

@@ -1092,6 +1092,42 @@ export function buildRoutes(app: AppContainer): Route[] {
       },
     },
 
+    // -------------------------------------------------------------------- lot
+    /*
+     * The lot plan's live state: every bay on a level, as the inventory and the live
+     * assignments say it is. Both roles read it; only an administrator is told who holds
+     * a bay, and a resident is told one identity, their own, as `isMine`. Before this the
+     * web app drew the plan from a generated stand-in that marked the same bay as every
+     * resident's own, whether or not they held anything.
+     */
+    {
+      method: 'GET',
+      path: '/lots/{levelId}/occupancy',
+      roles: ['RESIDENT', 'ADMIN'],
+      handler: async (ctx) => {
+        const level = ctx.params.levelId ?? '';
+        if (!/^[A-Za-z0-9-]{1,20}$/.test(level)) {
+          return badRequest([{ field: 'levelId', issue: 'must be a level code such as B1' }], ctx);
+        }
+        const admin = isAdmin(ctx.principal);
+        const residentId = admin ? null : await resolveResidentId(ctx);
+        return respond(
+          await app.spots.occupancy(level, { residentId, isAdmin: admin }),
+          ctx,
+          (items) =>
+            okJson(
+              {
+                items: items.map((b) => ({
+                  ...b,
+                  validUntil: b.validUntil ? b.validUntil.toISOString() : null,
+                })),
+              },
+              ctx.traceId,
+            ),
+        );
+      },
+    },
+
     // ----------------------------------------------------- configuration (A)
     {
       method: 'GET',

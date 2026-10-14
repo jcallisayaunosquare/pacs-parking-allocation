@@ -165,8 +165,8 @@ export class SeedLotRepository extends LotRepository {
     buildLevel('B1', 'Level B1', -1, this.config),
   ];
 
-  /** The bay this viewer holds, so the map can draw one as theirs. */
-  private readonly mine = 'B1:2:4';
+  /** The bay this viewer holds, so the map can draw one as theirs. Null when none. */
+  protected mine: string | null = 'B1:2:4';
 
   async levels(): Promise<readonly LotLevel[]> {
     return this.levels_;
@@ -211,7 +211,7 @@ export class SeedLotRepository extends LotRepository {
   }
 
   /** Exposed so the facade can mark one bay as the viewer's own while seeded. */
-  mySpotId(): string {
+  mySpotId(): string | null {
     return this.mine;
   }
 }
