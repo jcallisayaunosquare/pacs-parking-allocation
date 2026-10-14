@@ -1111,6 +1111,20 @@ export function buildRoutes(app: AppContainer): Route[] {
 
     // -------------------------------------------------------------------- lot
     /*
+     * The levels the plan draws, from the inventory. The web app used to generate its own
+     * level and bay codes (B1-A01...), which matched nothing in a building whose bays are
+     * B1-01, B2-01 - so an assigned bay was never shown on the plan.
+     */
+    {
+      method: 'GET',
+      path: '/lots',
+      roles: ['RESIDENT', 'ADMIN'],
+      handler: async (ctx) =>
+        respond(await app.spots.levels(), ctx, (items) =>
+          okJson({ items: items.map((l) => ({ levelId: l.level, bays: l.bays })) }, ctx.traceId),
+        ),
+    },
+    /*
      * The lot plan's live state: every bay on a level, as the inventory and the live
      * assignments say it is. Both roles read it; only an administrator is told who holds
      * a bay, and a resident is told one identity, their own, as `isMine`. Before this the

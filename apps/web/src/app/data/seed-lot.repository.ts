@@ -56,7 +56,7 @@ const rowLetter = (row: number): string => String.fromCharCode(64 + row);
  * Lays out `totalBays` as pairs of facing rows, which is how a real deck is arranged:
  * two ranks nose-in to each other with a drive aisle between them.
  */
-const buildLevel = (
+export const buildLevel = (
   levelId: string,
   label: string,
   order: number,

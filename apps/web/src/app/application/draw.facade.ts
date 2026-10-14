@@ -45,6 +45,7 @@ export class DrawFacade {
   private readonly _assignments = signal<readonly RunAssignment[]>([]);
   private readonly _explanation = signal<readonly RunCandidate[]>([]);
   private readonly _level = signal<LotLevel | null>(null);
+  private _levels: readonly LotLevel[] = [];
   private readonly _busy = signal(false);
   private readonly _loading = signal(true);
   private readonly _error = signal<ApiError | null>(null);
@@ -145,6 +146,7 @@ export class DrawFacade {
       this._candidates.set(cycle ? await this.cycles.entrants(cycle.id) : []);
 
       const levels = await this.lots.levels();
+      this._levels = levels;
       this._level.set(levels[0] ?? null);
     } catch (e) {
       this._error.set(toApiError(e));
@@ -172,7 +174,13 @@ export class DrawFacade {
     try {
       const result = await this.runs.execute(cycle.id, `ui-${cycle.id}-${crypto.randomUUID()}`);
       this._run.set(result);
-      this._assignments.set(await this.runs.assignments(result.runId));
+      const assigned = await this.runs.assignments(result.runId);
+      this._assignments.set(assigned);
+      // Show the level the bays were handed out on, not simply the first one: a draw
+      // that filled B2 drew an empty B1 on the result's map.
+      const codes = new Set(assigned.map((a) => a.spotCode));
+      const where = this._levels.find((l) => l.bays.some((b) => codes.has(b.spotCode)));
+      if (where) this._level.set(where);
       // The record is what the result screen reads. A run whose record cannot be read
       // is still a committed run, so a failure here must not look like a failed draw.
       try {
