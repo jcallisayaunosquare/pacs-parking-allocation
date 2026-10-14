@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cycleRemovalBlocker } from './cycle';
+import { cycleRemovalBlocker, nextPeriodFor } from './cycle';
 
 /**
  * The removal rule exists to protect rule D: allocation history is never reset, because
@@ -60,5 +60,27 @@ describe('cycleRemovalBlocker', () => {
     expect(
       cycleRemovalBlocker({ state: 'CLOSED', hasRun: false, assignments: 0 }),
     ).toContain('in effect');
+  });
+});
+
+describe('nextPeriodFor', () => {
+  const closedA = { cycle: 'closed-a', registered: false };
+  const closedB = { cycle: 'closed-b', registered: true };
+  const upcoming = { cycle: 'upcoming', registered: false };
+
+  it('shows the closed period an entrant is waiting on, ahead of the upcoming one', () => {
+    expect(nextPeriodFor([closedA, closedB], upcoming)).toEqual({ cycle: 'closed-b', registered: true });
+  });
+
+  it('does not show a closed period to someone who did not enter it', () => {
+    expect(nextPeriodFor([closedA], upcoming)).toEqual(upcoming);
+    expect(nextPeriodFor([closedA], null)).toEqual({ cycle: null, registered: false });
+  });
+
+  it('falls back to the upcoming period when nothing is closed', () => {
+    expect(nextPeriodFor([], { cycle: 'upcoming', registered: true })).toEqual({
+      cycle: 'upcoming',
+      registered: true,
+    });
   });
 });
