@@ -165,6 +165,36 @@ export class DrawFacade {
    * UC-05. The idempotency key is the caller's: a retried click must replay the run it
    * already made rather than draw the building's bays a second time.
    */
+  private readonly _refreshing = signal(false);
+  readonly refreshing = this._refreshing.asReadonly();
+
+  /**
+   * Reads the result again: the lot's levels and this run's assignments. The map is
+   * built from them, so a refresh shows the bays as the server has them now - after a
+   * release, say - without leaving the step.
+   */
+  async refreshResult(): Promise<void> {
+    const run = this._run();
+    if (!run || this._refreshing()) return;
+    this._refreshing.set(true);
+    try {
+      this._levels = await this.lots.levels();
+      const assigned = await this.runs.assignments(run.runId);
+      this._assignments.set(assigned);
+      const codes = new Set(assigned.map((a) => a.spotCode));
+      const where =
+        this._levels.find((l) => l.bays.some((b) => codes.has(b.spotCode))) ??
+        this._levels.find((l) => l.levelId === this._level()?.levelId) ??
+        this._levels[0] ??
+        null;
+      this._level.set(where);
+    } catch (e) {
+      this._error.set(toApiError(e));
+    } finally {
+      this._refreshing.set(false);
+    }
+  }
+
   async run_(): Promise<boolean> {
     const cycle = this._cycle();
     if (!cycle || this._busy()) return false;

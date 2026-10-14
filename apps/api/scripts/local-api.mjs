@@ -1262,7 +1262,10 @@ on('GET', '/lots', (_q, _b, p) => {
   if (!p) return err(401, 'UNAUTHENTICATED', 'No token');
   const counts = new Map();
   for (const s of spots) counts.set(s.level, (counts.get(s.level) ?? 0) + 1);
+  // As the API: a level whose every bay is retired is not listed.
+  const live = new Set(spots.filter((s) => s.isActive).map((s) => s.level));
   const items = [...counts]
+    .filter(([levelId]) => live.has(levelId))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([levelId, bays]) => ({ levelId, bays }));
   return ok({ items });
