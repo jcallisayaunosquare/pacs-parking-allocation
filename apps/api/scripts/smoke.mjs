@@ -270,6 +270,30 @@ async function main() {
     return { seen, keys };
   };
 
+  /*
+   * The walk only proves anything when the register spans more than one page. A
+   * register trimmed down to a couple of accounts (keep-only-users.mjs does exactly
+   * that) fits on the first page, the cursor is never used, and the check failed on the
+   * data rather than on the paging. So the run tops the register up to two pages with
+   * residents of its own, tracked like every other row it makes and removed below.
+   */
+  const PAGE = 5;
+  const before = await walk('name', 'asc');
+  const fillers = before.error ? 0 : Math.max(0, PAGE + 1 - before.seen.length);
+  for (let i = 0; i < fillers; i++) {
+    const filler = await call('POST', '/residents', {
+      body: {
+        email: `smoke-paging-${Date.now()}-${i}@example.test`,
+        fullName: `Smoke Paging ${String.fromCharCode(65 + i)}`,
+        unitNumber: String(990 - i),
+        needsAccessibleSpot: false,
+      },
+    });
+    if (filler.json?.email) madeHere.residentEmails.push(filler.json.email);
+    if (filler.json?.id) madeHere.residentIds.push(filler.json.id);
+  }
+  if (fillers > 0) console.log(`(added ${fillers} temporary residents so the register spans two pages)`);
+
   const byName = await walk('name', 'asc');
   check('paging a sorted list returns every resident', !byName.error && byName.seen.length > 5,
     byName.error ?? `${byName.seen.length} rows`);
