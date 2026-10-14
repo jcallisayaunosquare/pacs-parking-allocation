@@ -50,9 +50,17 @@ export const handler = async (
 
     return response;
   } catch (e) {
+    /*
+     * `detail`, not `message`: the logger reserves `message` and silently dropped it, so
+     * every 500 reached the log as `name: "error"` and nothing else. The Postgres code and
+     * constraint are what make a database failure diagnosable from its traceId.
+     */
+    const pg = e as { code?: unknown; constraint?: unknown };
     logger.error('unhandled', {
       name: e instanceof Error ? e.name : 'unknown',
-      message: e instanceof Error ? e.message : String(e),
+      detail: e instanceof Error ? e.message : String(e),
+      ...(typeof pg?.code === 'string' ? { code: pg.code } : {}),
+      ...(typeof pg?.constraint === 'string' ? { constraint: pg.constraint } : {}),
       durationMs: Date.now() - started,
     });
     // The traceId is the only way in (§16).
