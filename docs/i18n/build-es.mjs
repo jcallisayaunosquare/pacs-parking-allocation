@@ -1,5 +1,5 @@
 /**
- * Inject the Spanish dictionary into analisis.html.
+ * Inject the Spanish dictionary into analysis.html.
  *
  * The document has to stay one self-contained file - it is read from disk, from a
  * network share and over file:// , and a second file fetched at runtime would be blocked
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const docPath = join(here, '..', 'analisis.html');
+const docPath = join(here, '..', 'analysis.html');
 const dict = JSON.parse(readFileSync(join(here, 'es.json'), 'utf8'));
 
 const nav = dict._nav ?? {};

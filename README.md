@@ -1,8 +1,36 @@
 # PACS — Parking Allocation Context System
 
-Backend for the fair, auditable quarterly parking raffle specified in
-[`../analisis.html`](../analisis.html) rev 2.2. That document is the spec of record;
-this README only covers how to run what is built.
+Fair, auditable allocation of a residential building's parking bays: residents enter a
+period, a deterministic draw ranks them by waiting time, and every result can be explained
+and re-derived. Includes a gate that reads number plates.
+
+## Documentation
+
+Start here. Each document is Markdown (readable on GitHub, diagrams included) and PDF.
+
+| Document | What it covers | Read it if you are |
+|---|---|---|
+| **[Technical documentation](docs/delivery/01-technical-documentation.md)** · [PDF](docs/delivery/01-technical-documentation.pdf) | Architecture front and back, AWS and network, data model, fairness rules A–H, API, running locally, deploying, testing, operating the environment, known gaps | An engineer picking the project up |
+| **[Communication plan](docs/delivery/02-communication-plan.md)** · [PDF](docs/delivery/02-communication-plan.pdf) | Code review, sprint planning, how decisions are made, channels, a real incident from report to release | On the team, or asking how work gets agreed |
+| **[Onboarding guide](docs/delivery/03-onboarding-guide.md)** · [PDF](docs/delivery/03-onboarding-guide.pdf) | From a fresh clone to a merged pull request, the conventions and why, a first issue, and how a junior developer is guided | Joining the project |
+| [Product brief](apps/web/PRODUCT.md) | Who the users are, what they need, what may never change | Deciding what to build |
+| [Original specification](docs/analysis.html) | The analysis the project started from, with the ADRs. Where it and the code disagree, the code wins — see §13 of the technical documentation | Tracing the history of a decision |
+| [API contract](packages/contracts/openapi.yaml) | OpenAPI 3.1; served as Swagger UI at `GET /docs` on the API | Calling the API |
+
+**Live (dev):** app <https://d2gamvhpvfk16e.cloudfront.net> ·
+API <https://frd8e8nkhl.execute-api.us-east-2.amazonaws.com> ·
+Swagger <https://frd8e8nkhl.execute-api.us-east-2.amazonaws.com/docs>
+
+**Quick start**, no AWS needed:
+
+```bash
+pnpm install
+pnpm --filter @pacs/api local        # stub API on http://localhost:4300
+cd apps/web && pnpm offline          # app on http://localhost:4200 — admin@local or resident@local, any password
+```
+
+The rest of this README is the backend's operating notes. Where it and the documents
+above disagree, the documents are newer.
 
 | | |
 |---|---|
@@ -16,7 +44,7 @@ this README only covers how to run what is built.
 
 ## API documentation (Swagger UI)
 
-The API serves interactive documentation at `GET /docs` (also `/docs/`) and the
+The API serves interactive documentation at `GET /docs` and the
 OpenAPI 3.1 contract at `GET /openapi.yaml`. Both documentation endpoints are public;
 business endpoints retain their Cognito authorizer and role checks.
 
@@ -41,14 +69,14 @@ is maintained. This adds a documentation viewer, not automatic route/contract ge
 | Hosted login | `https://pacs-dev-309887812390.auth.us-east-2.amazoncognito.com` |
 | Cache table | `pacs-cache-dev` |
 | Event bus | `pacs-events-dev` + stream to `integrations` and `plateIngest` |
-| Captures bucket | `pacs-captures-dev` — declared in the stack, not yet deployed |
+| Captures bucket | `pacs-captures-dev` |
 | Functions | `pacs-api-dev-api`, `-runRaffle`, `-sweeper`, `-integrations`, `-plateRecognizer`, `-plateIngest` |
 
 Those five values are what the Angular app needs. Verified after deploy:
 
 ```
-pnpm test                        213/213 unit, including 10 000 seeded draws
-node scripts/smoke.mjs           31/31 auth, RBAC, validation, state machine, idempotency
+pnpm test                        267/267 unit, including 10 000 seeded draws
+node scripts/smoke.mjs           48/48 auth, RBAC, validation, state machine, idempotency
 node scripts/verify-raffle.mjs   14/14 a real raffle over HTTPS, under 1 s
 node scripts/verify-cognito.mjs  14/14 async Cognito provisioning, end to end
 ```
@@ -292,7 +320,7 @@ authorizer before any handler runs.
 ## Test and typecheck
 
 ```bash
-pnpm --filter @pacs/api test        # 213 unit tests, including 10 000 seeded draws
+pnpm --filter @pacs/api test        # 267 unit tests, including 10 000 seeded draws
 pnpm --filter @pacs/api typecheck
 ```
 
@@ -367,6 +395,7 @@ are rejected before they reach a query, so records cannot be enumerated.
 | `GET /me/dashboard` | resident | UC-09 aggregated status · cached 5 min |
 | `GET /me/history` | resident | UC-10 own history |
 | `POST /me/assignment/release` | resident | UC-11 give up a spot · promotes the waitlist |
+| `GET /cycles/{id}/registrations` | admin | The period's entrants |
 | `POST /cycles/{id}/registrations` | resident | UC-08 enter the raffle · idempotent |
 | `DELETE /cycles/{id}/registrations/me` | any | Withdraw while registration is open |
 | `GET` · `POST /residents` | admin | List · FR-10 create + provision Cognito user |
@@ -377,6 +406,9 @@ are rejected before they reach a query, so records cannot be enumerated.
 | `GET /vehicles/by-plate/{plate}` | admin | Plate lookup for the gate · normalises first |
 | `GET` · `POST /spots` | admin | FR-16 inventory |
 | `PATCH /spots/{id}` | admin | Edit / deactivate · refuses if assigned |
+| `DELETE /spots/{id}` | admin | Remove a bay never assigned |
+| `GET /lots` | resident · admin | Levels with a bay in service |
+| `GET /lots/{level}/occupancy` | resident · admin | Every bay on a level, its status and whether it is the viewer's |
 | `GET` · `POST /cycles` | admin | UC-04 cycles |
 | `POST /cycles/{id}/open-registration` | admin | DRAFT to REGISTRATION_OPEN |
 | `POST /cycles/{id}/close-registration` | admin | Manual close |
@@ -405,7 +437,7 @@ Errors use one shape, with a `traceId` matching the log correlation id:
 }
 ```
 
-## Where this deviates from analisis.html rev 2.2
+## Where this deviates from analysis.html rev 2.2
 
 Each of these is a decision forced by the real account, not a design change. Section 10 of
 the document still needs updating to match.
@@ -438,14 +470,14 @@ aws rds modify-db-instance --db-instance-identifier hotel-db \
 cd apps/web
 pnpm start     # http://localhost:4200
 pnpm build     # production bundle into dist/web
-pnpm test      # 29 boundary tests
+pnpm test      # 69 unit tests
 ```
 
 | | |
 |---|---|
 | Angular | **22.2** — zoneless, standalone, signals, no zone.js |
 | Components | **Angular Material 22.2**, with the project's own theme |
-| Auth | `angular-auth-oidc-client` 22 · authorization code + PKCE · tokens in memory |
+| Auth | `amazon-cognito-identity-js`, `USER_SRP_AUTH` from the product's own form · tokens in memory |
 | Node | Angular 22 needs `^22.22.3 \|\| ^24.15.0 \|\| >=26` |
 
 Lazy-loaded screens, so a resident never downloads the admin bundle:
@@ -465,8 +497,6 @@ signals and own refetch, so pages stay presentational. The bindings live in one 
   without changing the contract — the one real design debt here. The plates module
   deliberately does not repeat it: `access_event.reason` is a stable code and the wording
   lives in `features/plates/reason-label.ts`
-- No CloudFront/S3 deployment yet, so `environment.production.ts` still points its
-  redirect URLs at localhost
 
 ## Not built yet
 
@@ -477,11 +507,18 @@ signals and own refetch, so pages stay presentational. The bindings live in one 
 - The plate crop writer. `plate_read.crop_key`, the `crops/` IAM statement and the
   lifecycle rule all exist, but nothing writes a crop yet: cropping needs a native image
   decoder in the bundle, and the review screen reads the full frame instead
-- A capture client. `POST /captures` is the contract a gate camera would call; no camera
-  firmware or web capture page is written
+- Camera firmware. The browser capture page exists (`/gate`); nothing runs on a dedicated
+  gate device
+- Its own SES identity for Cognito. The default sender allows 50 emails a day for the
+  account; the smoke suites spent it on 2026-10-14 (see the technical documentation §8.5)
+- An on-failure destination on the `integrations` stream mapping: a failed provisioning is
+  dropped after three retries
 - The threshold calibration of MODULO-PLACAS.md section 8. The procedure and the storage
   exist; the week of shadow operation that produces real numbers has not happened, so
   0.85 and 0.55 are a starting point and are labelled as one
-- Playwright E2E and k6 load suites
-- CI workflow with GitHub Actions and OIDC (ADR-018)
-- `git init` — this is not a repository yet
+- A k6 load suite
+
+Built since this list was first written: the git repository, the six GitHub Actions
+checks, Playwright end-to-end tests, CodePipeline delivery to CloudFront, and the web
+capture page. GitHub OIDC (ADR-018) is not possible — the organisation's SCP denies
+identity providers — which is why delivery runs on CodePipeline.

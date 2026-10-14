@@ -1,5 +1,5 @@
 /**
- * Initial PACS schema — the physical form of analisis.html §11.
+ * Initial PACS schema — the physical form of analysis.html §11.
  *
  * Written as raw SQL rather than the node-pg-migrate DSL because the design leans on
  * features the DSL does not express well: partial unique indexes (the run lock),

@@ -8,6 +8,9 @@ Everything here was checked against the code in this repository and, where it co
 deployed infrastructure, against the `dev` account itself. Where the code and the older
 specification disagree, the code wins and the disagreement is stated.
 
+**Last verified on 2026-10-14 against `development` at `3d02e2b` (pull request #22).** §15
+lists what changed since the first edition, pull request by pull request.
+
 | | |
 |---|---|
 | Repository | `jcallisayaunosquare/pacs-parking-allocation`, default working branch `development` |
@@ -62,7 +65,7 @@ A pnpm workspace (`pnpm-workspace.yaml` takes `apps/*` and `packages/*`), pinned
 code/
 ├── apps/api/                 backend — TypeScript, Lambda, Serverless Framework v4
 │   ├── serverless.yml        functions, events, Cognito, DynamoDB, S3, VPC endpoint, alarms
-│   ├── migrations/           node-pg-migrate, raw SQL, up and down
+│   ├── migrations/           node-pg-migrate, raw SQL, up and down — six files
 │   ├── scripts/              seed, offline stub API, smoke suites, operational scripts
 │   └── src/
 │       ├── shared/           kernel: Result, errors, Clock, db, cache, events, http
@@ -79,7 +82,7 @@ code/
 ├── pipeline/dev/             CloudFormation: CodePipeline, CodeBuild, S3 + CloudFront
 ├── .github/workflows/ci.yml  the six pull request checks
 ├── .githooks/pre-commit      the local gate
-└── docs/                     analisis.html (the original specification) and this set
+└── docs/                     analysis.html (the original specification) and this set
 ```
 
 Inside every backend module the same three rings, with source dependencies pointing inward
@@ -203,7 +206,7 @@ deliberately *not*:
 |---|---|---|
 | API Gateway | Verifies the JWT's signature, issuer, audience and expiry against the Cognito pool before any code of ours runs. Answers CORS preflight itself — `OPTIONS` is left unrouted on purpose, because an `ANY` route would send the preflight to the authorizer, which would 401 it for having no `Authorization` header. | Authorise. It knows nothing about roles. |
 | `api.ts` | One handler for every route (a lambdalith, ADR-014). Mints the trace id that appears in every log line and in every error body. | Hold business logic. |
-| `router.ts` | Matches the path, checks the caller holds one of the route's roles, rejects any `{…id}` parameter that is not a UUID *before* it reaches a query, parses the body. | Decide which resident the caller is. It only knows the token. |
+| `router.ts` | Matches the path, checks the caller holds one of the route's roles, rejects any parameter whose *name* ends in `id` (`{id}`, `{cycleId}`, `{vehicleId}`) if its value is not a UUID *before* it reaches a query, parses the body. A parameter that carries a code rather than a UUID must therefore not be named like an id — which is why the lot route is `/lots/{level}/occupancy` and not `{levelId}`: the first deploy named it `{levelId}` and answered `B1` with a 400 (`router.spec.ts` pins both cases). | Decide which resident the caller is. It only knows the token. |
 | `principal.ts` | Maps verified claims to a `Principal`: subject, email, roles from `cognito:groups`, `custom:resident_id` when present. | Read an identity from a path, query or body. |
 | `routes.ts` | Zod schemas at the edge, presentation on the way out. Two guards live here because a route's `roles` list cannot express them: `adminHasNoResidentSurface` (a role list is an OR, so a principal in both groups would satisfy `['RESIDENT']`) and `residentScope` (a record-level rule the role list knows nothing about). | Reach a repository directly for a decision. |
 | `application/` | Idempotency, the run lock, transactions, cache invalidation, event publication. | Contain the fairness policy. |
@@ -217,7 +220,7 @@ The other five functions in the same stack:
 | `api` | HTTP API | yes | 512 MB · 10 s | Every route |
 | `runRaffle` | EventBridge `cron(0 6 * * ? *)`, plus a pre-warm at 05:55 | yes | 512 MB · 60 s | Draws for whichever period is in `REGISTRATION_CLOSED`; returns `NO_RUNNABLE_CYCLE` otherwise. A daily poll rather than a quarterly cron, because the period length is configurable and a quarterly cron would hard-code "every three months" into infrastructure no administrator can edit. |
 | `sweeper` | EventBridge `rate(5 minutes)` | yes | 512 MB · 60 s | Fails runs stuck `RUNNING` for 15 minutes, expires assignments whose period has ended and closes those periods, relays the event outbox |
-| `integrations` | `pacs-events-dev` stream | **no** | 512 MB · 30 s | Cognito provisioning: `AdminCreateUser`, add to `RESIDENT`, write the `link#<sub>` item back |
+| `integrations` | `pacs-events-dev` stream | **no** | 512 MB · 30 s | Cognito provisioning: `AdminCreateUser`, add to `RESIDENT`, write the `link#<sub>` item back. Addresses on reserved test domains (`.test`, `example.com`…) are created with the invitation suppressed — see §8.5 |
 | `plateRecognizer` | S3 `ObjectCreated:Put` on `raw/*.jpg` and `raw/*.png` | **no** | 1024 MB · 30 s | Rekognition `DetectText` → a `PlateRecognized` event |
 | `plateIngest` | `pacs-events-dev` stream, filtered to `pk` prefix `plateread#` | yes | 512 MB · 30 s | Applies the event to Postgres: `plate_read` + usually `access_event` |
 
@@ -289,8 +292,12 @@ What each part is for, and the rule it enforces:
 - **`app.config.ts` is the only binding site.** `{ provide: ResidentRepository, useClass:
   HttpResidentRepository }` and eleven more like it. Swap a line and the whole application
   runs against fakes — which is exactly what the unit tests do. `LotRepository` is bound to
-  `SeedLotRepository` today because there is no layout endpoint yet; the day
-  `GET /lots/{id}/layout` lands, one line changes and nothing above the data ring notices.
+  `HttpLotRepository`: the levels come from `GET /lots` (only levels with at least one bay
+  in service), and each bay's code, type, status, holder and "is it mine" from
+  `GET /lots/{level}/occupancy`. Only the *geometry* is still generated, because there
+  are no geometry tables: the generator lays out as many places as the level has bays and
+  each place is given a real bay in code order. The day `GET /lots/{level}/layout` lands,
+  one line changes and nothing above the data ring notices.
 - **`domain/` holds repository *contracts as abstract classes*.** Abstract classes rather
   than interfaces because Angular's injector needs a runtime token, and an interface has
   none.
@@ -304,14 +311,26 @@ What each part is for, and the rule it enforces:
 - **Routes are lazy, one bundle per screen**, so a resident never downloads the admin
   screens.
 
-The navigation is built from the roles on the principal, in the order the work is done —
-because the order is not obvious and the menu is the only place it is written down. For an
-administrator: **Residents · Bays · Fairness & rules · Periods · Run the draw · The lot ·
-Gate · Reports.** "Fairness & rules" sits before "Periods" because it holds the rules
-editor, and the allocation duration there decides how long the period about to be created
-will run. For a resident: **My parking · The lot · History.** A `CAMERA` account gets one
-link, `Gate`, and nothing else: it is a device, and the only route the server will serve it
-is `POST /captures`.
+The navigation is a sidebar for every role (a drawer at 64 rem and narrower), built from the roles
+on the principal, in the order the work is done — because the order is not obvious and the
+menu is the only place it is written down. For an administrator it is grouped in three:
+
+| Group | Links |
+|---|---|
+| **Set up** | Residents · Bays · Fairness & rules |
+| **Run a period** | Periods · Run the draw · The lot |
+| **Watch and report** | Gate · Reports |
+
+"Fairness & rules" sits before "Periods" because it holds the rules editor, and the
+allocation duration there decides how long the period about to be created will run. For a
+resident: **My parking · The lot · History.** A `CAMERA` account gets one link, `Gate
+camera`, and nothing else: it is a device, and the only route the server will serve it is
+`POST /captures`. The gate page lists the browser's cameras when it opens and follows a
+camera being plugged in, unplugged or switched (`devicechange`).
+
+Navigation between screens uses the View Transitions API where the browser has it, and
+every table sits in a horizontal scroller so a phone at 390 px never scrolls the page
+sideways.
 
 Sign-in does not use the Cognito hosted page. `CognitoService` drives
 `amazon-cognito-identity-js` with `USER_SRP_AUTH` from the product's own form, so the
@@ -618,7 +637,8 @@ way it does:
 
 ### 6.2 Physical — what a period is made of
 
-From `apps/api/migrations/`, as the database actually stands after all five migrations.
+From `apps/api/migrations/`, as the database actually stands after all six migrations (the
+sixth, `absence-and-forfeit`, carries rules G and H — §7.3).
 Split in two because a draw has an input side and an output side, and they are read at
 different times: this is what exists before a draw runs.
 
@@ -661,6 +681,7 @@ erDiagram
     uuid resident_id FK
     timestamptz registered_at
     boolean withdrawn
+    timestamptz withdrawn_at "rule G — a withdrawal is a benefit end"
     string uq "UNIQUE cycle+resident"
   }
   allocation_config {
@@ -668,8 +689,7 @@ erDiagram
     int allocation_duration_months "default 3"
     int early_waiting_bias_hours "default 24"
     int wait_quantum_minutes "default 60"
-    int decline_grace_hours "default 48"
-    int absence_reset_months "nullable"
+    int absence_reset_periods "rule H, default 1, nullable"
     int total_bays "0 = all active bays"
     uuid changed_by FK
     timestamptz changed_at
@@ -883,6 +903,13 @@ erDiagram
   Fairness is derived from `spot_assignment` and `allocation_history`, which is the whole
   point — there is no stored score to drift.
 - **The registration table is `raffle_registration`**, not `cycle_registration`.
+- **`allocation_cycle.label` is unique**, and the default label is derived from the start
+  month and the duration (`2026-10+3M`), so two periods starting in the same month collide.
+  `POST /cycles` checks first and answers `400 VALIDATION_FAILED` with the field `label`.
+  Before that check the constraint surfaced as a bare 500 — and the 500's log line was empty,
+  because Powertools' logger reserves the key `message` and silently dropped the error text
+  written under it. The unhandled-error log now writes it as `detail`, with the Postgres
+  code and constraint when there is one.
 - **`allocation_cycle` has a `state` column**, not `status`.
 - **The run lock is a partial unique index**: `CREATE UNIQUE INDEX uq_single_running_run ON
   allocation_run ((state)) WHERE state = 'RUNNING'`. It needs no infrastructure, holds
@@ -1045,11 +1072,35 @@ ended. The way forward is `POST /cycles/{id}/close`, which ends the period in ef
 expires its assignments with `benefit_ended_at` set to **now** rather than to `valid_until`
 — because that is when the benefit actually stopped.
 
+**What a resident sees at each state.** The dashboard's "next period" is chosen by
+`nextPeriodFor`: an open period the resident can enter, or — if they entered one whose
+registration has since closed — that period, still shown as **Entered**, until the draw makes it ACTIVE. Without that second case an entrant saw the
+period vanish from their screen the moment the administrator closed registration, and
+reasonably concluded they had been dropped. Creating, opening or closing a period
+invalidates every cached dashboard (`dashboard:` prefix), so the change is visible on the
+next request rather than after the five-minute cache expires.
+
 ### 7.3 The draw
 
-**This is rules A–F, deterministic. It is not a weighted lottery.** Sections 12 and 13 of
-`docs/analisis.html` describe an earlier probabilistic model with accumulating scores; it
-was replaced and is not what runs.
+**This is rules A–H, deterministic. It is not a weighted lottery.** Sections 12 and 13 of
+`docs/analysis.html` describe an earlier probabilistic model with accumulating scores; it
+was replaced and is not what runs. §31 of the same document states all eight rules in one
+place, each with its arithmetic and a worked example.
+
+| Rule | In one line |
+|---|---|
+| A | The building sets the policy: the period length (`allocationDurationMonths`, default 3), the bias window (`earlyWaitingBiasHours`, default 24) and the rest are configuration, versioned, never literals |
+| B | You are in a draw because you entered it — a registration per period, not a standing list |
+| C | Waiting time is a subtraction, never a counter: the decision instant minus an anchor, which is the latest of participation start, the end of the last bay held, the last withdrawal (G) and the last absence reset (H) |
+| D | Ties on waiting time go to whoever has held fewest bays — a lifetime count that is never reset |
+| E | The total order: waiting time, then the lifetime count, then a seeded raffle token — the raffle settles only an exact tie |
+| F | Early-Waiting Bias: a resident whose bay ended within the window ranks below everyone still waiting, first-timers included |
+| G | **Letting a bay go costs what holding one costs.** Withdrawing an entry, declining a bay won, or giving a held bay back: +1 to the lifetime count and the clock restarts. No free window |
+| H | **Sitting periods out restarts the clock.** A resident who entered none of the last `absenceResetPeriods` periods (default 1) comes back at zero, anchored on the entry that brings them back. The lifetime count is untouched |
+
+G and H are both resets of the one anchor rule C defines, and the anchor is a `max`, so
+"which reset wins" is always "the latest one" — that is why they can be stated as separate
+rules without contradicting each other.
 
 Three keys, compared in order:
 
@@ -1068,7 +1119,7 @@ flowchart TB
   SK{"Skip?"}:::gate
   SKIP["SKIPPED, with a reason<br/>DEACTIVATED · ADMIN_ACCOUNT ·<br/>NOT_ELIGIBLE · HOLDS_ACTIVE_SPOT"]:::out
 
-  AN["anchor = max(participation_started_at,<br/>last benefit_ended_at that counted as served)"]:::step
+  AN["anchor = max(participation_started_at,<br/>last benefit_ended_at that counted as served,<br/>last withdrawn_at — rule G,<br/>absence reset — rule H)"]:::step
   RW["raw_wait_quanta = floor((decided_at − anchor) / quantum)<br/><i>clamped at 0: a clock that went backwards mints nothing</i>"]:::step
   BI{"Did a bay end within<br/>early_waiting_bias_hours<br/>of decided_at?"}:::gate
   SUB["effective = raw − bias_quanta<br/><i>drives this candidate strictly negative</i>"]:::step
@@ -1128,8 +1179,9 @@ The parts of that worth defending:
 The policy values behind all of it live in `allocation_config`, are administrator-editable
 and versioned, and appear as literals nowhere else in the codebase:
 `allocationDurationMonths` (3), `earlyWaitingBiasHours` (24), `waitQuantumMinutes` (60),
-`declineGraceHours` (48), `absenceResetMonths` (3, nullable), `totalBays` (0 = the whole
-active inventory). `configWarnings()` surfaces legal-but-surprising combinations rather than
+`absenceResetPeriods` (1, nullable — `null` turns rule H off), `totalBays` (0 = the whole
+active inventory). `declineGraceHours` no longer exists: rule G removed it, because a free
+decline would be the cheaper way to do exactly what withdrawing does. `configWarnings()` surfaces legal-but-surprising combinations rather than
 rejecting them — a bias wider than the allocation period would leave every previous holder
 permanently cooling and freeze the ordering, which is a plausible and catastrophic typo.
 
@@ -1142,9 +1194,15 @@ ranking query filters on a boolean and never reasons about reason codes:
 | `EXPIRED` | yes | The normal path; the benefit ended when the period did |
 | `RELEASED` | yes, from the moment it actually ended | A resident who gives a bay back on day 1 of 90 starts accruing on day 1. Parking days are traded for waiting days one for one; the brake on serial early release is the served count, which increments anyway |
 | `REVOKED` | yes | They held and consumed the bay and lost it through their own conduct. Not resetting would reward misconduct with priority |
-| `DECLINED` inside the grace window | **no** | Nothing was consumed. Penalising a free decline would make residents accept bays they cannot use, and an empty bay nobody may use is worse for everyone |
-| `DECLINED` after the window | yes | It is an early release |
+| `DECLINED` | yes, with no grace window (rule G) | Turning down a bay won is the same decision as withdrawing before the draw. A free decline would let the resident who took a bay off the board and handed it back pay less than the one who never registered |
+| Withdrawn registration | yes (rule G) | Not an assignment, so not in `terminationPolicy`: `raffle_registration.withdrawn_at` is read as a benefit end by the snapshot query, and counted in the lifetime count. Re-registering afterwards does not undo it |
 | `CANCELLED` with `make_whole` | **no** | Our mistake — admin error, building works — must not cost the resident their place in the queue |
+| `CANCELLED` without `make_whole` | yes | The administrator chose not to make the resident whole |
+
+The release and withdraw dialogs state that cost before the resident confirms. The
+resident dashboard reads the absence window exactly as the draw does, and when rule H has
+reset someone's clock it says so in words — a waiting time of zero with no explanation
+gets reported as a fault.
 
 ### 7.4 Removal: the same line, drawn three times
 
@@ -1453,21 +1511,40 @@ sequenceDiagram
 Measured end to end: the Cognito user exists about three seconds after the 201, and the
 subject link about 1.5 seconds after that.
 
+**The invitation email is the fragile step.** The pool sends through Cognito's default
+sender (`EmailSendingAccount: COGNITO_DEFAULT`), which allows **50 emails a day for the
+whole account**. On 2026-10-14 the smoke suites, which create residents at `@example.test`
+on every deploy, had spent that quota by mid-morning; every `AdminCreateUser` after that
+failed with `LimitExceededException: Exceeded daily email limit`, and a real resident
+created from the admin screen got no Cognito user, no email and no way to sign in. Two
+consequences are worth knowing:
+
+- Since pull request #22, `integrations` creates users on reserved, undeliverable domains
+  (RFC 2606 / 6761: `.test`, `.example`, `.invalid`, `.localhost`, `example.com/net/org`)
+  with `MessageAction: SUPPRESS`. Real addresses are invited as before.
+- The stream mapping retries a failed record three times and then **drops it** — there is
+  no on-failure destination. A resident whose provisioning failed stays in the register
+  with no Cognito user until somebody provisions them again (§14.2). A DLQ on the mapping
+  and a pool on its own SES identity are both on the gap list (§13).
+
 ---
 
 ## 9. The API surface
 
-Full contract: `packages/contracts/openapi.yaml`. Every route except `GET /health` requires
-a bearer token. Every `{…id}` parameter is a UUID and is rejected before it reaches a query.
+Full contract: `packages/contracts/openapi.yaml`. Every route except `GET /health`, `GET /docs`
+and `GET /openapi.yaml` requires a bearer token. Every parameter whose name ends in `id` is a UUID and is rejected before it
+reaches a query; `{level}` and `{plate}` carry codes and are named so they are not.
 
 | Method and path | Role | Purpose |
 |---|---|---|
 | `GET /health` | public | Liveness |
+| `GET /docs` · `GET /openapi.yaml` | public | Swagger UI over the contract, and the contract itself. **Authorize** takes a Cognito access token; calls made from the page act with that token's permissions |
 | `GET /me` | any | The principal, from the token |
 | `GET /me/dashboard` | resident | Aggregated status · cached 5 min |
 | `GET /me/history` | resident | Own history |
 | `POST /me/assignment/release` | resident | Give up a bay · promotes the waitlist head |
 | `GET /me/access-events` | resident | Own entries at the gate |
+| `GET /cycles/{id}/registrations` | admin | The period's entrants — what "Run the draw" lists, rather than every eligible resident |
 | `POST /cycles/{id}/registrations` | resident | Enter the draw · idempotent |
 | `DELETE /cycles/{id}/registrations/me` | any | Withdraw while registration is open |
 | `GET` · `POST /residents` | admin | The register (administrators excluded) · create + provision |
@@ -1480,9 +1557,11 @@ a bearer token. Every `{…id}` parameter is a UUID and is rejected before it re
 | `GET` · `POST /spots` | admin | Inventory |
 | `PATCH /spots/{id}` | admin | Edit or retire |
 | `DELETE /spots/{id}` | admin | Remove a bay never assigned |
+| `GET /lots` | resident · admin | The levels with at least one bay in service, and how many bays each has |
+| `GET /lots/{level}/occupancy` | resident · admin | Every bay on a level: code, type, status, `validUntil`, `isMine`. The holder's name and unit are shown to administrators only |
 | `GET` · `PATCH /config/allocation` | admin | The policy in force · new version |
 | `GET /config/allocation/history` | admin | Who changed what, and when |
-| `GET` · `POST /cycles` | admin · resident reads | Periods |
+| `GET` · `POST /cycles` | admin · resident reads | Periods · a duplicate label is `400 VALIDATION_FAILED` |
 | `PATCH` · `DELETE /cycles/{id}` | admin | Rename (the only editable field) · remove |
 | `POST /cycles/{id}/open-registration` | admin | DRAFT → REGISTRATION_OPEN |
 | `POST /cycles/{id}/close-registration` | admin | → REGISTRATION_CLOSED |
@@ -1693,10 +1772,10 @@ Five layers, each answering a question none of the others can.
 
 | Layer | Command | Size | What only it can prove |
 |---|---|---|---|
-| Unit, API | `pnpm --filter @pacs/api test` | **231 tests in 21 files**, about 3 s | The rules. The draw is run ten thousand times with seeded inputs to check it is *fair*, not merely that it runs; the whole plate threshold table is a set of table tests |
-| Unit, web | `pnpm test` in `apps/web` | **29 tests** | The boundary between DTO and model — the mappers, where a contract change actually bites |
+| Unit, API | `pnpm --filter @pacs/api test` | **267 tests in 23 files**, about 3 s | The rules. The draw is run ten thousand times with seeded inputs to check it is *fair*, not merely that it runs; the whole plate threshold table is a set of table tests |
+| Unit, web | `pnpm test` in `apps/web` | **69 tests in 10 files** | The boundary between DTO and model — the mappers, where a contract change actually bites |
 | End to end | `pnpm e2e` in `apps/web` | 2 specs, Playwright, Chromium | That the screens work, against the in-memory stub. One worker, because both servers hold a single in-memory building |
-| Post-deploy smoke | `node scripts/smoke.mjs` + `smoke-plates.mjs` | 31 checks + the plate pipeline | That the *deployed* system works. The only layer that can speak for Cognito, for Postgres, or for whether a frame put in an S3 bucket comes back out as a recognised plate |
+| Post-deploy smoke | `node scripts/smoke.mjs` + `smoke-plates.mjs` | 48 checks + the plate pipeline | That the *deployed* system works. The only layer that can speak for Cognito, for Postgres, or for whether a frame put in an S3 bucket comes back out as a recognised plate |
 | Integration, by hand | `tsx scripts/run-draw.ts` | 16 checks | The things only Postgres can prove: the run lock, the constraints, the privilege revocation |
 
 Properties of the suites worth keeping:
@@ -1718,6 +1797,14 @@ Properties of the suites worth keeping:
   token — the period deleted, the resident deactivated, the bay retired. Two inert rows per
   run remain, because removing those means reaching the database, and CodeBuild cannot
   (§5). `scripts/clean-smoke-data.mjs` clears them from an admitted machine.
+- **A smoke check must not depend on what the environment happens to hold.** The paging
+  check seeds two residents of its own so there are always two pages to walk, and the
+  draw check asserts whichever outcome the environment makes true (a draw, or the
+  `drawBlocker` refusal while a period is in effect) rather than assuming one. Both were
+  learned from red Verify stages on an environment somebody was using.
+- **Every resident the smoke suites create is on `@example.test`**, so `integrations`
+  creates their Cognito users without an invitation (§8.5). A smoke suite that invents an
+  address on a real domain will spend the day's email quota again.
 - **The draw is not run in the pipeline.** A committed run is a record, and
   `cycleRemovalBlocker` refuses to delete a period that has one, so running the draw there
   would make the test period permanent. The write path is covered by the unit tests instead.
@@ -1743,6 +1830,8 @@ them is a surprise waiting to be found.
 | Migrations | Not in the pipeline: CodeBuild cannot reach the database. Applied by hand before the deploy that needs them. The intended answer is a migration Lambda inside the VPC that the Deploy stage invokes |
 | TLS to the database | `rejectUnauthorized: false` — the RDS CA bundle is not shipped in the Lambda bundle. Encrypted, not verified. `verify-full` with the RDS global bundle is on the gap list |
 | Serverless Framework v4 | Needs a vendor access key in CI, read from Secrets Manager. Free for individuals and for organisations under the vendor's revenue threshold; confirm the licence before using it for a company account |
+| Email | Cognito's default sender: **50 emails a day for the account**, from `no-reply@verificationemail.com`, often filed as spam. Enough for a demonstration, not for a building. The way out is the pool's `EmailConfiguration` on a verified SES identity — and SES itself is in sandbox (below) |
+| Stream retries | `integrations` retries a failed record 3 times and then drops it; there is no on-failure destination |
 
 **Not built**
 
@@ -1752,8 +1841,13 @@ them is a surprise waiting to be found.
 - The plate crop writer. `plate_read.crop_key`, the `crops/` IAM statement and the lifecycle
   rule all exist, but nothing writes a crop: cropping needs a native image decoder in the
   bundle, and the review screen reads the full frame instead.
-- A capture client. `POST /captures` is the contract a gate camera would call; no camera
-  firmware or web capture page is written.
+- Camera firmware. The browser capture page exists — `/gate`, for a `CAMERA` account or an
+  administrator, using whatever camera the browser exposes — but nothing runs on a
+  dedicated gate device.
+- An on-failure destination (SQS DLQ) on the `integrations` stream mapping, so a failed
+  provisioning is kept rather than dropped after three retries.
+- Lot geometry. `GET /lots/{level}/layout` and the tables behind it; the plan draws real
+  bays on generated places (§3.3).
 - Threshold calibration. The procedure and the storage exist; the week of shadow operation
   that produces real numbers has not happened, so `0.85` and `0.55` are a labelled starting
   point.
@@ -1763,14 +1857,16 @@ them is a surprise waiting to be found.
   That is the one real design debt on the frontend. The plates module deliberately does not
   repeat the mistake — `access_event.reason` is a stable code and the wording lives in
   `features/plates/reason-label.ts`.
-- `absenceResetMonths` is stored and validated but nothing triggers it.
 - No k6 load suite.
 
 **Where the repository's own documents are out of date**
 
-- `README.md` reports 213 unit tests; there are 231. It also still says "`git init` — this
-  is not a repository yet" and lists CI as not built. Both have since happened.
-- `docs/analisis.html` sections 12 and 13 describe the probabilistic weighted lottery that
+- **The live user pool has drifted from `serverless.yml`.** The template declares
+  `AllowAdminCreateUserOnly: false`; the deployed pool reports `true` (checked with
+  `aws cognito-idp describe-user-pool` on 2026-10-14). Self sign-up is therefore off, which
+  is what the product wants — residents are created by an administrator — but the next
+  deploy that touches the pool will turn it back on. The template should say `true`.
+- `docs/analysis.html` sections 12 and 13 describe the probabilistic weighted lottery that
   rules A–F replaced. Section 10 still says `us-east-1`, private subnets, per-function IAM
   roles, a master password in SSM and the `*.handler.ts` filename convention — none of which
   is what runs.
@@ -1778,3 +1874,100 @@ them is a surprise waiting to be found.
   conclusion it draws is still right, but for the security group's reason, not the subnet's.
 - The doc comment at the top of `plates/domain/access-decision.ts` says the thresholds are
   read from `allocation_config`. They are read from `plate_config`.
+- `src/main/integrations.ts` logs a failed stream record as `{ message: ... }`. Powertools'
+  logger reserves `message`, so the error text is dropped and the line reads only "record
+  failed" — the same defect pull request #20 fixed in `api.ts`. It is why the email-quota
+  failure of §8.5 had to be read from CloudTrail rather than from the function's logs.
+
+---
+
+## 14. Operating the dev environment
+
+What to reach for when something is wrong. Every command assumes `us-east-2` and the
+`hotel` profile; the scripts in `apps/api/scripts/` read `DATABASE_URL` from
+`apps/api/.env` (gitignored) and must run from an address the database's security group
+admits (§5). Every script that deletes anything is a **dry run unless given `--apply`**,
+and prints what it would remove first.
+
+### 14.1 Where to look first
+
+| Symptom | Look at | Command |
+|---|---|---|
+| A screen shows an error with a trace id | The API's log, filtered by that id | `MSYS_NO_PATHCONV=1 aws logs filter-log-events --log-group-name /aws/lambda/pacs-api-dev-api --filter-pattern '"<traceId>"'` |
+| A 500 | The same log; the line carries `detail`, and the Postgres `code` and `constraint` when there is one | as above |
+| A new resident never got the invitation | CloudTrail, not the function log (§13) | `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AdminCreateUser` — look for `errorCode` |
+| The deploy failed | The CodePipeline execution, then the CodeBuild log of the failed stage | `aws codepipeline list-pipeline-executions --pipeline-name pacs-development --max-items 3` |
+| Verify failed | The `pacs-smoke-development` build log; every check prints its name and why it failed | — |
+| A plate never became a read | The S3 trigger, then `plateRecognizer`'s log, then the `plateIngest` iterator-age alarm | `aws s3api get-bucket-notification-configuration --bucket pacs-captures-dev` |
+| A change does not appear on the dashboard | The 5-minute dashboard cache. Writes that change it invalidate it; a hand-edit in the database does not | wait 5 minutes, or delete the `dashboard:` items in `pacs-cache-dev` |
+
+### 14.2 Known incidents and their fix
+
+**Cognito's daily email quota is spent** (`LimitExceededException: Exceeded daily email
+limit`). The quota resets about 24 hours after the sends that spent it. Residents created
+in the meantime have a register row and no Cognito user, because the stream record was
+dropped after three retries. Once the quota is back, provision each one again by replaying
+the event `integrations` consumes — it is idempotent, so a user who does exist is read,
+not recreated:
+
+```bash
+aws dynamodb put-item --table-name pacs-events-dev --item '{
+  "pk":      {"S": "evt#<a new uuid>"},
+  "type":    {"S": "ResidentCreated"},
+  "payload": {"M": {"residentId": {"S": "<resident uuid>"},
+                    "email":      {"S": "<their email>"},
+                    "fullName":   {"S": "<their name>"}}}
+}'
+```
+
+The stream delivers it, `integrations` creates the user, adds it to `RESIDENT`, sends the
+invitation and writes the `link#<sub>` item the API claims on first sign-in.
+
+**A route answers 400 to a valid code** (`B1`, a plate). The parameter is named like an id,
+so the router demanded a UUID (§3.2). Rename the parameter; do not loosen the router.
+
+**`POST /cycles` answers 400 on the label.** A period with that label exists. Give the new
+one a different label, or remove the old one if it never ran (§7.4).
+
+**Two periods ACTIVE at once.** Cannot happen any more (`drawBlocker`), but data from
+before it can still show it. Close the older one with `POST /cycles/{id}/close`.
+
+### 14.3 Operator scripts
+
+| Script | What it does |
+|---|---|
+| `clean-smoke-data.mjs [--apply]` | Removes what the smoke suites leave behind: their rows in the database and their accounts in the user pool. Matches only the patterns the suites generate |
+| `reset-periods.mjs [--apply]` | Removes **every** period and everything hanging off it — history, waitlist, assignments, runs, registrations — in one transaction. Residents, bays, vehicles and rules are untouched; everybody's waiting time starts again. The product refuses this on purpose (history is never reset); this is for clearing a development environment before a demonstration |
+| `keep-only-users.mjs --keep <prefix> [--apply]` | Removes every user whose email does not start with the prefix, from the database and the user pool. The prefix is required; it refuses if nobody would stay |
+| `set-admin-flag.mjs <email> [--clear] [--apply]` | Sets or clears `resident.is_admin`, the register-side half of separation of duties |
+| `create-gate-user.mjs <gate-id>` | Creates one `CAMERA` account for one lane. The password comes from `GATE_PASSWORD` and is never generated, printed or logged |
+| `apply-login-branding.mjs` | Applies the PACS branding to Cognito's managed login page |
+| `seed.ts` · `run-draw.ts` | 24 residents, 10 bays and an open period · a real draw against the real database, with its assertions (§10) |
+| `smoke.mjs` · `smoke-plates.mjs` | The Verify stage, runnable by hand against the deployed API |
+
+`reset-periods.mjs` and `keep-only-users.mjs` cannot be undone. Run the dry run, read the
+list, and only then add `--apply`. On a shared environment, say so in the team channel
+first: whoever is demonstrating on it loses their data too.
+
+---
+
+## 15. What changed since the first edition
+
+The first edition of this document was written on 2026-10-11 against pull request #8. These
+are the merged changes since, each one subject, in order. The sections above already
+describe the result; this list is for a reader who knew the earlier version.
+
+| PR | Change | Sections |
+|---|---|---|
+| #9 | Rules G and H: withdrawing counts as holding a bay; missing a period restarts the clock. `declineGraceHours` removed; `absenceResetPeriods` replaces `absenceResetMonths`. Migration 6 | §6.2, §7.3 |
+| #7, #10, #12 | The smoke suite asserts whichever draw outcome the environment makes true, and seeds its own residents for the paging check | §12 |
+| #11 | The `/docs/` spelling of the Swagger route was removed: an HTTP API route key cannot end in a slash, and CloudFormation rejected the stack. `/docs` remains | §9 |
+| #13, #14 | Real lot occupancy, `GET /lots/{level}/occupancy`; the parameter renamed from `{levelId}` because the router refused `B1` | §3.2, §3.3, §9 |
+| #15 | Creating, opening or closing a period invalidates every cached dashboard | §7.2 |
+| #16 | `GET /cycles/{id}/registrations`: "Run the draw" lists the period's entrants, not every eligible resident | §9 |
+| #17 | An entrant keeps seeing their period as **Entered** after registration closes, until the draw | §7.2 |
+| #18 | The lot plan draws the building's real bays, can be refreshed, and the draw's map opens on the right level | §3.3 |
+| #19 | The gate lists cameras when it opens and follows plug, unplug and switch | §3.3 |
+| #20 | A duplicate period label is a 400, and a 500 logs its reason | §6.5 |
+| #21 | `GET /lots` lists only levels with a bay in service; the draw's result can be refreshed | §9 |
+| #22 | No invitation email to reserved test addresses, after the smoke suites spent Cognito's daily quota | §8.5, §14.2 |

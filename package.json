@@ -2,7 +2,7 @@
   "name": "pacs",
   "version": "0.1.0",
   "private": true,
-  "description": "Parking Allocation Context System — monorepo. Spec of record: ../analisis.html rev 2.2",
+  "description": "Parking Allocation Context System — monorepo. Spec of record: ../analysis.html rev 2.2",
   "engines": {
     "node": ">=22"
   },
