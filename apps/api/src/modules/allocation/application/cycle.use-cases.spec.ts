@@ -352,7 +352,8 @@ describe('CycleUseCases dashboard cache', () => {
   it('drops cached dashboards when a period is created', async () => {
     const { cache, useCases } = await withCachedDashboard();
     const r = await useCases.create({
-      startsOn: new Date('2026-04-01T00:00:00Z'),
+      // July, not April: the fixture period is 2026-04+3M and labels are unique.
+      startsOn: new Date('2026-07-01T00:00:00Z'),
       registrationOpensAt: new Date('2026-03-01T00:00:00Z'),
       registrationClosesAt: new Date('2026-03-20T00:00:00Z'),
     });
@@ -373,5 +374,26 @@ describe('CycleUseCases.entrants', () => {
     const r = await useCases.entrants(CYCLE_ID);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.map((e) => e.id)).toEqual(registrations.registered);
+  });
+});
+
+/*
+ * Labels are unique in the table. A second period starting in the same month as an
+ * earlier one derived the same label, hit the constraint and answered a bare 500.
+ */
+describe('CycleUseCases.create label', () => {
+  it('refuses a label already in use, with a reason on the field', async () => {
+    const { useCases } = build(resident());
+    const r = await useCases.create({
+      label: cycle.label,
+      startsOn: new Date('2026-04-01T00:00:00Z'),
+      registrationOpensAt: new Date('2026-03-01T00:00:00Z'),
+      registrationClosesAt: new Date('2026-03-20T00:00:00Z'),
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('VALIDATION_FAILED');
+      expect(r.error.details?.[0]?.field).toBe('label');
+    }
   });
 });

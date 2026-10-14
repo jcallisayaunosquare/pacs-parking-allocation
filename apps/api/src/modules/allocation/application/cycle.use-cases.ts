@@ -108,8 +108,22 @@ export class CycleUseCases {
         { field: 'registrationClosesAt', issue: 'must be after registrationOpensAt' },
       ]);
     }
+    /*
+     * Labels are unique in the table. Without this check a second period starting in the
+     * same month as an earlier one got the same derived label (2026-10+3M), the insert hit
+     * the constraint, and the administrator saw a bare 500 with nothing to act on.
+     */
+    const label = (input.label ?? periodLabel(input.startsOn, allocationDurationMonths)).trim();
+    if ((await this.cycles.list()).some((c) => c.label === label)) {
+      return fail(
+        'VALIDATION_FAILED',
+        `A period named ${label} already exists. Give this one a different name.`,
+        [{ field: 'label', issue: 'already in use' }],
+      );
+    }
+
     const created = await this.cycles.create({
-      label: input.label ?? periodLabel(input.startsOn, allocationDurationMonths),
+      label,
       startsOn: input.startsOn,
       endsOn,
       registrationOpensAt: input.registrationOpensAt,
