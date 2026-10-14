@@ -1102,12 +1102,14 @@ export function buildRoutes(app: AppContainer): Route[] {
      */
     {
       method: 'GET',
-      path: '/lots/{levelId}/occupancy',
+      // `{level}`, not `{levelId}`: the router treats every param ending in "id" as a
+      // UUID and refuses anything else, which turned `B1` into a 400.
+      path: '/lots/{level}/occupancy',
       roles: ['RESIDENT', 'ADMIN'],
       handler: async (ctx) => {
-        const level = ctx.params.levelId ?? '';
+        const level = ctx.params.level ?? '';
         if (!/^[A-Za-z0-9-]{1,20}$/.test(level)) {
-          return badRequest([{ field: 'levelId', issue: 'must be a level code such as B1' }], ctx);
+          return badRequest([{ field: 'level', issue: 'must be a level code such as B1' }], ctx);
         }
         const admin = isAdmin(ctx.principal);
         const residentId = admin ? null : await resolveResidentId(ctx);

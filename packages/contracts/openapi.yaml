@@ -840,7 +840,7 @@ paths:
               schema: { $ref: '#/components/schemas/ParkingSpot' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /lots/{levelId}/occupancy:
+  /lots/{level}/occupancy:
     get:
       tags: [spots]
       summary: The lot plan's live state for one level
@@ -849,7 +849,7 @@ paths:
         assignments. Occupants are named to an administrator only; a resident learns one
         identity, their own, as `isMine`.
       parameters:
-        - name: levelId
+        - name: level
           in: path
           required: true
           schema: { type: string, pattern: '^[A-Za-z0-9-]{1,20}$', example: B1 }

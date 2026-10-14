@@ -17,7 +17,7 @@ interface BayOccupancyDto {
 }
 
 /**
- * The lot plan against `GET /lots/{levelId}/occupancy`: real status, real types, and the
+ * The lot plan against `GET /lots/{level}/occupancy`: real status, real types, and the
  * viewer's own bay as the server says it is.
  *
  * The geometry is still generated - there are no geometry tables yet - so this extends
