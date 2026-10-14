@@ -300,14 +300,32 @@ async function main() {
   check('paging a sorted list never repeats a resident',
     new Set(byName.seen).size === byName.seen.length,
     `${byName.seen.length} rows, ${new Set(byName.seen).size} distinct`);
-  check('the order holds across page boundaries',
-    byName.keys.every((k, i) => i === 0 || byName.keys[i - 1].localeCompare(k) <= 0),
-    byName.keys.slice(0, 3).join(' <= '));
+  /*
+   * The order is compared with the server's own, never with a sort done here. Postgres
+   * orders text by the database's collation (en_US.UTF-8, glibc), which ignores
+   * punctuation; Node's localeCompare is ICU, which does not. Both are legitimate, and
+   * they disagree: a resident named "jesus.callisaya@unosquare.com" sorts before "Jesus
+   * Salinas" in the database and after it here, and on 2026-10-14 that failed Verify
+   * with nothing wrong in the paging. What the check is for is the cursor: walking five
+   * at a time must give exactly the sequence one page gives.
+   */
+  const onePage = async (sort, dir) => {
+    const res = await call('GET', `/residents?${new URLSearchParams({ limit: '100', sort, dir })}`);
+    if (res.status !== 200) return { error: `status ${res.status}` };
+    if (res.json.nextCursor) return { error: 'more than 100 residents; cannot compare against one page' };
+    return { seen: res.json.items.map((r) => r.id) };
+  };
+  const sameSequence = (walked, whole) =>
+    !walked.error && !whole.error && walked.seen.join() === whole.seen.join();
+
+  const byNameWhole = await onePage('name', 'asc');
+  check('the order holds across page boundaries', sameSequence(byName, byNameWhole),
+    byNameWhole.error ?? `${byName.seen.length} paged vs ${byNameWhole.seen.length} in one page`);
 
   const desc = await walk('unit', 'desc');
-  check('descending order holds across page boundaries too',
-    !desc.error && desc.keys.every((k, i) => i === 0 || desc.keys[i - 1].localeCompare(k) >= 0),
-    desc.error ?? desc.keys.slice(0, 3).join(' >= '));
+  const descWhole = await onePage('unit', 'desc');
+  check('descending order holds across page boundaries too', sameSequence(desc, descWhole),
+    desc.error ?? descWhole.error ?? `${desc.seen.length} paged vs ${descWhole.seen.length} in one page`);
 
   const badSort = await call('GET', '/residents?sort=full_name;drop');
   check('an unknown sort key is rejected rather than reaching a query',
