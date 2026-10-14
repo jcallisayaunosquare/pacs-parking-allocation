@@ -146,6 +146,33 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   /cycles/{id}/registrations:
+    get:
+      tags: [cycles]
+      summary: Who is entered in this period's draw
+      description: >
+        The residents the run will draw from: registered and not withdrawn, eligible,
+        active, and not an administrator. Administrators only.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Entrants, by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, fullName, unitNumber, registeredAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        fullName: { type: string }
+                        unitNumber: { type: string }
+                        registeredAt: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [self]
       summary: UC-08 — enter the raffle. Idempotent.

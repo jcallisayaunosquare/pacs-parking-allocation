@@ -213,6 +213,26 @@ export class KyselyRegistrationRepository implements RegistrationRepository {
     return Number(r.numUpdatedRows ?? 0) > 0;
   }
 
+  async listEntrants(cycleId: string) {
+    const rows = await this.db
+      .selectFrom('raffle_registration as rr')
+      .innerJoin('resident as r', 'r.id', 'rr.resident_id')
+      .select([
+        'r.id as id',
+        'r.full_name as fullName',
+        'r.unit_number as unitNumber',
+        'rr.registered_at as registeredAt',
+      ])
+      .where('rr.cycle_id', '=', cycleId)
+      .where('rr.withdrawn', '=', false)
+      .where('r.deactivated_at', 'is', null)
+      .where('r.is_eligible', '=', true)
+      .where('r.is_admin', '=', false)
+      .orderBy('r.full_name')
+      .execute();
+    return rows.map((r) => ({ ...r, registeredAt: new Date(r.registeredAt) }));
+  }
+
   async isRegistered(cycleId: string, residentId: string): Promise<boolean> {
     const r = await this.db
       .selectFrom('raffle_registration')

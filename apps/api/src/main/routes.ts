@@ -580,6 +580,23 @@ export function buildRoutes(app: AppContainer): Route[] {
     },
 
     // ----------------------------------------------------- registration (self)
+    /*
+     * The entrants of a period, for the draw screen. It used to list every eligible
+     * resident and call that the register the draw would use - which it is not: only a
+     * resident who entered is drawn, and the screen showed people who never had.
+     */
+    {
+      method: 'GET',
+      path: '/cycles/{id}/registrations',
+      roles: ['ADMIN'],
+      handler: async (ctx) =>
+        respond(await app.cycles.entrants(ctx.params.id!), ctx, (items) =>
+          okJson(
+            { items: items.map((e) => ({ ...e, registeredAt: e.registeredAt.toISOString() })) },
+            ctx.traceId,
+          ),
+        ),
+    },
     {
       method: 'POST',
       path: '/cycles/{id}/registrations',

@@ -499,6 +499,19 @@ on('POST', '/me/assignment/release', (_q, _b, p) => {
   return ok({ promotedResidentId: promoted });
 });
 
+// The entrants of a period: residents who entered, eligible, not administrators.
+on('GET', '/cycles/{id}/registrations', (_q, _b, p, params) => {
+  const bad = needAdmin(p);
+  if (bad) return bad;
+  const set = registrations.get(params.id);
+  if (!set) return err(404, 'NOT_FOUND', 'No such period');
+  const items = residents
+    .filter((r) => set.has(r.id) && r.isEligible && !r.isAdmin)
+    .map((r) => ({ id: r.id, fullName: r.fullName, unitNumber: r.unitNumber, registeredAt: iso(now()) }))
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return ok({ items });
+});
+
 on('POST', '/cycles/{id}/registrations', (_q, _b, p, params) => {
   const bad = needResident(p);
   if (bad) return bad;

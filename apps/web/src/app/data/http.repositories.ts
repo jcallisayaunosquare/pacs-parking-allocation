@@ -25,7 +25,12 @@ import type {
   AllocationConfigVersion,
   AllocationConfigView,
 } from '../domain/models';
-import type { CaptureTicket, PlateReadListQuery, ResidentListQuery } from '../domain/repositories';
+import type {
+  CaptureTicket,
+  Entrant,
+  PlateReadListQuery,
+  ResidentListQuery,
+} from '../domain/repositories';
 import {
   CaptureRepository,
   CycleRepository,
@@ -404,6 +409,13 @@ export class HttpCycleRepository extends CycleRepository {
 
   async remove(id: string): Promise<void> {
     await firstValueFrom(this.http.delete<void>(`${API}/cycles/${id}`));
+  }
+
+  async entrants(id: string): Promise<readonly Entrant[]> {
+    const res = await firstValueFrom(
+      this.http.get<ItemsDto<Entrant>>(`${API}/cycles/${id}/registrations`),
+    );
+    return (res.items ?? []).map((e) => ({ id: e.id, fullName: e.fullName, unitNumber: e.unitNumber }));
   }
 
   async openRegistration(id: string): Promise<Cycle> {

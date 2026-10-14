@@ -197,6 +197,8 @@ export abstract class CycleRepository {
   abstract remove(id: string): Promise<void>;
   abstract openRegistration(id: string): Promise<Cycle>;
   abstract closeRegistration(id: string): Promise<Cycle>;
+  /** Who entered this period's draw - the pool the run draws from. Administrators only. */
+  abstract entrants(id: string): Promise<readonly Entrant[]>;
   /** Ends the period in effect, expiring its assignments. Not closeRegistration. */
   abstract closePeriod(id: string): Promise<Cycle>;
   /** UC-08 / withdrawal, for the resident's own registration. */
@@ -247,4 +249,10 @@ export abstract class AllocationConfigRepository {
   abstract patch(patch: AllocationConfigPatch): Promise<AllocationConfigView>;
   /** Every version, newest first, with who changed it and when. */
   abstract history(limit: number): Promise<readonly AllocationConfigVersion[]>;
+}
+/** A resident entered in a period's draw, as the draw screen reviews them. */
+export interface Entrant {
+  readonly id: string;
+  readonly fullName: string;
+  readonly unitNumber: string;
 }
