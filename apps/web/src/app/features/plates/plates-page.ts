@@ -183,131 +183,133 @@ import { toastFacadeErrors } from '../../shared/ui/toast';
       "
       (retry)="facade.refresh()"
     >
-      <table mat-table [dataSource]="facade.reads()">
-        <!--
-          The row number, as in every other register: a position, hidden from screen
-          readers because "1" through "25" read before each plate is noise.
-        -->
-        <ng-container matColumnDef="index">
-          <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
-          <td mat-cell *matCellDef="let r; let i = index" class="col-index" aria-hidden="true">
-            {{ facade.rowOffset() + i + 1 }}
-          </td>
-        </ng-container>
+      <div class="table-scroll">
+        <table mat-table [dataSource]="facade.reads()">
+          <!--
+            The row number, as in every other register: a position, hidden from screen
+            readers because "1" through "25" read before each plate is noise.
+          -->
+          <ng-container matColumnDef="index">
+            <th mat-header-cell *matHeaderCellDef class="col-index" aria-hidden="true">#</th>
+            <td mat-cell *matCellDef="let r; let i = index" class="col-index" aria-hidden="true">
+              {{ facade.rowOffset() + i + 1 }}
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="read">
-          <th mat-header-cell *matHeaderCellDef>Read as</th>
-          <td mat-cell *matCellDef="let r" data-label="Read as" class="code">
-            {{ r.rawText || '—' }}
-          </td>
-        </ng-container>
+          <ng-container matColumnDef="read">
+            <th mat-header-cell *matHeaderCellDef>Read as</th>
+            <td mat-cell *matCellDef="let r" data-label="Read as" class="code">
+              {{ r.rawText || '—' }}
+            </td>
+          </ng-container>
 
-        <ng-container matColumnDef="plate">
-          <th mat-header-cell *matHeaderCellDef>Canonical</th>
-          <td mat-cell *matCellDef="let r" data-label="Canonical" class="code">
-            {{ r.plate || '—' }}
-            @if (r.correctedPlate && r.correctedPlate !== r.plate) {
-              <span class="corrected num">corrected to {{ r.correctedPlate }}</span>
-            }
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="confidence">
-          <th mat-header-cell *matHeaderCellDef>Confidence</th>
-          <td mat-cell *matCellDef="let r" data-label="Confidence" class="num">
-            {{ pct(r.fused) }}
-            <!--
-              The fused value is what the threshold compared against, but the two inputs
-              are printed under it: a blurred frame the engine was sure about and a sharp
-              frame it was not are opposite faults, and the product alone hides which.
-            -->
-            <span class="sub num">{{ pct(r.confidence) }} ocr · {{ pct(r.quality) }} crop</span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="matched">
-          <th mat-header-cell *matHeaderCellDef>Matched</th>
-          <td mat-cell *matCellDef="let r" data-label="Matched">
-            @if (r.residentName) {
-              <span class="who">{{ r.residentName }}</span>
-              <span class="sub num">{{ r.spotCode || 'no bay' }}</span>
-            } @else {
-              <span class="dim">No match</span>
-            }
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="decision">
-          <th mat-header-cell *matHeaderCellDef>Decision</th>
-          <td mat-cell *matCellDef="let r" data-label="Decision">
-            @if (r.decision) {
-              <app-status-pill [label]="decisionLabel(r)" [tone]="tone(r)" />
-            } @else {
-              <!--
-                No pill, on purpose. A read below the floor produced no access event at
-                all, and painting it as a refusal would be the same lie in the interface
-                that a DENY row would be in the log.
-              -->
-              <span class="dim">Not an entry</span>
-            }
-            <span class="sub">{{ reason(r) }}</span>
-            @if (r.reviewedAt) {
-              <span class="sub">Reviewed</span>
-            }
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="when">
-          <th mat-header-cell *matHeaderCellDef>Captured</th>
-          <td mat-cell *matCellDef="let r" data-label="Captured" class="num">
-            {{ r.capturedAt | date: 'dd MMM HH:mm:ss' }}
-            <span class="sub num">{{ r.cameraId }}</span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="capture">
-          <th mat-header-cell *matHeaderCellDef>Capture</th>
-          <td mat-cell *matCellDef="let r" data-label="Capture" class="num ref">
-            {{ r.captureId }}
-          </td>
-        </ng-container>
-
-        <!--
-          The same ⋮ menu every register has. It used to be an outlined Review button on
-          some rows and the word "reviewed" on others, which made this the one table whose
-          last column changed shape row by row. The queue is still findable at a glance by
-          the mark down the left edge of a row that needs review.
-        -->
-        <ng-container matColumnDef="actions">
-          <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
-          <td mat-cell *matCellDef="let r" class="acts">
-            <button
-              matIconButton
-              type="button"
-              [disabled]="facade.busy()"
-              [matMenuTriggerFor]="rowMenu"
-              [attr.aria-label]="'Actions for the read ' + (r.plate || r.captureId)"
-            >
-              <mat-icon>more_vert</mat-icon>
-            </button>
-            <mat-menu #rowMenu="matMenu">
-              @if (r.needsReview) {
-                <button mat-menu-item type="button" (click)="review(r)">Review</button>
+          <ng-container matColumnDef="plate">
+            <th mat-header-cell *matHeaderCellDef>Canonical</th>
+            <td mat-cell *matCellDef="let r" data-label="Canonical" class="code">
+              {{ r.plate || '—' }}
+              @if (r.correctedPlate && r.correctedPlate !== r.plate) {
+                <span class="corrected num">corrected to {{ r.correctedPlate }}</span>
               }
-              <button mat-menu-item type="button" (click)="copyRef(r)">
-                Copy capture reference
-              </button>
-            </mat-menu>
-          </td>
-        </ng-container>
+            </td>
+          </ng-container>
 
-        <tr mat-header-row *matHeaderRowDef="columns"></tr>
-        <tr
-          mat-row
-          *matRowDef="let row; columns: columns"
-          [class.row--review]="row.needsReview"
-        ></tr>
-      </table>
+          <ng-container matColumnDef="confidence">
+            <th mat-header-cell *matHeaderCellDef>Confidence</th>
+            <td mat-cell *matCellDef="let r" data-label="Confidence" class="num">
+              {{ pct(r.fused) }}
+              <!--
+                The fused value is what the threshold compared against, but the two inputs
+                are printed under it: a blurred frame the engine was sure about and a sharp
+                frame it was not are opposite faults, and the product alone hides which.
+              -->
+              <span class="sub num">{{ pct(r.confidence) }} ocr · {{ pct(r.quality) }} crop</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="matched">
+            <th mat-header-cell *matHeaderCellDef>Matched</th>
+            <td mat-cell *matCellDef="let r" data-label="Matched">
+              @if (r.residentName) {
+                <span class="who">{{ r.residentName }}</span>
+                <span class="sub num">{{ r.spotCode || 'no bay' }}</span>
+              } @else {
+                <span class="dim">No match</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="decision">
+            <th mat-header-cell *matHeaderCellDef>Decision</th>
+            <td mat-cell *matCellDef="let r" data-label="Decision">
+              @if (r.decision) {
+                <app-status-pill [label]="decisionLabel(r)" [tone]="tone(r)" />
+              } @else {
+                <!--
+                  No pill, on purpose. A read below the floor produced no access event at
+                  all, and painting it as a refusal would be the same lie in the interface
+                  that a DENY row would be in the log.
+                -->
+                <span class="dim">Not an entry</span>
+              }
+              <span class="sub">{{ reason(r) }}</span>
+              @if (r.reviewedAt) {
+                <span class="sub">Reviewed</span>
+              }
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="when">
+            <th mat-header-cell *matHeaderCellDef>Captured</th>
+            <td mat-cell *matCellDef="let r" data-label="Captured" class="num">
+              {{ r.capturedAt | date: 'dd MMM HH:mm:ss' }}
+              <span class="sub num">{{ r.cameraId }}</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="capture">
+            <th mat-header-cell *matHeaderCellDef>Capture</th>
+            <td mat-cell *matCellDef="let r" data-label="Capture" class="num ref">
+              {{ r.captureId }}
+            </td>
+          </ng-container>
+
+          <!--
+            The same ⋮ menu every register has. It used to be an outlined Review button on
+            some rows and the word "reviewed" on others, which made this the one table whose
+            last column changed shape row by row. The queue is still findable at a glance by
+            the mark down the left edge of a row that needs review.
+          -->
+          <ng-container matColumnDef="actions">
+            <th mat-header-cell *matHeaderCellDef><span class="sr-only">Actions</span></th>
+            <td mat-cell *matCellDef="let r" class="acts">
+              <button
+                matIconButton
+                type="button"
+                [disabled]="facade.busy()"
+                [matMenuTriggerFor]="rowMenu"
+                [attr.aria-label]="'Actions for the read ' + (r.plate || r.captureId)"
+              >
+                <mat-icon>more_vert</mat-icon>
+              </button>
+              <mat-menu #rowMenu="matMenu">
+                @if (r.needsReview) {
+                  <button mat-menu-item type="button" (click)="review(r)">Review</button>
+                }
+                <button mat-menu-item type="button" (click)="copyRef(r)">
+                  Copy capture reference
+                </button>
+              </mat-menu>
+            </td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="columns"></tr>
+          <tr
+            mat-row
+            *matRowDef="let row; columns: columns"
+            [class.row--review]="row.needsReview"
+          ></tr>
+        </table>
+      </div>
 
       @if (facade.hasPrevious() || facade.hasNext()) {
         <app-pager

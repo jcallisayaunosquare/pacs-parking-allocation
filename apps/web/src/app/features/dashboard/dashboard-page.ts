@@ -25,23 +25,27 @@ import { ConfirmService } from '../../shared/ui/confirm';
   imports: [DatePipe, RouterLink, MatButtonModule, Bay, ViewStateHost, FairnessExplainer],
   template: `
     <!--
-      The subject of this screen is a number, not a greeting. So the heading is small,
-      top left, and states the period and whose board this is; the number underneath is
-      the thing at display scale. "Your parking" stays as the page's accessible heading,
-      because a screen reader does need a title even where the eye does not.
+      The same head every page in the product wears - title, one line beneath it - so a
+      resident's screens and an administrator's read as one product. The number below is
+      still the thing at display scale; the title only says where you are.
     -->
     <header class="head">
-      <h1 class="sr-only">Your parking</h1>
+      <div>
+        <h1 class="head__h">My parking</h1>
+        <p class="head__p">
+          @if (facade.resident(); as r) {
+            {{ r.fullName }}, unit {{ r.unit }}
+          }
+        </p>
+      </div>
       <p class="head__period">
         @if (facade.nextCycle(); as c) {
-          {{ c.label }} &middot; closes {{ c.registrationClosesAt | date: 'd MMM' }}
+          <span class="head__tag">{{ c.label }}</span>
+          closes {{ c.registrationClosesAt | date: 'd MMM' }}
         } @else {
           No period open
         }
       </p>
-      @if (facade.resident(); as r) {
-        <p class="head__who">{{ r.fullName }}, unit {{ r.unit }}</p>
-      }
     </header>
 
     @if (facade.mutationError(); as err) {
@@ -277,16 +281,37 @@ import { ConfirmService } from '../../shared/ui/confirm';
         gap: var(--sp-6);
       }
 
+      .head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--sp-3) var(--sp-5);
+        flex-wrap: wrap;
+        padding-bottom: var(--sp-4);
+        border-bottom: 1px solid var(--rule);
+      }
+      .head__h {
+        font-size: var(--t-head);
+      }
+      .head__p {
+        color: var(--steel-soft);
+        margin-top: var(--sp-1);
+      }
+
       /* Small, factual, and out of the way of the number. */
       .head__period {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-2);
         font-size: var(--t-small);
-        letter-spacing: 0.08em;
         color: var(--steel-soft);
       }
-      .head__who {
-        color: var(--steel-faint);
-        font-size: var(--t-small);
-        margin-top: var(--sp-1);
+      .head__tag {
+        padding: 2px var(--sp-2);
+        border: 1px solid var(--rule);
+        border-radius: 3px;
+        color: var(--ink-1);
+        letter-spacing: 0.06em;
       }
 
       .msg {

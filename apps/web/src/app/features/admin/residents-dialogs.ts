@@ -1,7 +1,6 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   DestroyRef,
   inject,
   signal,
@@ -11,13 +10,10 @@ import {
   applyWhen,
   email,
   form,
-  max,
   maxLength,
-  min,
   pattern,
   required,
   submit as submitForm,
-  validate,
 } from '@angular/forms/signals';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxModule } from '@angular/material/checkbox';
@@ -29,20 +25,21 @@ import {
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
-import { MatMenuModule } from '@angular/material/menu';
-import { MatTableModule } from '@angular/material/table';
-import { ResidentsFacade, VehiclesFacade } from '../../application/admin.facades';
-import { ConfirmService } from '../../shared/ui/confirm';
-import { ViewStateHost } from '../../shared/ui/view-state';
+import { ResidentsFacade } from '../../application/admin.facades';
 import type { Resident, Vehicle, VehicleDraft } from '../../domain/models';
 import { LoadingOverlay } from '../../shared/ui/loading-overlay';
+import { DOTTED_DOMAIN, LIMITS, NOT_BLANK, fieldError } from '../../shared/forms/limits';
 import {
-  DOTTED_DOMAIN,
-  LIMITS,
-  NOT_BLANK,
-  PLATE_CHARACTER,
-  fieldError,
-} from '../../shared/forms/limits';
+  VehicleFields,
+  blankVehicle,
+  fromVehicle,
+  isBlankVehicle,
+  newVehicleDraft,
+  toVehicleDraft,
+  vehicleRules,
+  type VehicleForm,
+  type VehicleFormDraft,
+} from './vehicle-fields';
 
 /**
  * The register's dialogs.
@@ -53,6 +50,24 @@ import {
  * closing first and showing the error behind would throw the work away.
  */
 
+/**
+ * Adding a resident, and their car if they have one, in one form.
+ *
+ * Two sections, each named and marked: the resident, which is required, then the car,
+ * which is not. One sitting rather than "add the resident, then find them, then open
+ * their vehicle": the car is registered with the person in almost every real case, and
+ * making it a second errand is how residents end up in the register with no plate and a
+ * gate that turns them away. It stays optional because some residents have no car.
+ *
+ * One button. The car is saved when anything was typed into its section, and then it
+ * must hold - a make with no plate is half a car, and the plate is what the gate reads.
+ * An untouched section is simply no car.
+ *
+ * The two writes are separate requests - there is no endpoint that creates both - so the
+ * dialog is honest about the gap between them: if the resident is created and the car is
+ * refused, it says the resident exists and offers to try the car again, against the
+ * resident already made, never by creating them twice.
+ */
 @Component({
   selector: 'app-add-resident-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -62,63 +77,110 @@ import {
     MatCheckboxModule,
     MatDialogModule,
     MatFormFieldModule,
+    MatIconModule,
     MatInputModule,
     LoadingOverlay,
+    VehicleFields,
   ],
   template: `
     <h2 mat-dialog-title>Add resident</h2>
 
     <app-loading-overlay [active]="facade.busy()" [veil]="false" label="Adding the resident">
       <mat-dialog-content class="form">
-        <mat-form-field appearance="outline">
-          <mat-label>Full name</mat-label>
-          <input matInput [formField]="f.fullName" autocomplete="off" cdkFocusInitial />
-          <mat-error>{{ err(f.fullName) }}</mat-error>
-        </mat-form-field>
-
-        <mat-form-field appearance="outline">
-          <mat-label>Unit</mat-label>
-          <input matInput [formField]="f.unitNumber" autocomplete="off" />
-          <mat-error>{{ err(f.unitNumber) }}</mat-error>
-        </mat-form-field>
-
-        <mat-form-field appearance="outline">
-          <mat-label>Email</mat-label>
-          <input
-            matInput
-            type="email"
-            inputmode="email"
-            [formField]="f.email"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <mat-hint>The invitation goes to this address.</mat-hint>
-          <mat-error>{{ err(f.email) }}</mat-error>
-        </mat-form-field>
-
-        <mat-checkbox [formField]="f.needsAccessibleSpot">Needs an accessible bay</mat-checkbox>
-
-        <p class="note">
-          The resident gets an invitation by email. Their sign-in links itself to this
-          record the first time they use it, which is when "Sign-in" turns to "Linked".
-        </p>
-
-        @if (facade.error(); as e) {
+        @if (createdId()) {
+          <!--
+            The resident exists; only the car is outstanding. Said first, so nobody adds
+            the same person twice to get the car in.
+          -->
+          <p class="msg msg--warn" role="alert">
+            {{ model().fullName }} was added. The vehicle was not saved{{
+              facade.error() ? ': ' + facade.error()!.message : '.'
+            }}
+          </p>
+        } @else if (facade.error(); as e) {
           <div class="msg msg--bad" role="alert">{{ e.message }}</div>
         }
+
+        <section class="sec" aria-labelledby="add-res-h" [attr.inert]="createdId() ? '' : null">
+          <h3 class="sec__h" id="add-res-h">
+            <mat-icon aria-hidden="true">person</mat-icon>
+            Resident
+          </h3>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Full name</mat-label>
+            <input matInput [formField]="f.fullName" autocomplete="off" cdkFocusInitial />
+            <mat-error>{{ err(f.fullName) }}</mat-error>
+          </mat-form-field>
+
+          <div class="pair">
+            <mat-form-field appearance="outline">
+              <mat-label>Unit</mat-label>
+              <input matInput [formField]="f.unitNumber" autocomplete="off" />
+              <mat-error>{{ err(f.unitNumber) }}</mat-error>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+              <mat-label>Email</mat-label>
+              <input
+                matInput
+                type="email"
+                inputmode="email"
+                [formField]="f.email"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <mat-error>{{ err(f.email) }}</mat-error>
+            </mat-form-field>
+          </div>
+
+          <mat-checkbox [formField]="f.needsAccessibleSpot">Needs an accessible bay</mat-checkbox>
+
+          <p class="note">
+            The resident gets an invitation at this email. Their sign-in links itself to
+            this record the first time they use it, which is when "Sign-in" turns to "Linked".
+          </p>
+        </section>
+
+        <section class="sec" aria-labelledby="add-veh-h">
+          <h3 class="sec__h" id="add-veh-h">
+            <mat-icon aria-hidden="true">directions_car</mat-icon>
+            Vehicle
+            <span class="sec__opt">Optional</span>
+          </h3>
+          <p class="note">
+            The plate is what the gate reads against. Leave this empty if the resident has
+            no car; anything typed here is saved with them.
+          </p>
+          <app-vehicle-fields [fields]="vf" />
+        </section>
       </mat-dialog-content>
     </app-loading-overlay>
 
     <mat-dialog-actions align="end">
-      <button matButton mat-dialog-close>Cancel</button>
-      <button
-        matButton="filled"
-        [disabled]="facade.busy()"
-        [class.is-pending]="facade.busy()"
-        (click)="submit()"
-      >
-        {{ facade.busy() ? 'Adding…' : 'Add resident' }}
-      </button>
+      @if (createdId()) {
+        <button matButton type="button" (click)="ref.close(true)">Close</button>
+        <button
+          matButton="filled"
+          type="button"
+          [disabled]="facade.busy()"
+          [class.is-pending]="facade.busy()"
+          (click)="saveVehicle()"
+        >
+          {{ facade.busy() ? 'Saving…' : 'Try the vehicle again' }}
+        </button>
+      } @else {
+        <button matButton mat-dialog-close>Cancel</button>
+        <button
+          matButton="filled"
+          type="button"
+          [disabled]="facade.busy()"
+          [class.is-pending]="facade.busy()"
+          (click)="submit()"
+        >
+          {{ facade.busy() ? 'Adding…' : 'Add resident' }}
+        </button>
+      }
     </mat-dialog-actions>
   `,
   styles: [
@@ -126,9 +188,63 @@ import {
       .form {
         display: flex;
         flex-direction: column;
+        gap: var(--sp-5);
+      }
+
+      /* A section is a heading and its fields; the next one is set off by a hairline. */
+      .sec {
+        display: flex;
+        flex-direction: column;
         gap: var(--sp-2);
       }
+      .sec + .sec {
+        padding-top: var(--sp-5);
+        border-top: 1px solid var(--rule);
+      }
+
+      /* The section's name, with the glyph of what it is about. */
+      .sec__h {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-2);
+        margin: 0 0 var(--sp-2);
+        font-size: var(--t-small);
+        font-variation-settings:
+          'wdth' 112,
+          'wght' 640;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-2);
+      }
+      .sec__h mat-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 20px;
+        color: var(--signal);
+      }
+      .sec__opt {
+        margin-left: var(--sp-1);
+        font-size: var(--t-fine);
+        font-variation-settings: 'wght' 460;
+        letter-spacing: 0.04em;
+        text-transform: none;
+        color: var(--ink-3);
+      }
+
+      /* Unit and email side by side: both short, and read together. */
+      .pair {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        gap: var(--sp-3);
+      }
+      @media (max-width: 34rem) {
+        .pair {
+          grid-template-columns: 1fr;
+        }
+      }
+
       .note {
+        margin: 0;
         font-size: var(--t-fine);
         color: var(--steel-faint);
       }
@@ -137,9 +253,10 @@ import {
 })
 export class AddResidentDialog {
   readonly facade = inject(ResidentsFacade);
-  private readonly ref = inject(MatDialogRef<AddResidentDialog>);
+  readonly ref = inject(MatDialogRef<AddResidentDialog>);
 
   readonly model = signal({ fullName: '', unitNumber: '', email: '', needsAccessibleSpot: false });
+  readonly vehicle = signal<VehicleForm>(blankVehicle());
 
   /**
    * The rules, in one place, with the API contract's numbers (see LIMITS).
@@ -166,7 +283,13 @@ export class AddResidentDialog {
     maxLength(p.email, LIMITS.email, { message: `Up to ${LIMITS.email} characters.` });
   });
 
+  /** The car's rules - checked only when something was typed into its section. */
+  readonly vf = form(this.vehicle, vehicleRules);
+
   readonly err = fieldError;
+
+  /** Set once the resident exists, so a retry adds the car to them instead of again. */
+  readonly createdId = signal<string | null>(null);
 
   constructor() {
     this.facade.dismissError();
@@ -178,18 +301,39 @@ export class AddResidentDialog {
    * Save is never disabled for being invalid. A greyed-out button explains nothing; a
    * press marks every field touched, which puts each reason under its field, and only a
    * valid form reaches the server.
+   *
+   * Both sections are checked before anything is sent, so a half-filled car is caught
+   * while the resident has not been created yet - not after, as a second error.
    */
   async submit(): Promise<void> {
-    await submitForm(this.f, async () => {
-      const v = this.model();
-      const created = await this.facade.create({
-        email: v.email.trim(),
-        fullName: v.fullName.trim(),
-        unitNumber: v.unitNumber.trim(),
-        needsAccessibleSpot: v.needsAccessibleSpot,
-      });
-      if (created) this.ref.close(true);
+    const withCar = !isBlankVehicle(this.vehicle());
+    const residentOk = await submitForm(this.f, async () => undefined);
+    const carOk = withCar ? await submitForm(this.vf, async () => undefined) : true;
+    if (!residentOk || !carOk) return;
+
+    const v = this.model();
+    const created = await this.facade.create({
+      email: v.email.trim(),
+      fullName: v.fullName.trim(),
+      unitNumber: v.unitNumber.trim(),
+      needsAccessibleSpot: v.needsAccessibleSpot,
     });
+    if (!created) return;
+
+    if (!withCar) {
+      this.ref.close(true);
+      return;
+    }
+    this.createdId.set(created.id);
+    await this.saveVehicle();
+  }
+
+  /** The car, against the resident already created. Also the retry. */
+  async saveVehicle(): Promise<void> {
+    const id = this.createdId();
+    if (!id) return;
+    const saved = await this.facade.addVehicle(id, newVehicleDraft(this.vehicle()));
+    if (saved) this.ref.close(true);
   }
 }
 
@@ -467,461 +611,198 @@ export class EligibilityDialog {
   }
 }
 
+/** What the vehicle dialogs are opened with: the resident, and their car if they have one. */
+export interface VehicleDialogData {
+  readonly resident: Resident;
+  readonly vehicle: Vehicle | null;
+}
+
 /**
- * The vehicle register for one resident: the cars they may bring into the building.
+ * Adding a car to a resident, or changing the one they have.
  *
- * It is a dialog on the register rather than a screen of its own, because that is where
- * the question is asked - an administrator looking at a row wants to know, and change,
- * what that person drives. The facade is provided here, so the state is this resident's
- * vehicles and nothing survives the dialog closing; a root-scoped facade would show the
- * previous resident's cars for a frame, which reads as the wrong person's car.
- *
- * The plate carries the screen, so it is set in the stencil treatment and in tabular
- * figures: plates are read character by character against something a camera produced,
- * and a column of them has to line up. The canonical form is printed beneath the typed
- * one whenever the two differ - that is the string the gate actually matches, and
- * "the camera says my plate is not registered" has no other answer.
- *
- * Photos are object keys, listed as text. There is no upload here and the dialog does
- * not pretend there is: an S3 presigned PUT per photo is the intended follow-up, and a
- * file picker that silently dropped the file would be worse than its absence.
+ * One dialog for both, chosen by whether a car came in: the register's ⋮ menu reads
+ * "Add vehicle" or "Edit vehicle" from the same fact, so the words and the form agree.
+ * Editing starts from the car on record - every field filled in - and sends only what
+ * changed, because the server refuses an empty patch and an unchanged field would still
+ * be logged as edited.
  */
 @Component({
-  selector: 'app-vehicles-dialog',
+  selector: 'app-vehicle-form-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  providers: [VehiclesFacade],
-  imports: [
-    FormField,
-    MatButtonModule,
-    MatDialogModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-    MatMenuModule,
-    MatTableModule,
-    ViewStateHost,
-  ],
+  imports: [MatButtonModule, MatDialogModule, LoadingOverlay, VehicleFields],
   template: `
-    <h2 mat-dialog-title>Vehicles &mdash; {{ resident.fullName }}</h2>
+    <h2 mat-dialog-title>
+      {{ data.vehicle ? 'Edit vehicle' : 'Add vehicle' }} &mdash; {{ data.resident.fullName }}
+    </h2>
 
-    <mat-dialog-content>
-      <p class="intro">
-        The plates registered to unit {{ resident.unitNumber }}. The gate matches a plate
-        it reads against this list, so a car that is not here is a car that is not let in.
-      </p>
-
-      <app-view-state
-        [state]="facade.state()"
-        [skeletonCount]="3"
-        [busy]="facade.busy()"
-        loadingLabel="Loading vehicles"
-        busyLabel="Saving the vehicle"
-        emptyTitle="No vehicles registered"
-        emptyBody="Add the plate of each car this resident brings into the building."
-        (retry)="facade.refresh()"
-      >
-        <table mat-table [dataSource]="facade.vehicles()">
-          <ng-container matColumnDef="plate">
-            <th mat-header-cell *matHeaderCellDef scope="col">Plate</th>
-            <td mat-cell *matCellDef="let v" data-label="Plate">
-              <span class="code stencil">{{ v.plateDisplay }}</span>
-              @if (v.plate !== v.plateDisplay) {
-                <span class="plate__canon">
-                  matched as <span class="mono">{{ v.plate }}</span>
-                </span>
-              }
-            </td>
-          </ng-container>
-
-          <ng-container matColumnDef="vehicle">
-            <th mat-header-cell *matHeaderCellDef scope="col">Vehicle</th>
-            <td mat-cell *matCellDef="let v" data-label="Vehicle">
-              @if (describe(v)) {
-                {{ describe(v) }}
-              } @else {
-                <span class="dim">{{ dash }}</span>
-              }
-            </td>
-          </ng-container>
-
-          <ng-container matColumnDef="colour">
-            <th mat-header-cell *matHeaderCellDef scope="col">Colour</th>
-            <td mat-cell *matCellDef="let v" data-label="Colour">
-              {{ v.colour || dash }}
-            </td>
-          </ng-container>
-
-          <ng-container matColumnDef="photos">
-            <th mat-header-cell *matHeaderCellDef scope="col">Photos</th>
-            <td mat-cell *matCellDef="let v" data-label="Photos">
-              @if (v.photos.length) {
-                {{ v.photos.length }}
-              } @else {
-                <span class="dim">{{ dash }}</span>
-              }
-            </td>
-          </ng-container>
-
-          <ng-container matColumnDef="actions">
-            <th mat-header-cell *matHeaderCellDef scope="col">
-              <span class="sr-only">Actions</span>
-            </th>
-            <td mat-cell *matCellDef="let v" class="acts">
-              <button
-                matIconButton
-                type="button"
-                [disabled]="facade.busy()"
-                [matMenuTriggerFor]="vehicleMenu"
-                [attr.aria-label]="'Actions for ' + v.plateDisplay"
-              >
-                <mat-icon>more_vert</mat-icon>
-              </button>
-              <mat-menu #vehicleMenu="matMenu">
-                <button mat-menu-item type="button" (click)="startEdit(v)">Edit</button>
-                <button mat-menu-item type="button" class="danger" (click)="remove(v)">
-                  Remove
-                </button>
-              </mat-menu>
-            </td>
-          </ng-container>
-
-          <tr mat-header-row *matHeaderRowDef="columns"></tr>
-          <tr mat-row *matRowDef="let row; columns: columns"></tr>
-        </table>
-      </app-view-state>
-
-      <!--
-        One form, two jobs. A separate edit dialog on top of this one would stack two
-        modals and lose the list behind them; editing in place keeps the register visible
-        and the whole thing reachable with Tab.
-      -->
-      <section class="form" [attr.aria-label]="editing() ? 'Edit vehicle' : 'Add a vehicle'">
-        <h3 class="form__h">
-          @if (editing(); as v) {
-            Edit {{ v.plateDisplay }}
-          } @else {
-            Add a vehicle
-          }
-        </h3>
-
-        <div class="grid">
-          <mat-form-field appearance="outline" subscriptSizing="dynamic" class="grid__plate">
-            <mat-label>Plate</mat-label>
-            <input
-              matInput
-              class="stencil"
-              [formField]="f.plate"
-              autocomplete="off"
-              spellcheck="false"
-              aria-describedby="veh-plate-hint"
-            />
-            <mat-hint id="veh-plate-hint">
-              Type it as it is painted. Spaces and dashes are kept for the register and
-              ignored when the gate matches it.
-            </mat-hint>
-            <mat-error>{{ err(f.plate) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Make</mat-label>
-            <input matInput [formField]="f.make" autocomplete="off" />
-            <mat-error>{{ err(f.make) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Model</mat-label>
-            <input matInput [formField]="f.model" autocomplete="off" />
-            <mat-error>{{ err(f.model) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Year</mat-label>
-            <input matInput type="number" inputmode="numeric" [formField]="f.year" />
-            <mat-error>{{ err(f.year) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Colour</mat-label>
-            <input matInput [formField]="f.colour" autocomplete="off" />
-            <mat-error>{{ err(f.colour) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline" subscriptSizing="dynamic" class="grid__wide">
-            <mat-label>Photo keys</mat-label>
-            <input
-              matInput
-              [formField]="f.photos"
-              autocomplete="off"
-              spellcheck="false"
-              aria-describedby="veh-photos-hint"
-            />
-            <mat-hint id="veh-photos-hint">
-              One storage key or URL per entry, comma separated. Uploading a file from
-              here is the next piece of work; this field only records where a photo is.
-            </mat-hint>
-            <mat-error>{{ err(f.photos) }}</mat-error>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline" class="grid__wide">
-            <mat-label>Notes</mat-label>
-            <textarea matInput rows="2" [formField]="f.notes"></textarea>
-            <mat-error>{{ err(f.notes) }}</mat-error>
-          </mat-form-field>
-        </div>
+    <app-loading-overlay [active]="facade.busy()" [veil]="false" label="Saving the vehicle">
+      <mat-dialog-content class="form">
+        <app-vehicle-fields [fields]="vf" />
 
         @if (facade.error(); as e) {
-          <div class="msg msg--bad" role="alert">
-            {{ e.message }}
-            @if (e.details?.length) {
-              <ul class="msg__list">
-                @for (d of e.details; track d.field) {
-                  <li>{{ d.field }}: {{ d.issue }}</li>
-                }
-              </ul>
-            }
-          </div>
+          <div class="msg msg--bad" role="alert">{{ e.message }}</div>
         }
-
-        <div class="form__row">
-          <button
-            matButton="filled"
-            type="button"
-            [disabled]="facade.busy()"
-            [class.is-pending]="facade.busy()"
-            (click)="submit()"
-          >
-            @if (facade.busy()) {
-              Saving…
-            } @else if (editing()) {
-              Save changes
-            } @else {
-              Add vehicle
-            }
-          </button>
-          @if (editing()) {
-            <button matButton type="button" (click)="cancelEdit()">Cancel edit</button>
-          }
-        </div>
-      </section>
-    </mat-dialog-content>
+      </mat-dialog-content>
+    </app-loading-overlay>
 
     <mat-dialog-actions align="end">
-      <button matButton mat-dialog-close cdkFocusInitial>Done</button>
+      <button matButton mat-dialog-close>Cancel</button>
+      <button
+        matButton="filled"
+        type="button"
+        [disabled]="(data.vehicle !== null && !dirty()) || facade.busy()"
+        [class.is-pending]="facade.busy()"
+        (click)="submit()"
+      >
+        @if (facade.busy()) {
+          Saving…
+        } @else {
+          {{ data.vehicle ? 'Save changes' : 'Add vehicle' }}
+        }
+      </button>
     </mat-dialog-actions>
   `,
   styles: [
     `
-      .intro {
-        color: var(--steel-soft);
-        font-size: var(--t-small);
-        margin-bottom: var(--sp-4);
-      }
-
-      /* The table and its shared cells are styles.scss's; the canonical line is this
-         list's own. */
-      .plate__canon {
-        display: block;
-        font-size: var(--t-fine);
-        color: var(--steel-faint);
-        margin-top: var(--sp-1);
-      }
-      .mono {
-        font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
-        font-variant-numeric: tabular-nums;
-      }
-      /* A rule, not a panel: the direction contract has no cards and no shadows. */
       .form {
-        margin-top: var(--sp-5);
-        padding-top: var(--sp-4);
-        border-top: 1px solid var(--rule);
         display: flex;
         flex-direction: column;
         gap: var(--sp-3);
-      }
-      .form__h {
-        font-size: var(--t-small);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--steel-soft);
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: var(--sp-2) var(--sp-3);
-      }
-      .grid__plate,
-      .grid__wide {
-        grid-column: 1 / -1;
-      }
-      .form__row {
-        display: flex;
-        gap: var(--sp-2);
-        align-items: center;
-      }
-      .msg__list {
-        margin: var(--sp-2) 0 0;
-        padding-left: var(--sp-4);
-        font-size: var(--t-fine);
-      }
-
-      @media (max-width: 34rem) {
-        .grid {
-          grid-template-columns: minmax(0, 1fr);
-        }
+        padding-top: var(--sp-2);
       }
     `,
   ],
 })
-export class VehiclesDialog {
-  readonly facade = inject(VehiclesFacade);
-  private readonly confirm = inject(ConfirmService);
-  readonly resident = inject<Resident>(MAT_DIALOG_DATA);
+export class VehicleFormDialog {
+  readonly facade = inject(ResidentsFacade);
+  private readonly ref = inject(MatDialogRef<VehicleFormDialog>);
+  readonly data = inject<VehicleDialogData>(MAT_DIALOG_DATA);
 
-  readonly columns = ['plate', 'vehicle', 'colour', 'photos', 'actions'];
-
-  /** Kept as an escape so the source file stays ASCII whatever opens it. */
-  readonly dash = '—';
-
-  /** Next year's models are on sale this year; the server enforces the same bound. */
-  readonly maxYear = new Date().getFullYear() + 1;
-
-  private readonly _editing = signal<Vehicle | null>(null);
-  readonly editing = this._editing.asReadonly();
-
-  readonly model = signal<VehicleForm>(blankVehicleForm());
-
-  /**
-   * The contract's limits, field by field. The plate is the only required field, and
-   * only in the sense of containing something a plate is made of: the canonical rule and
-   * the uniqueness check live on the server, which is the one place that can know both.
-   */
-  readonly f = form(this.model, (p) => {
-    required(p.plate, { message: 'Enter the plate, as it is painted.' });
-    pattern(p.plate, PLATE_CHARACTER, { message: 'A plate needs at least one letter or digit.' });
-    maxLength(p.plate, LIMITS.plate, { message: `Up to ${LIMITS.plate} characters.` });
-    maxLength(p.make, LIMITS.make, { message: `Up to ${LIMITS.make} characters.` });
-    maxLength(p.model, LIMITS.model, { message: `Up to ${LIMITS.model} characters.` });
-    min(p.year, LIMITS.minYear, { message: `A model year from ${LIMITS.minYear}.` });
-    max(p.year, this.maxYear, { message: `A model year up to ${this.maxYear}.` });
-    maxLength(p.colour, LIMITS.colour, { message: `Up to ${LIMITS.colour} characters.` });
-    maxLength(p.notes, LIMITS.notes, { message: `Up to ${LIMITS.notes} characters.` });
-    validate(p.photos, ({ value }) =>
-      splitPhotos(value()).some((k) => k.length > LIMITS.photoKey)
-        ? { kind: 'maxLength', message: `Each key up to ${LIMITS.photoKey} characters.` }
-        : null,
-    );
-  });
-
-  readonly err = fieldError;
+  /** Pre-filled from the car on record when editing, so nothing is retyped. */
+  readonly vehicle = signal<VehicleForm>(
+    this.data.vehicle ? fromVehicle(this.data.vehicle) : blankVehicle(),
+  );
+  readonly vf = form(this.vehicle, vehicleRules);
 
   constructor() {
-    this.facade.for(this.resident.id);
     this.facade.dismissError();
+    inject(DestroyRef).onDestroy(() => this.facade.dismissError());
   }
 
-  /** "Toyota Corolla (2019)", from whichever of the three the register actually has. */
-  describe(v: Vehicle): string {
-    const name = [v.make, v.model].filter(Boolean).join(' ');
-    if (name && v.year) return `${name} (${v.year})`;
-    if (name) return name;
-    return v.year ? String(v.year) : '';
+  /**
+   * The fields that differ from the car on record, as a patch - only the five this form
+   * edits, so notes and photos already on the car are never sent and never wiped.
+   */
+  private patch(): Partial<VehicleDraft> {
+    const after = toVehicleDraft(this.vehicle());
+    if (!this.data.vehicle) return after;
+    const before = toVehicleDraft(fromVehicle(this.data.vehicle));
+    const out: Partial<VehicleDraft> = {};
+    for (const k of Object.keys(after) as (keyof VehicleFormDraft)[]) {
+      if (after[k] !== before[k]) (out as Record<string, unknown>)[k] = after[k];
+    }
+    return out;
   }
 
-  startEdit(v: Vehicle): void {
-    this._editing.set(v);
-    this.facade.dismissError();
-    this.f().reset({
-      plate: v.plateDisplay,
-      make: v.make ?? '',
-      model: v.model ?? '',
-      year: v.year,
-      colour: v.colour ?? '',
-      notes: v.notes ?? '',
-      photos: v.photos.join(', '),
-    });
-  }
-
-  cancelEdit(): void {
-    this._editing.set(null);
-    this.facade.dismissError();
-    /*
-     * Values and touched state go back together. Emptied, the required plate is invalid
-     * again, and left touched from the entry that just succeeded it would paint the field
-     * red the moment a vehicle was added - an empty form nobody has filled in yet is not
-     * an error.
-     */
-    this.f().reset(blankVehicleForm());
+  dirty(): boolean {
+    return Object.keys(this.patch()).length > 0;
   }
 
   async submit(): Promise<void> {
-    await submitForm(this.f, async () => {
-      const draft = this.draft();
-      const editing = this._editing();
-      const done = editing
-        ? await this.facade.update(editing.id, draft)
-        : await this.facade.add(draft);
-      // The form only clears once the server has accepted it. A rejected plate has to
-      // stay on screen with the typed value intact, or the administrator retypes it blind.
-      if (done) this.cancelEdit();
+    await submitForm(this.vf, async () => {
+      const r = this.data.resident;
+      const saved = this.data.vehicle
+        ? await this.facade.updateVehicle(r.id, this.data.vehicle.id, this.patch())
+        : await this.facade.addVehicle(r.id, newVehicleDraft(this.vehicle()));
+      if (saved) this.ref.close(true);
     });
-  }
-
-  async remove(v: Vehicle): Promise<void> {
-    const ok = await this.confirm.ask({
-      title: `Remove ${v.plateDisplay}?`,
-      body:
-        'The car comes off this resident’s register and the gate stops recognising ' +
-        'it. The record is kept, so a reading from before today still resolves to this ' +
-        'car, and the plate itself is free for whoever registers it next.',
-      confirmLabel: 'Remove it',
-      cancelLabel: 'Keep it',
-      danger: true,
-    });
-    if (!ok) return;
-    if (this._editing()?.id === v.id) this.cancelEdit();
-    await this.facade.remove(v.id);
-  }
-
-  private draft(): VehicleDraft {
-    const t = (s: string): string | null => (s.trim().length > 0 ? s.trim() : null);
-    const v = this.model();
-    return {
-      plate: v.plate.trim(),
-      make: t(v.make),
-      model: t(v.model),
-      // 0 is not a model year, and an emptied number input must not become one.
-      year: v.year ? Number(v.year) : null,
-      colour: t(v.colour),
-      notes: t(v.notes),
-      photos: splitPhotos(v.photos),
-    };
   }
 }
 
-/** The photo keys field, as the list the API takes: comma or newline separated. */
-const splitPhotos = (raw: string): string[] =>
-  raw
-    .split(/[\n,]/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
+/**
+ * A resident's car, read-only - what the car icon in the register opens.
+ *
+ * The plate in the stencil treatment, because it is the string the gate matches; the
+ * canonical form beneath it whenever it differs, because "the camera says my plate is
+ * not registered" has no other answer. Editing is one button away, and goes through the
+ * ⋮ menu's own dialog so there is one way to change a car, not two.
+ */
+@Component({
+  selector: 'app-vehicle-detail-dialog',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [MatButtonModule, MatDialogModule, MatIconModule],
+  template: `
+    <h2 mat-dialog-title>Vehicle &mdash; {{ data.resident.fullName }}</h2>
 
-interface VehicleForm {
-  plate: string;
-  make: string;
-  model: string;
-  year: number | null;
-  colour: string;
-  notes: string;
-  /** Typed as one field, split on commas and newlines. See the dialog's note on uploads. */
-  photos: string;
+    <mat-dialog-content>
+      @if (data.vehicle; as v) {
+        <p class="plate stencil">{{ v.plateDisplay }}</p>
+        @if (v.plate !== v.plateDisplay) {
+          <p class="canon">The gate matches it as <span class="code">{{ v.plate }}</span></p>
+        }
+        <dl class="facts">
+          <dt>Make</dt>
+          <dd>{{ v.make || dash }}</dd>
+          <dt>Model</dt>
+          <dd>{{ v.model || dash }}</dd>
+          <dt>Year</dt>
+          <dd class="num">{{ v.year ?? dash }}</dd>
+          <dt>Colour</dt>
+          <dd>{{ v.colour || dash }}</dd>
+          <dt>Unit</dt>
+          <dd>{{ data.resident.unitNumber }}</dd>
+        </dl>
+      }
+    </mat-dialog-content>
+
+    <mat-dialog-actions align="end">
+      <button matButton mat-dialog-close>Close</button>
+      <button matButton="outlined" type="button" (click)="edit()">
+        <mat-icon aria-hidden="true">edit</mat-icon>
+        Edit vehicle
+      </button>
+    </mat-dialog-actions>
+  `,
+  styles: [
+    `
+      .plate {
+        margin: var(--sp-2) 0 0;
+        font-size: var(--t-head);
+        font-variant-numeric: tabular-nums;
+      }
+      .canon {
+        margin: var(--sp-1) 0 0;
+        font-size: var(--t-fine);
+        color: var(--steel-faint);
+      }
+      .facts {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: var(--sp-2) var(--sp-5);
+        margin: var(--sp-5) 0 0;
+        padding-top: var(--sp-4);
+        border-top: 1px solid var(--rule-soft);
+        font-size: var(--t-small);
+      }
+      .facts dt {
+        color: var(--steel-faint);
+      }
+      .facts dd {
+        margin: 0;
+      }
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+    `,
+  ],
+})
+export class VehicleDetailDialog {
+  private readonly ref = inject(MatDialogRef<VehicleDetailDialog>);
+  readonly data = inject<VehicleDialogData>(MAT_DIALOG_DATA);
+  readonly dash = '—';
+
+  /** Closes saying "edit", and the register opens the edit dialog on this car. */
+  edit(): void {
+    this.ref.close('edit');
+  }
 }
-
-const blankVehicleForm = (): VehicleForm => ({
-  plate: '',
-  make: '',
-  model: '',
-  year: null,
-  colour: '',
-  notes: '',
-  photos: '',
-});

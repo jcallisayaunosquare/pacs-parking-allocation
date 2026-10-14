@@ -50,16 +50,15 @@ import { ToastHost } from './shared/ui/toast';
   template: `
     <a class="skip" href="#main">Skip to content</a>
 
-    @if (auth.authenticated()) {
+    @if (chrome()) {
       <header class="bar">
         <div class="bar__inner">
           <div class="bar__start">
             @if (sideNav() && narrow()) {
               <!--
-                The hamburger exists only where the sidebar cannot: below 64rem the eight
-                sections would wrap into two or three rows above every page. On a wide
-                screen the navigation stays on the left, always visible, because an
-                administrator works in this product and should not pay a click to move.
+                The hamburger exists only where the sidebar cannot: below 64rem the
+                sections would wrap into rows above every page. On a wide screen the
+                navigation stays on the left, always visible, for every role.
               -->
               <button
                 #burger
@@ -127,30 +126,6 @@ import { ToastHost } from './shared/ui/toast';
             </button>
           </mat-menu>
         </div>
-
-        <!--
-          A resident has three sections and a gate device has one: a row under the bar
-          carries them without wrapping, and a sidebar would take width from the board,
-          which the direction contract gives the whole viewport.
-        -->
-        @if (!sideNav() && links().length > 0) {
-          <nav class="nav" aria-label="Sections">
-            <ul class="nav__list">
-              @for (link of links(); track link.path) {
-                <li>
-                  <a
-                    class="nav__link"
-                    [routerLink]="link.path"
-                    routerLinkActive="nav__link--on"
-                    [routerLinkActiveOptions]="{ exact: link.exact }"
-                  >
-                    {{ link.label }}
-                  </a>
-                </li>
-              }
-            </ul>
-          </nav>
-        }
       </header>
     }
 
@@ -194,11 +169,12 @@ import { ToastHost } from './shared/ui/toast';
     <app-toast-host />
 
     <!--
-      The administrator's sections, in the order the work is done (see links()), grouped
-      so eight entries read as four steps rather than one long run.
+      Every role's sections, grouped. The administrator's in the order the work is done
+      (see links()), so eight entries read as three steps rather than one long run; a
+      resident's three as one group, so both halves of the product wear the same shell.
     -->
     <ng-template #sections>
-      <nav aria-label="Sections">
+      <nav class="side__nav" aria-label="Sections">
         @for (group of groups(); track group.label) {
           <section class="side__sec">
             <p class="side__group" [id]="'nav-' + $index">{{ group.label }}</p>
@@ -223,11 +199,22 @@ import { ToastHost } from './shared/ui/toast';
           </section>
         }
       </nav>
+
+      <!-- Who is signed in, at the foot of the column, where it is found and not read. -->
+      <div class="side__me">
+        <span class="side__avatar" aria-hidden="true">{{ initials() }}</span>
+        <span class="side__meText">
+          <span class="side__meName">{{ auth.displayName() }}</span>
+          <span class="side__meRole">{{ roleLabel() }}</span>
+        </span>
+      </div>
     </ng-template>
   `,
   styles: [
     `
       :host {
+        /* The bar's height, shared with the column so the two together fill one screen. */
+        --bar-h: 4.5rem;
         display: flex;
         flex-direction: column;
         min-height: 100vh;
@@ -247,7 +234,12 @@ import { ToastHost } from './shared/ui/toast';
         color: var(--ink-1);
       }
 
+      /* Held at the top, so the account and the drawer are one reach away down a long page. */
       .bar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        height: var(--bar-h);
         background: var(--surface-1);
         color: var(--ink-1);
         border-bottom: 1px solid var(--rule);
@@ -255,7 +247,8 @@ import { ToastHost } from './shared/ui/toast';
 
       .bar__inner {
         max-width: none;
-        padding: var(--sp-4) var(--sp-5) var(--sp-3);
+        height: 100%;
+        padding: 0 var(--sp-5);
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -359,41 +352,6 @@ import { ToastHost } from './shared/ui/toast';
         outline-offset: 2px;
       }
 
-      .nav {
-        padding: 0 var(--sp-5);
-        border-top: 1px solid var(--rule-soft);
-      }
-
-      .nav__list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        gap: var(--sp-5);
-        flex-wrap: wrap;
-      }
-
-      .nav__link {
-        display: inline-block;
-        padding: var(--sp-3) 0 calc(var(--sp-3) - 3px);
-        font-size: var(--t-small);
-        color: var(--ink-2);
-        text-decoration: none;
-        /* Reserved at rest, so the active mark does not shift the row. */
-        border-bottom: 3px solid transparent;
-      }
-
-      @media (hover: hover) and (pointer: fine) {
-        .nav__link:hover {
-          color: var(--ink-1);
-        }
-      }
-
-      .nav__link--on {
-        color: var(--ink-1);
-        border-bottom-color: var(--signal);
-      }
-
       /*
        * The shell sets no measure. It cannot: a page is a descendant, so a variable it
        * declares is invisible here. Each page owns its own width instead, which is also
@@ -403,6 +361,9 @@ import { ToastHost } from './shared/ui/toast';
       .main {
         flex: 1;
         min-width: 0;
+        /* Only the page cross-fades on a route change: the bar and the column hold
+           still, so navigating never moves what the eye is anchored to. */
+        view-transition-name: page;
       }
 
       .shell {
@@ -426,11 +387,13 @@ import { ToastHost } from './shared/ui/toast';
          register. Stretched to the page instead, it would scroll away with it. */
       .side {
         position: sticky;
-        top: 0;
-        height: 100vh;
-        height: 100dvh;
+        top: var(--bar-h);
+        height: calc(100vh - var(--bar-h));
+        height: calc(100dvh - var(--bar-h));
         overflow-y: auto;
-        padding: var(--sp-5) var(--sp-4) var(--sp-6);
+        display: flex;
+        flex-direction: column;
+        padding: var(--sp-5) var(--sp-4) var(--sp-5);
         background: var(--surface-1);
         border-right: 1px solid var(--rule);
       }
@@ -469,8 +432,57 @@ import { ToastHost } from './shared/ui/toast';
         gap: 2px;
       }
 
+      .side__nav {
+        flex: 1 0 auto;
+      }
+
+      .side__me {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-3);
+        margin-top: var(--sp-5);
+        padding: var(--sp-4) var(--sp-3) 0;
+        border-top: 1px solid var(--rule);
+      }
+
+      .side__avatar {
+        display: inline-grid;
+        place-items: center;
+        flex: none;
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: 3px;
+        background: var(--surface-3);
+        color: var(--ink-1);
+        font-size: var(--t-fine);
+        font-variation-settings:
+          'wdth' 112,
+          'wght' 700;
+        letter-spacing: 0.06em;
+      }
+
+      .side__meText {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .side__meName {
+        font-size: var(--t-small);
+        color: var(--ink-1);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .side__meRole {
+        font-size: var(--t-fine);
+        color: var(--ink-3);
+      }
+
       /* Full-width targets, so the whole row is the link and not just its word. */
       .side__link {
+        position: relative;
         display: flex;
         align-items: center;
         gap: var(--sp-3);
@@ -482,6 +494,23 @@ import { ToastHost } from './shared/ui/toast';
         color: var(--ink-2);
         text-decoration: none;
         border-radius: 3px;
+        transition:
+          background-color 160ms ease,
+          color 160ms ease;
+      }
+
+      /* The position mark grows from the middle of the row rather than appearing, so
+         the eye follows the move from one section to the next. */
+      .side__link::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 18%;
+        bottom: 18%;
+        width: 3px;
+        background: var(--signal);
+        transform: scaleY(0);
+        transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       /* A glyph a step quieter than its word, so the label is still what is read. */
@@ -491,6 +520,9 @@ import { ToastHost } from './shared/ui/toast';
         height: 20px;
         font-size: 20px;
         color: var(--ink-3);
+        transition:
+          color 160ms ease,
+          transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       @media (hover: hover) and (pointer: fine) {
@@ -500,6 +532,7 @@ import { ToastHost } from './shared/ui/toast';
         }
         .side__link:hover .side__i {
           color: var(--ink-2);
+          transform: translateX(2px);
         }
       }
 
@@ -512,7 +545,10 @@ import { ToastHost } from './shared/ui/toast';
         color: var(--ink-1);
         font-variation-settings: 'wght' 640;
         background: var(--surface-3);
-        box-shadow: inset 3px 0 0 var(--signal);
+      }
+
+      .side__link--on::before {
+        transform: scaleY(1);
       }
 
       .side__link--on .side__i {
@@ -527,7 +563,22 @@ import { ToastHost } from './shared/ui/toast';
         width: min(18rem, 85vw);
         height: auto;
         padding-top: var(--sp-4);
-        animation: side-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+        animation: side-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      /* The drawer's groups follow it in, one beat apart. */
+      .side--drawer .side__sec,
+      .side--drawer .side__me {
+        animation: side-item 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+      .side--drawer .side__sec:nth-child(2) {
+        animation-delay: 50ms;
+      }
+      .side--drawer .side__sec:nth-child(3) {
+        animation-delay: 100ms;
+      }
+      .side--drawer .side__me {
+        animation-delay: 140ms;
       }
 
       .side__close {
@@ -549,6 +600,13 @@ import { ToastHost } from './shared/ui/toast';
         }
       }
 
+      @keyframes side-item {
+        from {
+          opacity: 0;
+          transform: translateX(-12px);
+        }
+      }
+
       @keyframes scrim-in {
         from {
           opacity: 0;
@@ -560,8 +618,15 @@ import { ToastHost } from './shared/ui/toast';
           transition: none;
         }
         .side--drawer,
+        .side--drawer .side__sec,
+        .side--drawer .side__me,
         .scrim {
           animation: none;
+        }
+        .side__link,
+        .side__link::before,
+        .side__i {
+          transition: none;
         }
       }
     `,
@@ -580,8 +645,45 @@ export class App {
     { initialValue: this.breakpoints.isMatched(App.NARROW) },
   );
 
-  /** The administrator's eight sections live in the sidebar; everyone else keeps the row. */
-  readonly sideNav = computed(() => this.auth.isAdmin());
+  /** The path on screen, as a signal, so the shell can tell a door from a room. */
+  private readonly url = toSignal(
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      map((e) => e.urlAfterRedirects),
+    ),
+    { initialValue: this.router.url },
+  );
+
+  /**
+   * The bar and the column, for a signed-in person on a page inside the product. The way
+   * in has none: the sign-in finishes its own exit animation after the session exists,
+   * and a shell drawn around it for that second would be the wrong frame.
+   */
+  readonly chrome = computed(
+    () => this.auth.authenticated() && !/^\/(login|welcome|callback)(\/|\?|$)/.test(this.url()),
+  );
+
+  /** Every signed-in role navigates from the same left column. */
+  readonly sideNav = computed(() => this.chrome() && this.links().length > 0);
+
+  readonly roleLabel = computed(() =>
+    this.auth.isAdmin()
+      ? 'Building administrator'
+      : this.auth.isCamera()
+        ? 'Gate device'
+        : 'Resident',
+  );
+
+  /** Two letters for the account mark: from the name, or from the address without one. */
+  readonly initials = computed(() => {
+    const words = this.auth
+      .displayName()
+      .replace(/@.*/, '')
+      .split(/[\s._-]+/)
+      .filter(Boolean);
+    const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? '?').slice(0, 2);
+    return letters.toUpperCase();
+  });
 
   readonly drawerOpen = signal(false);
   private readonly burger = viewChild<ElementRef<HTMLButtonElement>>('burger');
@@ -621,6 +723,9 @@ export class App {
     const byPath = new Map(this.links().map((l) => [l.path, l]));
     const pick = (...paths: string[]) =>
       paths.map((p) => byPath.get(p)).filter((l): l is NonNullable<typeof l> => !!l);
+    if (!this.auth.isAdmin()) {
+      return [{ label: this.auth.isCamera() ? 'Gate' : 'Your parking', links: this.links() }];
+    }
     return [
       { label: 'Set up', links: pick('/admin/residents', '/admin/spots', '/admin/metrics') },
       { label: 'Run a period', links: pick('/admin/cycles', '/admin/draw', '/lot') },
@@ -647,9 +752,9 @@ export class App {
      * it is shared ground, reached by both roles from the group each of them owns.
      */
     if (this.auth.hasResidentSurface()) {
-      out.push({ path: '/', label: 'My parking', exact: true });
-      out.push({ path: '/lot', label: 'The lot', exact: false });
-      out.push({ path: '/history', label: 'History', exact: false });
+      out.push({ path: '/', label: 'My parking', exact: true, icon: 'confirmation_number' });
+      out.push({ path: '/lot', label: 'The lot', exact: false, icon: 'map' });
+      out.push({ path: '/history', label: 'History', exact: false, icon: 'history' });
     }
     /*
      * A gate account gets one link and nothing else. It is a machine role: the only route
@@ -657,7 +762,7 @@ export class App {
      * would be offering it a 403 with a nicer name.
      */
     if (this.auth.isCamera() && !this.auth.isAdmin()) {
-      out.push({ path: '/gate', label: 'Gate camera', exact: false });
+      out.push({ path: '/gate', label: 'Gate camera', exact: false, icon: 'videocam' });
       return out;
     }
     if (this.auth.isAdmin()) {

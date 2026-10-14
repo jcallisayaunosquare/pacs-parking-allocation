@@ -112,6 +112,41 @@ export class ResidentsFacade {
     this.fleet.reload();
   }
 
+  /**
+   * A resident's car, added or changed from the register.
+   *
+   * On this facade rather than a separate one, because the register is where it is
+   * shown: the Vehicles column has to show the new plate before the dialog closes, so
+   * the write is over only once the fleet has been refetched - the same rule as every
+   * other mutation here.
+   */
+  addVehicle(residentId: string, draft: VehicleDraft): Promise<Vehicle | null> {
+    return this.mutateFleet(() => this.vehicleRepo.add(residentId, draft));
+  }
+
+  updateVehicle(
+    residentId: string,
+    vehicleId: string,
+    patch: Partial<VehicleDraft>,
+  ): Promise<Vehicle | null> {
+    return this.mutateFleet(() => this.vehicleRepo.update(residentId, vehicleId, patch));
+  }
+
+  private async mutateFleet<T>(fn: () => Promise<T>): Promise<T | null> {
+    this._error.set(null);
+    this._busy.set(true);
+    try {
+      const r = await fn();
+      await reloaded(this.injector, this.fleet);
+      return r;
+    } catch (e) {
+      this._error.set(toApiError(e));
+      return null;
+    } finally {
+      this._busy.set(false);
+    }
+  }
+
   readonly pageNumber = computed(() => this.trail().length + 1);
   /**
    * How many rows came before this page, so the row numbers in the table keep counting
@@ -228,85 +263,6 @@ export class ResidentsFacade {
 
   deactivate(id: string) {
     return this.mutate(() => this.repo.deactivate(id));
-  }
-
-  dismissError(): void {
-    this._error.set(null);
-  }
-}
-
-/**
- * One resident's vehicles.
- *
- * Not `providedIn: 'root'`: the state is "the vehicles of the resident currently being
- * worked on", so it is provided by the dialog that does the working and dies with it.
- * A root-scoped version would keep the previous resident's cars in memory and show them
- * for a frame the next time the dialog opens, which reads as the wrong person's car.
- *
- * `residentId` is a signal the resource reads, so setting it loads — the same
- * stale-while-revalidate shape as every other facade here.
- */
-@Injectable()
-export class VehiclesFacade {
-  private readonly repo = inject(VehicleRepository);
-  private readonly injector = inject(Injector);
-
-  private readonly _residentId = signal<string | null>(null);
-  readonly residentId = this._residentId.asReadonly();
-
-  private readonly list = resource({
-    params: () => ({ residentId: this._residentId() }),
-    loader: ({ params }) =>
-      params.residentId ? this.repo.list(params.residentId) : Promise.resolve([]),
-  });
-
-  private readonly _busy = signal(false);
-  private readonly _error = signal<ApiError | null>(null);
-
-  readonly state = viewState(this.list, (v) => v.length === 0);
-  readonly vehicles = computed(() => peek(this.list) ?? []);
-  readonly busy = this._busy.asReadonly();
-  readonly error = this._error.asReadonly();
-
-  for(residentId: string): void {
-    this._residentId.set(residentId);
-  }
-
-  refresh(): void {
-    this.list.reload();
-  }
-
-  private async mutate<T>(fn: (residentId: string) => Promise<T>): Promise<T | null> {
-    const id = this._residentId();
-    if (!id) return null;
-    this._error.set(null);
-    this._busy.set(true);
-    try {
-      const r = await fn(id);
-      await reloaded(this.injector, this.list);
-      return r;
-    } catch (e) {
-      this._error.set(toApiError(e));
-      return null;
-    } finally {
-      this._busy.set(false);
-    }
-  }
-
-  add(input: VehicleDraft) {
-    return this.mutate((id) => this.repo.add(id, input));
-  }
-
-  update(vehicleId: string, patch: Partial<VehicleDraft>) {
-    return this.mutate((id) => this.repo.update(id, vehicleId, patch));
-  }
-
-  /**
-   * Removal is a deactivation server-side: the row stays so a past gate reading still
-   * resolves to a car, and the plate is freed for whoever owns the car next.
-   */
-  remove(vehicleId: string) {
-    return this.mutate((id) => this.repo.remove(id, vehicleId));
   }
 
   dismissError(): void {

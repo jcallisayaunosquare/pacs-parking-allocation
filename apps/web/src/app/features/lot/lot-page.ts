@@ -318,57 +318,59 @@ const PERSPECTIVES: readonly { readonly value: Perspective; readonly label: stri
           </div>
         } @else {
           <div class="view-in">
-            <table class="data-table">
-              <!--
-                The "Held by" column exists only for a viewer who may be told. For a
-                resident it would be a column of em dashes, which is not privacy kept
-                quietly but a visible hole where a name is understood to be - and it is
-                the caption a screen-reader user hears first, so it has to be true too.
-              -->
-              <caption class="sr-only">
-                Every bay on {{ level.label }}, with its status@if
-                (facade.showsOccupants()) { and who holds it }
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Bay</th>
-                  <th scope="col">Aisle</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Status</th>
-                  @if (facade.showsOccupants()) {
-                    <th scope="col">Held by</th>
-                  }
-                  <th scope="col">Until</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (bay of pagedRows(); track bay.placement.spotId) {
-                  <tr [class.on]="bay.placement.spotId === facade.selected()?.placement.spotId">
-                    <th scope="row">
-                      <!--
-                        A row and its bay on the plan are one object, reachable from either
-                        side: the code takes you to the bay, selected, on the map.
-                      -->
-                      <button
-                        type="button"
-                        class="link code"
-                        [attr.aria-label]="'Show ' + bay.placement.spotCode + ' on the map'"
-                        (click)="showOnMap(bay.placement.spotId)"
-                      >
-                        {{ bay.placement.spotCode }}
-                      </button>
-                    </th>
-                    <td>{{ bay.placement.row }}</td>
-                    <td>{{ typeWord(bay) }}</td>
-                    <td>{{ statusWord(bay) }}</td>
+            <div class="table-scroll">
+              <table class="data-table">
+                <!--
+                  The "Held by" column exists only for a viewer who may be told. For a
+                  resident it would be a column of em dashes, which is not privacy kept
+                  quietly but a visible hole where a name is understood to be - and it is
+                  the caption a screen-reader user hears first, so it has to be true too.
+                -->
+                <caption class="sr-only">
+                  Every bay on {{ level.label }}, with its status@if
+                  (facade.showsOccupants()) { and who holds it }
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Bay</th>
+                    <th scope="col">Aisle</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Status</th>
                     @if (facade.showsOccupants()) {
-                      <td>{{ occupantLine(bay) }}</td>
+                      <th scope="col">Held by</th>
                     }
-                    <td>{{ bay.validUntil ? (bay.validUntil | date: 'mediumDate') : dash }}</td>
+                    <th scope="col">Until</th>
                   </tr>
-                }
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  @for (bay of pagedRows(); track bay.placement.spotId) {
+                    <tr [class.on]="bay.placement.spotId === facade.selected()?.placement.spotId">
+                      <th scope="row">
+                        <!--
+                          A row and its bay on the plan are one object, reachable from either
+                          side: the code takes you to the bay, selected, on the map.
+                        -->
+                        <button
+                          type="button"
+                          class="link code"
+                          [attr.aria-label]="'Show ' + bay.placement.spotCode + ' on the map'"
+                          (click)="showOnMap(bay.placement.spotId)"
+                        >
+                          {{ bay.placement.spotCode }}
+                        </button>
+                      </th>
+                      <td>{{ bay.placement.row }}</td>
+                      <td>{{ typeWord(bay) }}</td>
+                      <td>{{ statusWord(bay) }}</td>
+                      @if (facade.showsOccupants()) {
+                        <td>{{ occupantLine(bay) }}</td>
+                      }
+                      <td>{{ bay.validUntil ? (bay.validUntil | date: 'mediumDate') : dash }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
 
             <!-- The same pager, in the same place, as every other register. -->
             @if (pageCount() > 1) {

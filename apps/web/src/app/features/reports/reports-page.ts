@@ -87,142 +87,150 @@ const toCsv = (columns: readonly string[], rows: readonly Row[]): string =>
     >
       @switch (facade.kind()) {
         @case ('residents') {
-          <table mat-table [dataSource]="facade.residents()">
-            <ng-container matColumnDef="name">
-              <th mat-header-cell *matHeaderCellDef>Name</th>
-              <td mat-cell *matCellDef="let r" data-label="Name">{{ r.fullName }}</td>
-            </ng-container>
-            <ng-container matColumnDef="unit">
-              <th mat-header-cell *matHeaderCellDef>Unit</th>
-              <td mat-cell *matCellDef="let r" data-label="Unit">{{ r.unitNumber }}</td>
-            </ng-container>
-            <ng-container matColumnDef="email">
-              <th mat-header-cell *matHeaderCellDef>Email</th>
-              <td mat-cell *matCellDef="let r" data-label="Email" class="dim">{{ r.email }}</td>
-            </ng-container>
-            <ng-container matColumnDef="eligibility">
-              <th mat-header-cell *matHeaderCellDef>Eligibility</th>
-              <td mat-cell *matCellDef="let r" data-label="Eligibility">
-                @if (r.isEligible) {
-                  <app-status-pill label="Eligible" tone="held" />
-                } @else {
-                  <app-status-pill label="Not eligible" tone="revoked" />
-                }
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="bay">
-              <th mat-header-cell *matHeaderCellDef>Bay held</th>
-              <td mat-cell *matCellDef="let r" data-label="Bay held">
-                {{ r.currentSpotCode ?? dash }}
-              </td>
-            </ng-container>
-            <tr mat-header-row *matHeaderRowDef="residentColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: residentColumns"></tr>
-          </table>
+          <div class="table-scroll">
+            <table mat-table [dataSource]="facade.residents()">
+              <ng-container matColumnDef="name">
+                <th mat-header-cell *matHeaderCellDef>Name</th>
+                <td mat-cell *matCellDef="let r" data-label="Name">{{ r.fullName }}</td>
+              </ng-container>
+              <ng-container matColumnDef="unit">
+                <th mat-header-cell *matHeaderCellDef>Unit</th>
+                <td mat-cell *matCellDef="let r" data-label="Unit">{{ r.unitNumber }}</td>
+              </ng-container>
+              <ng-container matColumnDef="email">
+                <th mat-header-cell *matHeaderCellDef>Email</th>
+                <td mat-cell *matCellDef="let r" data-label="Email" class="dim">{{ r.email }}</td>
+              </ng-container>
+              <ng-container matColumnDef="eligibility">
+                <th mat-header-cell *matHeaderCellDef>Eligibility</th>
+                <td mat-cell *matCellDef="let r" data-label="Eligibility">
+                  @if (r.isEligible) {
+                    <app-status-pill label="Eligible" tone="held" />
+                  } @else {
+                    <app-status-pill label="Not eligible" tone="revoked" />
+                  }
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="bay">
+                <th mat-header-cell *matHeaderCellDef>Bay held</th>
+                <td mat-cell *matCellDef="let r" data-label="Bay held">
+                  {{ r.currentSpotCode ?? dash }}
+                </td>
+              </ng-container>
+              <tr mat-header-row *matHeaderRowDef="residentColumns"></tr>
+              <tr mat-row *matRowDef="let row; columns: residentColumns"></tr>
+            </table>
+          </div>
         }
 
         @case ('bays') {
-          <table mat-table [dataSource]="facade.bays()">
-            <ng-container matColumnDef="code">
-              <th mat-header-cell *matHeaderCellDef>Bay</th>
-              <td mat-cell *matCellDef="let b" data-label="Bay" class="code stencil">
-                {{ b.spotCode }}
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="level">
-              <th mat-header-cell *matHeaderCellDef>Level</th>
-              <td mat-cell *matCellDef="let b" data-label="Level">{{ b.level }}</td>
-            </ng-container>
-            <ng-container matColumnDef="type">
-              <th mat-header-cell *matHeaderCellDef>Type</th>
-              <td mat-cell *matCellDef="let b" data-label="Type">{{ typeWord(b.type) }}</td>
-            </ng-container>
-            <ng-container matColumnDef="status">
-              <th mat-header-cell *matHeaderCellDef>Status</th>
-              <td mat-cell *matCellDef="let b" data-label="Status">
-                @if (b.isActive) {
-                  <app-status-pill label="In service" tone="held" />
-                } @else {
-                  <app-status-pill label="Out of service" tone="revoked" />
-                }
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="notes">
-              <th mat-header-cell *matHeaderCellDef>Notes</th>
-              <td mat-cell *matCellDef="let b" data-label="Notes" class="dim">
-                {{ b.notes ?? dash }}
-              </td>
-            </ng-container>
-            <tr mat-header-row *matHeaderRowDef="bayColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: bayColumns"></tr>
-          </table>
+          <div class="table-scroll">
+            <table mat-table [dataSource]="facade.bays()">
+              <ng-container matColumnDef="code">
+                <th mat-header-cell *matHeaderCellDef>Bay</th>
+                <td mat-cell *matCellDef="let b" data-label="Bay" class="code stencil">
+                  {{ b.spotCode }}
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="level">
+                <th mat-header-cell *matHeaderCellDef>Level</th>
+                <td mat-cell *matCellDef="let b" data-label="Level">{{ b.level }}</td>
+              </ng-container>
+              <ng-container matColumnDef="type">
+                <th mat-header-cell *matHeaderCellDef>Type</th>
+                <td mat-cell *matCellDef="let b" data-label="Type">{{ typeWord(b.type) }}</td>
+              </ng-container>
+              <ng-container matColumnDef="status">
+                <th mat-header-cell *matHeaderCellDef>Status</th>
+                <td mat-cell *matCellDef="let b" data-label="Status">
+                  @if (b.isActive) {
+                    <app-status-pill label="In service" tone="held" />
+                  } @else {
+                    <app-status-pill label="Out of service" tone="revoked" />
+                  }
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="notes">
+                <th mat-header-cell *matHeaderCellDef>Notes</th>
+                <td mat-cell *matCellDef="let b" data-label="Notes" class="dim">
+                  {{ b.notes ?? dash }}
+                </td>
+              </ng-container>
+              <tr mat-header-row *matHeaderRowDef="bayColumns"></tr>
+              <tr mat-row *matRowDef="let row; columns: bayColumns"></tr>
+            </table>
+          </div>
         }
 
         @case ('periods') {
-          <table mat-table [dataSource]="facade.periods()">
-            <ng-container matColumnDef="label">
-              <th mat-header-cell *matHeaderCellDef>Period</th>
-              <td mat-cell *matCellDef="let c" data-label="Period" class="code stencil">
-                {{ c.label }}
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="state">
-              <th mat-header-cell *matHeaderCellDef>Status</th>
-              <td mat-cell *matCellDef="let c" data-label="Status">{{ stateWord(c.state) }}</td>
-            </ng-container>
-            <ng-container matColumnDef="runs">
-              <th mat-header-cell *matHeaderCellDef>Runs</th>
-              <td mat-cell *matCellDef="let c" data-label="Runs">
-                {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="registration">
-              <th mat-header-cell *matHeaderCellDef>Registration</th>
-              <td mat-cell *matCellDef="let c" data-label="Registration" class="dim">
-                {{ c.registrationOpensAt | date: 'd MMM y' }} to
-                {{ c.registrationClosesAt | date: 'd MMM y' }}
-              </td>
-            </ng-container>
-            <tr mat-header-row *matHeaderRowDef="periodColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: periodColumns"></tr>
-          </table>
+          <div class="table-scroll">
+            <table mat-table [dataSource]="facade.periods()">
+              <ng-container matColumnDef="label">
+                <th mat-header-cell *matHeaderCellDef>Period</th>
+                <td mat-cell *matCellDef="let c" data-label="Period" class="code stencil">
+                  {{ c.label }}
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="state">
+                <th mat-header-cell *matHeaderCellDef>Status</th>
+                <td mat-cell *matCellDef="let c" data-label="Status">{{ stateWord(c.state) }}</td>
+              </ng-container>
+              <ng-container matColumnDef="runs">
+                <th mat-header-cell *matHeaderCellDef>Runs</th>
+                <td mat-cell *matCellDef="let c" data-label="Runs">
+                  {{ c.startsOn | date: 'd MMM y' }} to {{ c.endsOn | date: 'd MMM y' }}
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="registration">
+                <th mat-header-cell *matHeaderCellDef>Registration</th>
+                <td mat-cell *matCellDef="let c" data-label="Registration" class="dim">
+                  {{ c.registrationOpensAt | date: 'd MMM y' }} to
+                  {{ c.registrationClosesAt | date: 'd MMM y' }}
+                </td>
+              </ng-container>
+              <tr mat-header-row *matHeaderRowDef="periodColumns"></tr>
+              <tr mat-row *matRowDef="let row; columns: periodColumns"></tr>
+            </table>
+          </div>
         }
 
         @case ('draws') {
-          <table mat-table [dataSource]="facade.draws()">
-            <ng-container matColumnDef="period">
-              <th mat-header-cell *matHeaderCellDef>Period</th>
-              <td mat-cell *matCellDef="let d" data-label="Period" class="code stencil">
-                {{ d.cycleLabel ?? dash }}
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="decided">
-              <th mat-header-cell *matHeaderCellDef>Decided</th>
-              <td mat-cell *matCellDef="let d" data-label="Decided">
-                {{ d.decidedAt ? (d.decidedAt | date: 'd MMM y, HH:mm') : dash }}
-              </td>
-            </ng-container>
-            <ng-container matColumnDef="counts">
-              <th mat-header-cell *matHeaderCellDef>Result</th>
-              <td mat-cell *matCellDef="let d" data-label="Result">
-                {{ d.assigned ?? dash }} of {{ d.spots ?? dash }} bays,
-                {{ d.entrants ?? dash }} entrants
-              </td>
-            </ng-container>
-            <!--
-              The seed is in the report on purpose: it is the artefact that makes a past
-              result checkable, and a draws report without it is a claim rather than a
-              record.
-            -->
-            <ng-container matColumnDef="seed">
-              <th mat-header-cell *matHeaderCellDef>Seed</th>
-              <td mat-cell *matCellDef="let d" data-label="Seed" class="dim seed">
-                {{ shortSeed(d.randomSeedHex) }}
-              </td>
-            </ng-container>
-            <tr mat-header-row *matHeaderRowDef="drawColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: drawColumns"></tr>
-          </table>
+          <div class="table-scroll">
+            <table mat-table [dataSource]="facade.draws()">
+              <ng-container matColumnDef="period">
+                <th mat-header-cell *matHeaderCellDef>Period</th>
+                <td mat-cell *matCellDef="let d" data-label="Period" class="code stencil">
+                  {{ d.cycleLabel ?? dash }}
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="decided">
+                <th mat-header-cell *matHeaderCellDef>Decided</th>
+                <td mat-cell *matCellDef="let d" data-label="Decided">
+                  {{ d.decidedAt ? (d.decidedAt | date: 'd MMM y, HH:mm') : dash }}
+                </td>
+              </ng-container>
+              <ng-container matColumnDef="counts">
+                <th mat-header-cell *matHeaderCellDef>Result</th>
+                <td mat-cell *matCellDef="let d" data-label="Result">
+                  {{ d.assigned ?? dash }} of {{ d.spots ?? dash }} bays,
+                  {{ d.entrants ?? dash }} entrants
+                </td>
+              </ng-container>
+              <!--
+                The seed is in the report on purpose: it is the artefact that makes a past
+                result checkable, and a draws report without it is a claim rather than a
+                record.
+              -->
+              <ng-container matColumnDef="seed">
+                <th mat-header-cell *matHeaderCellDef>Seed</th>
+                <td mat-cell *matCellDef="let d" data-label="Seed" class="dim seed">
+                  {{ shortSeed(d.randomSeedHex) }}
+                </td>
+              </ng-container>
+              <tr mat-header-row *matHeaderRowDef="drawColumns"></tr>
+              <tr mat-row *matRowDef="let row; columns: drawColumns"></tr>
+            </table>
+          </div>
         }
       }
     </app-view-state>
