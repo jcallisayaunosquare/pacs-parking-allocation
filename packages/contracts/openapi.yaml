@@ -840,6 +840,33 @@ paths:
               schema: { $ref: '#/components/schemas/ParkingSpot' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /lots/{levelId}/occupancy:
+    get:
+      tags: [spots]
+      summary: The lot plan's live state for one level
+      description: >
+        Every bay on the level with a status derived from the inventory and the ACTIVE
+        assignments. Occupants are named to an administrator only; a resident learns one
+        identity, their own, as `isMine`.
+      parameters:
+        - name: levelId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9-]{1,20}$', example: B1 }
+      responses:
+        '200':
+          description: Bays on the level
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BayOccupancy' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
   /cycles:
     get:
       tags: [cycles]
@@ -1754,6 +1781,23 @@ components:
         isActive: { type: boolean }
         notes: { type: [string, 'null'] }
         createdAt: { type: string, format: date-time }
+
+    BayOccupancy:
+      type: object
+      required: [spotId, spotCode, type, status, occupant, validUntil, isMine]
+      properties:
+        spotId: { type: string, format: uuid }
+        spotCode: { type: string, example: B1-A04 }
+        type: { $ref: '#/components/schemas/SpotType' }
+        status: { type: string, enum: [FREE, HELD, OUT_OF_SERVICE] }
+        occupant:
+          type: [object, 'null']
+          description: Administrators only; always null for a resident.
+          properties:
+            displayName: { type: string }
+            unit: { type: string }
+        validUntil: { type: [string, 'null'], format: date-time }
+        isMine: { type: boolean }
 
     Cycle:
       type: object

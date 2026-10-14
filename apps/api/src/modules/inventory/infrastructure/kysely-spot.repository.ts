@@ -2,6 +2,7 @@ import type { Kysely } from 'kysely';
 import type { Database } from '../../../shared/db/schema';
 import type { SpotType } from '../../allocation/domain/types';
 import type { ParkingSpot, SpotRepository } from '../application/spot.use-cases';
+import type { BayRow } from '../domain/spot';
 
 type Row = {
   id: string;
@@ -129,5 +130,43 @@ export class KyselySpotRepository implements SpotRepository {
       .where('state', '=', 'ACTIVE')
       .executeTakeFirst();
     return r !== undefined;
+  }
+
+  async occupancy(level: string): Promise<readonly BayRow[]> {
+    const rows = await this.db
+      .selectFrom('parking_spot as ps')
+      .leftJoin('spot_assignment as sa', (j) =>
+        j.onRef('sa.spot_id', '=', 'ps.id').on('sa.state', '=', 'ACTIVE'),
+      )
+      .leftJoin('resident as r', 'r.id', 'sa.resident_id')
+      .select([
+        'ps.id as spotId',
+        'ps.spot_code as spotCode',
+        'ps.type as type',
+        'ps.is_active as isActive',
+        'sa.resident_id as residentId',
+        'sa.valid_until as validUntil',
+        'r.full_name as fullName',
+        'r.unit_number as unitNumber',
+      ])
+      .where('ps.level', '=', level)
+      .orderBy('ps.spot_code')
+      .execute();
+
+    return rows.map((r) => ({
+      spotId: r.spotId,
+      spotCode: r.spotCode,
+      type: r.type,
+      isActive: r.isActive,
+      assignment:
+        r.residentId && r.validUntil
+          ? {
+              residentId: r.residentId,
+              fullName: r.fullName ?? '',
+              unitNumber: r.unitNumber ?? '',
+              validUntil: new Date(r.validUntil),
+            }
+          : null,
+    }));
   }
 }
