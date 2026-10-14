@@ -106,3 +106,20 @@ export function periodLabel(startsOn: Date, durationMonths: number): string {
   const m = String(startsOn.getUTCMonth() + 1).padStart(2, '0');
   return `${y}-${m}+${durationMonths}M`;
 }
+
+/**
+ * Which period a resident's dashboard shows as theirs, and whether they are in it.
+ *
+ * A period whose registration has closed comes first, but only when the resident entered
+ * it: they are waiting on its draw and should be told so. Someone who did not enter has
+ * nothing left to do in it, so it is not shown to them and the next period taking (or
+ * about to take) entries is. Ties between several closed periods go to the first given.
+ */
+export function nextPeriodFor<C>(
+  closed: readonly { readonly cycle: C; readonly registered: boolean }[],
+  upcoming: { readonly cycle: C; readonly registered: boolean } | null,
+): { cycle: C | null; registered: boolean } {
+  const entered = closed.find((c) => c.registered);
+  if (entered) return { cycle: entered.cycle, registered: true };
+  return upcoming ?? { cycle: null, registered: false };
+}

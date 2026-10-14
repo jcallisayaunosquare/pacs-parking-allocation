@@ -1,6 +1,7 @@
 import { ok, type Result } from '../../../shared/result';
 import { fail } from '../../../shared/errors';
 import { toDateOnly, type Clock } from '../../../shared/clock';
+import { nextPeriodFor } from '../../allocation/domain/cycle';
 import type {
   AllocationConfigProvider,
   AssignmentRepository,
@@ -134,10 +135,25 @@ export class DashboardUseCases {
       this.cycles.findUpcoming(this.clock.now()),
     ]);
 
-    // Second round trip, because it needs the cycle the first one found.
-    const registeredForNextCycle = nextCycle
+    /*
+     * A period whose registration has closed and whose draw has not run is still this
+     * resident's next period - if they entered it. `findUpcoming` stops at closing, so
+     * without this an entrant lost every sign of the period the moment the administrator
+     * closed registration. See `nextPeriodFor` for the rule.
+     */
+    const closed = await Promise.all(
+      (await this.cycles.findByState('REGISTRATION_CLOSED')).map(async (cycle) => ({
+        cycle,
+        registered: await this.registrations.isRegistered(cycle.id, residentId),
+      })),
+    );
+    const upcomingRegistered = nextCycle
       ? await this.registrations.isRegistered(nextCycle.id, residentId)
       : false;
+    const { cycle: shown, registered: registeredForNextCycle } = nextPeriodFor(
+      closed,
+      nextCycle ? { cycle: nextCycle, registered: upcomingRegistered } : null,
+    );
 
     const standing = this.standing(residentId, facts, resident.participationStartedAt, config);
 
@@ -180,15 +196,15 @@ export class DashboardUseCases {
       // and startsOn/endsOn were missing - so the client built `new Date(undefined)`,
       // and the dashboard timeline died on an Invalid Date rather than on anything that
       // pointed back here.
-      nextCycle: nextCycle
+      nextCycle: shown
         ? {
-            id: nextCycle.id,
-            label: nextCycle.label,
-            state: nextCycle.state,
-            startsOn: toDateOnly(nextCycle.startsOn),
-            endsOn: toDateOnly(nextCycle.endsOn),
-            registrationOpensAt: nextCycle.registrationOpensAt.toISOString(),
-            registrationClosesAt: nextCycle.registrationClosesAt.toISOString(),
+            id: shown.id,
+            label: shown.label,
+            state: shown.state,
+            startsOn: toDateOnly(shown.startsOn),
+            endsOn: toDateOnly(shown.endsOn),
+            registrationOpensAt: shown.registrationOpensAt.toISOString(),
+            registrationClosesAt: shown.registrationClosesAt.toISOString(),
           }
         : null,
       registeredForNextCycle,

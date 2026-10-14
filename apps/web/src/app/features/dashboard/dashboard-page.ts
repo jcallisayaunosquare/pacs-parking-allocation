@@ -150,6 +150,20 @@ import { ConfirmService } from '../../shared/ui/confirm';
             }
           }
 
+          @case ('draw-pending') {
+            @if (facade.nextCycle(); as c) {
+              <app-bay
+                variant="open"
+                [code]="c.label"
+                caption="You are entered in this draw."
+                note="Registration has closed, so the list of entrants is final. The draw runs next, and your result appears here."
+                [label]="'Entered in the draw for ' + c.label"
+                status="Entered"
+                statusTone="held"
+              />
+            }
+          }
+
           @default {
             <app-bay
               variant="closed"
@@ -179,6 +193,16 @@ import { ConfirmService } from '../../shared/ui/confirm';
             have no way to do it at all - the one person it mattered most to was the one
             person who could not see the button.
           -->
+          <!-- Holding a bay this period and already entered in the next, now closed. -->
+          @if (facade.drawPending() && facade.situation() !== 'draw-pending') {
+            <div class="enter">
+              <p class="enter__p">
+                You are entered for {{ c.label }}. Registration has closed and the draw runs
+                next; your result for that period appears here once it has.
+              </p>
+            </div>
+          }
+
           @if (facade.registrationOpen() && facade.situation() !== 'registration-open') {
             <div class="enter">
               <p class="enter__p">

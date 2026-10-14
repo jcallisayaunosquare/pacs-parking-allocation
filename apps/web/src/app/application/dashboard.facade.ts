@@ -55,14 +55,29 @@ export class DashboardFacade {
   readonly resident = computed(() => peek(this.dashboard)?.resident ?? null);
 
   /** Which of §17's three dashboard states to render. */
-  readonly situation = computed<'holds-spot' | 'waitlisted' | 'registration-open' | 'idle'>(() => {
+  readonly situation = computed<
+    'holds-spot' | 'waitlisted' | 'registration-open' | 'draw-pending' | 'idle'
+  >(() => {
     const d = peek(this.dashboard);
     if (!d) return 'idle';
     if (d.assignment) return 'holds-spot';
     if (d.waitlist) return 'waitlisted';
     if (d.nextCycle?.state === 'REGISTRATION_OPEN') return 'registration-open';
+    if (this.drawPending()) return 'draw-pending';
     return 'idle';
   });
+
+  /**
+   * Entered in a period whose registration has closed and whose draw has not run. The
+   * server only sends a closed period to someone who entered it, and nothing can be
+   * changed any more - withdrawing is refused once registration closes - so this is a
+   * state to be told about, not acted on.
+   */
+  readonly drawPending = computed(
+    () =>
+      peek(this.dashboard)?.nextCycle?.state === 'REGISTRATION_CLOSED' &&
+      (peek(this.dashboard)?.registeredForNextCycle ?? false),
+  );
 
   /**
    * Whether the coming period is taking entries at all.

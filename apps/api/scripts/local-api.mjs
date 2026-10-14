@@ -395,7 +395,11 @@ const historyOf = (residentId) =>
 
 function dashboard(r) {
   const pos = waitlist.indexOf(r.id);
-  const next = openCycle() ?? cycles.find((c) => c.state === 'DRAFT') ?? null;
+  // As the API: a closed period the resident entered, waiting on its draw, comes first.
+  const closedEntry = cycles.find(
+    (c) => c.state === 'REGISTRATION_CLOSED' && registrations.get(c.id)?.has(r.id),
+  );
+  const next = closedEntry ?? openCycle() ?? cycles.find((c) => c.state === 'DRAFT') ?? null;
   return {
     resident: { id: r.id, fullName: r.fullName, unit: r.unitNumber, isEligible: r.isEligible },
     assignment: assignments.get(r.id) ?? null,
