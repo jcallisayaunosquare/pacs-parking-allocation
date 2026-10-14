@@ -300,3 +300,55 @@ describe('CycleUseCases.rename', () => {
     if (!r.ok) expect(r.error.code).toBe('VALIDATION_FAILED');
   });
 });
+
+/*
+ * Every resident's dashboard is cached for five minutes, and the cycle's state is what
+ * it keys "Enter the draw" on. Opening registration has to drop those payloads, or the
+ * button stays hidden behind a cached DRAFT.
+ */
+describe('CycleUseCases dashboard cache', () => {
+  const withCachedDashboard = async () => {
+    const cache = new InMemoryCache();
+    await cache.set(`dashboard:${RESIDENT_ID}`, { stale: true }, 300);
+    const useCases = new CycleUseCases(
+      Object.assign(new FakeCycles(), {
+        async transition(_id: string, to: CycleRecord['state']) {
+          return { ...cycle, state: to };
+        },
+        async create() {
+          return cycle;
+        },
+      }),
+      new FakeRegistrations(),
+      new FakeResidents(resident()),
+      assignments,
+      configProvider,
+      fixedClock('2026-03-10T09:00:00Z'),
+      cache,
+    );
+    return { cache, useCases };
+  };
+
+  it('drops cached dashboards when registration opens', async () => {
+    const { cache, useCases } = await withCachedDashboard();
+    expect((await useCases.openRegistration(CYCLE_ID)).ok).toBe(true);
+    expect(await cache.get(`dashboard:${RESIDENT_ID}`)).toBeNull();
+  });
+
+  it('drops cached dashboards when registration closes', async () => {
+    const { cache, useCases } = await withCachedDashboard();
+    expect((await useCases.closeRegistration(CYCLE_ID)).ok).toBe(true);
+    expect(await cache.get(`dashboard:${RESIDENT_ID}`)).toBeNull();
+  });
+
+  it('drops cached dashboards when a period is created', async () => {
+    const { cache, useCases } = await withCachedDashboard();
+    const r = await useCases.create({
+      startsOn: new Date('2026-04-01T00:00:00Z'),
+      registrationOpensAt: new Date('2026-03-01T00:00:00Z'),
+      registrationClosesAt: new Date('2026-03-20T00:00:00Z'),
+    });
+    expect(r.ok).toBe(true);
+    expect(await cache.get(`dashboard:${RESIDENT_ID}`)).toBeNull();
+  });
+});
