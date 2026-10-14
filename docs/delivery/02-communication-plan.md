@@ -133,7 +133,7 @@ git at it through the root `prepare` script. A fresh clone gets it by installing
 
 ### 3.2 What a human is for
 
-The machine has already established that it compiles, lints, passes 231 API tests and 29
+The machine has already established that it compiles, lints, passes 267 API tests and 69
 web tests, builds, and survives Playwright. A review that re-checks any of that is wasted.
 What a reviewer is actually reading for, in rough order of value on this codebase:
 
@@ -156,8 +156,12 @@ What a reviewer is actually reading for, in rough order of value on this codebas
 5. **Would a resident understand the refusal?** Every blocker in this codebase returns the
    sentence an administrator is shown, not a boolean. A new one that returns `false` is
    sending somebody to support.
-6. **Is the change one subject?** The seven pull requests merged so far run from 23 to
-   1,367 lines changed, each with a single subject in its title. A branch that has
+6. **Is the change one subject?** Twenty-two pull requests have merged. Twelve of the last
+   thirteen are under 400 lines changed, most under 100, each with one subject in its
+   title — a defect found in use, fixed and released the same day. The exception proves
+   the rule: #10 is 9,105 lines, its title is a branch name ("Fix/smoke asserts the draw
+   rule") and it carried a menu reorder, a new domain rule and a smoke fix together. It
+   was the hardest to review and the hardest to describe afterwards. A branch that has
    accumulated two subjects is two pull requests.
 
 ### 3.3 How review is conducted
@@ -189,7 +193,7 @@ What a reviewer is actually reading for, in rough order of value on this codebas
 | Why this product rule exists | `apps/web/PRODUCT.md` — users, jobs, the mechanism, the durable constraints |
 | Why this technology, at the scale of the whole system | An ADR in `docs/analisis.html`. ADR-014 lambdalith, ADR-016 no NAT, ADR-017 DynamoDB as cache, and so on |
 | Why this release did what it did | The pull request body and the conventional commit subject |
-| Why the deployed reality differs from the specification | The deviations table in `apps/api/README.md`, and §13 of the technical documentation |
+| Why the deployed reality differs from the specification | The deviations table in the root `README.md`, and §13 of the technical documentation |
 
 The rule behind the table: **a decision is not made until it is written somewhere a stranger
 would find it.** The place is chosen by who needs it — a reader of this line of code, a
@@ -267,7 +271,7 @@ standard the Verify stage holds itself to.
 Three standing sources of backlog items, each of which has already produced real work:
 
 1. **The gap list** — §13 of the technical documentation, and the "Not built yet" section
-   of `apps/api/README.md`.
+   of the root `README.md`.
 2. **Defects found in use.** Two periods ACTIVE at once with the same bay assigned to two
    residents was found by looking at the dev environment, not by a test. It became
    `drawBlocker` and `POST /cycles/{id}/close` in a single sprint item.
@@ -325,7 +329,7 @@ strange thing about this architecture descends from that one line. An ADR that l
 benefits has not been written yet.
 
 **A constraint the account imposes is recorded as a constraint, never as a preference.**
-The deviations table in `apps/api/README.md` has a "Why" column for exactly this, and some
+The deviations table in the root `README.md` has a "Why" column for exactly this, and some
 of its rows are not flattering: `us-east-2` because an SCP denies everything else; CodePipeline
 because an SCP makes OIDC impossible; no reserved concurrency because the account quota is
 10. A reader who cannot tell a forced constraint from a design choice will undo the
@@ -347,13 +351,93 @@ down as open is a decision; leaving it undiscussed is not.
 **Decisions are revisited when the evidence arrives, and the revision replaces the
 original.** The fairness model is the example that matters: `docs/analisis.html` sections 12
 and 13 describe a probabilistic weighted lottery that was superseded by the deterministic
-rules A–F. The lesson the team took from it is in this plan: when a decision is replaced,
+rules A–F, later extended to A–H when the building settled how withdrawing and sitting a
+period out should count. The lesson the team took from it is in this plan: when a decision is replaced,
 the superseded text must be marked as superseded where it lives, or the next reader
 implements it.
 
 ---
 
-## 6. Communicating outside the team
+## 6. Channels, and what goes in each
+
+Five places, each with one job. The failure this table exists to prevent is a decision that
+lives only where it was made — a call, a chat thread — and is therefore lost to the next
+person.
+
+| Channel | What belongs there | Expected response | What never goes there |
+|---|---|---|---|
+| **The pull request** | Review, the reasoning behind a change, anything decided about this diff | Same working day for a first review; the author answers every thread | A decision reached elsewhere and not written back |
+| **Jira** (`PACS` project) | The backlog: outcome, the rule or screen it touches, the observable that says it is done. Status of work in flight | Updated when the state changes, not at the end of the sprint | Design discussion — link the pull request or the ADR instead |
+| **Team chat** | Blockers, "I am about to release", "I am demonstrating on dev until 15:00", quick questions | Within the hour during working time | Anything someone will need to find in a month. If it matters, it moves to the PR, Jira or a document, and the chat links it |
+| **The written daily** | Three lines in the team channel: what moved, what is next, what is blocked | Read by everyone before noon | Status theatre. A day with nothing to report says so in one line |
+| **The repository's documents** | Product rules (`PRODUCT.md`), architecture (ADRs in `docs/analisis.html`), this set | Changed in the same pull request as the behaviour they describe | Plans that are not yet decisions |
+
+Two announcements are **mandatory** in the team channel, because each one changes the
+environment under somebody else:
+
+- **Before a release** — "starting `pacs-development` at commit `abc1234`: #21, #22" —
+  and its outcome when Verify finishes.
+- **Before anything destructive on a shared environment** — a migration, `reset-periods`,
+  `keep-only-users`, a hand-edit in the database. Whoever is demonstrating loses their data
+  too, and finding that out mid-demo is the worst way to.
+
+---
+
+## 7. A worked example: an incident, from report to release
+
+What the plan looks like when it is used. On 2026-10-14 a person reported, in chat, that a
+resident they had just created never received the invitation email and could not sign in.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as Reporter
+  participant CH as Team chat
+  actor E as Engineer
+  participant AWS as dev account
+  participant PR as Pull request
+  participant J as Jira
+  participant CP as CodePipeline
+
+  U->>CH: "registered a resident, no email arrived"
+  E->>CH: acknowledged — looking
+  E->>AWS: pool config, newest users, CloudTrail AdminCreateUser
+  AWS-->>E: 50 × LimitExceededException — daily email limit
+  E->>AWS: which addresses spent the quota?
+  AWS-->>E: smoke residents @example.test, one invitation each per deploy
+  E->>PR: fix — suppress invitations to reserved domains, with tests
+  E->>CH: cause, fix link, what the reporter must do now
+  E->>J: follow-ups for planning — SES identity,<br/>DLQ on the stream, logger key
+  PR->>CP: merged, then released deliberately
+  CP-->>CH: Verify green — announced
+```
+
+What each step demonstrates, and why it is done that way:
+
+1. **Acknowledge first, diagnose second.** A one-line "looking" stops three people
+   investigating the same thing.
+2. **Evidence before theory.** The obvious guesses — spam folder, a typo in the address —
+   were not tested; the account was asked. CloudTrail named the error in one query.
+3. **The cause is stated in the pull request, not only in chat.** PR #22's body quotes the
+   error, names the quota and explains why the smoke suites spent it. A reader in six
+   months finds it from `git blame` on the line it changed.
+4. **The fix is the smallest one that removes the cause.** Not "configure SES", which needs
+   a verified identity and production access; that is a backlog item with its reason.
+5. **The reporter is told what to do now**, in their language, separately from the fix:
+   the affected resident must be provisioned again once the quota resets, because the
+   failed event was dropped.
+6. **Every gap found on the way becomes a backlog item, not a footnote.** Three were found:
+   the quota itself, the missing DLQ, and a log line that drops the error text. They are
+   written in §13 of the technical documentation, each with its reason, ready to be lifted
+   into the backlog at the next planning.
+7. **The runbook is updated.** §14.2 of the technical documentation now has the exact
+   command that re-provisions a resident. The second time this happens it takes minutes.
+
+The total elapsed time was under an hour, and nothing about it needed a meeting.
+
+---
+
+## 8. Communicating outside the team
 
 | Audience | What they need | How it reaches them |
 |---|---|---|
@@ -364,14 +448,14 @@ implements it.
 
 ---
 
-## 7. What is deliberately not in place yet
+## 9. What is deliberately not in place yet
 
 Named so that nobody mistakes an absence for an oversight.
 
-- **No `CODEOWNERS` file and no pull request template.** Both are one-person-team noise
-  today and both should land on the day the team is two: `CODEOWNERS` so the right person is
-  requested automatically, and a template so "what did you consider and reject" is a field
-  rather than a habit.
+- **No `CODEOWNERS` file.** One-person-team noise today; it lands on the day the team is
+  two, so the right person is requested automatically. The pull request template is
+  already in place (`.github/pull_request_template.md`), so "what did you consider and
+  reject" is a field rather than a habit.
 - **`enforce_admins` is off.** It should go on when the team is two. Until then, turning it
   on would mean no change could ever be merged.
 - **No scheduled dependency updates.** `pnpm install --frozen-lockfile` everywhere means the

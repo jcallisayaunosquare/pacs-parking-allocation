@@ -5,11 +5,11 @@ those diagrams rendered.
 
 | | What it is | For |
 |---|---|---|
-| [`01-technical-documentation.md`](01-technical-documentation.md) · [PDF](01-technical-documentation.pdf) | What the system is, the architecture front and back, the AWS and network topology, the data model, the domain rules, the API, how to run it, how to deploy it, the test strategy, and the known constraints | An engineer picking the project up |
-| [`02-communication-plan.md`](02-communication-plan.md) · [PDF](02-communication-plan.pdf) | Code review practice, sprint planning and the decision-making process, grounded in what this repository actually enforces | The team, and anyone asking how work gets agreed here |
-| [`03-onboarding-guide.md`](03-onboarding-guide.md) · [PDF](03-onboarding-guide.pdf) | A path from a fresh clone to a merged pull request: what to read in what order, how to get it running, a first issue, the conventions, and how to get through review | A developer joining |
+| [`01-technical-documentation.md`](01-technical-documentation.md) · [PDF](01-technical-documentation.pdf) | What the system is, the architecture front and back, the AWS and network topology, the data model, the domain rules A–H, the API, how to run it, how to deploy it, the test strategy, how to operate it, the known constraints, and what changed since the first edition | An engineer picking the project up |
+| [`02-communication-plan.md`](02-communication-plan.md) · [PDF](02-communication-plan.pdf) | Code review practice, sprint planning, the decision-making process, the channels and what goes in each, and a real incident worked from report to release — grounded in what this repository actually enforces | The team, and anyone asking how work gets agreed here |
+| [`03-onboarding-guide.md`](03-onboarding-guide.md) · [PDF](03-onboarding-guide.pdf) | A path from a fresh clone to a merged pull request: what to read in what order, how to get it running, a first issue, the conventions, how to get through review — and a worked example of how a junior developer is guided through their first two weeks | A developer joining |
 
-Everything in these documents was checked against the code in this repository, and the
+**Second edition, 2026-10-14**, verified against `development` at `3d02e2b`. Everything in these documents was checked against the code in this repository, and the
 parts that concern deployed infrastructure were checked against the `dev` account. Where
 the code and the original specification (`../analisis.html`) disagree, the code is treated
 as correct and the disagreement is named — see §13 of the technical documentation.

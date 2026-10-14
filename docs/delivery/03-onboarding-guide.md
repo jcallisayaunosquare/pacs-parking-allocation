@@ -21,7 +21,10 @@ The rule, in full:
 2. On a tie, whoever has had the fewest bays in the past goes first.
 3. On a remaining exact tie, a seeded draw decides.
 
-That is the entire fairness policy. It is not a lottery with weights, and if you find a
+That is the core of the fairness policy. Two rules sit on top of it, and both only move
+the start of a resident's wait: giving a bay up — withdrawing, declining, releasing — costs
+what holding one costs, and sitting a period out restarts the clock. The technical
+documentation states all eight rules, A to H, in one table (§7.3). It is not a lottery with weights, and if you find a
 document in this repository describing one — `docs/analisis.html` sections 12 and 13 —
 you have found a superseded design.
 
@@ -48,7 +51,7 @@ need them.
 | 4 | `apps/api/src/modules/allocation/domain/allocate.ts` | How that key becomes an allocation: one sort, three passes, and the hashes that make a run contestable | 20 min |
 | 5 | `apps/api/src/main/routes.ts` | The whole API surface in one file, with the two authorisation guards that a route's role list cannot express. Skim the presentation functions; read the guards properly | 30 min |
 | 6 | `apps/api/migrations/1759600000000_init-schema.ts` and `…_waiting-time-fairness.ts` | The schema, as raw SQL with the reasoning in comments. The second one is also a worked example of expand / migrate / contract in a single migration | 30 min |
-| 7 | `apps/api/README.md`, especially "Where this deviates from analisis.html" | Why the deployed reality differs from the specification. Every row is a constraint, not a preference | 15 min |
+| 7 | The root `README.md`, especially "Where this deviates from analisis.html" | Why the deployed reality differs from the specification. Every row is a constraint, not a preference | 15 min |
 
 **Deliberately not on that list:** `docs/analisis.html`. It is the original specification,
 it is 280 kB, and parts of it have been superseded by the code. Read it when you need the
@@ -102,8 +105,8 @@ ours runs.
 ### Then run the tests, so you know what green looks like
 
 ```bash
-pnpm --filter @pacs/api test      # 231 tests, 21 files, about 3 seconds
-cd apps/web && pnpm test          # 29 tests
+pnpm --filter @pacs/api test      # 267 tests, 23 files, about 3 seconds
+cd apps/web && pnpm test          # 69 tests, 10 files
 cd apps/web && pnpm e2e           # Playwright; it starts both servers itself
 ```
 
@@ -173,7 +176,7 @@ swapping a line there runs the whole app against a fake.
 | A business rule | `apps/api/src/modules/<module>/domain/` |
 | The route that exposes it | `apps/api/src/main/routes.ts` — all of them, one file |
 | What the API promises | `packages/contracts/openapi.yaml` |
-| A table or a column | `apps/api/migrations/` — five files, in order |
+| A table or a column | `apps/api/migrations/` — six files, in order |
 | What a screen does | `apps/web/src/app/features/<area>/` |
 | How a screen gets its data | `apps/web/src/app/application/*.facade.ts` |
 | What the infrastructure is | `apps/api/serverless.yml`, `pipeline/dev/*.yml` |
@@ -352,10 +355,11 @@ apps/api/src/main/plate-recognizer.ts                      the static provider, 
 - **`GET /config/plates`.** There is an admin endpoint to read the allocation policy and its
   history (`/config/allocation`, `/config/allocation/history`) and none at all for the plate
   policy. Same shape, one module across.
-- **`apps/api/README.md` is out of date.** It reports 213 unit tests (there are 231), says
-  the project is not a git repository yet, and lists CI as not built. Mechanical, but you
-  have to run everything to know what the right numbers are, which is a good way to meet the
-  suites.
+- **`integrations` drops the reason a record failed.** `src/main/integrations.ts` logs
+  `{ message: ... }`, and Powertools' logger reserves `message`, so the line reads only
+  "record failed". Pull request #20 fixed the same defect in `api.ts` — read it, copy the
+  pattern (`detail`), and add the AWS error's `name`. Small, real, and it teaches you why
+  the email-quota incident had to be diagnosed from CloudTrail.
 - **The stale doc comment in `plates/domain/access-decision.ts`** says the thresholds are
   read from `allocation_config`. They are read from `plate_config`, and the migration
   explains at length why they had to be separated. A two-line fix, and a good excuse to read
@@ -383,7 +387,9 @@ It catches more than it has any right to.
 
 ### What happens when you open it
 
-Against `development`. Six checks run — **Lint, Typecheck, Unit tests API, Unit tests Web,
+Against `development`, filling in the template GitHub pre-loads
+(`.github/pull_request_template.md`): what and why, what you considered and rejected, how
+you verified it, and anything the person releasing must do. Six checks run — **Lint, Typecheck, Unit tests API, Unit tests Web,
 Build, End to end** — and all six must be green. None of them touches AWS, so none of them
 can fail for a reason outside your diff. The branch must also be up to date with
 `development` before it can merge, so rebase rather than letting it drift.
@@ -402,8 +408,8 @@ new commit dismisses the approval you had.
    column on an append-only table, or anything that makes an identifier reachable from a
    path, gets read twice. Expect more questions, and do not take them personally.
 5. **Would the person on the other end understand the refusal?**
-6. **Is the pull request one subject?** If it has grown two, it is two pull requests. The
-   seven merged so far each have a single subject in the title.
+6. **Is the pull request one subject?** If it has grown two, it is two pull requests. Most
+   of the twenty-two merged so far are under a hundred lines, with one subject in the title.
 
 ### Answering review comments
 
@@ -462,5 +468,108 @@ would make the test period permanent and leave it on an administrator's screen. 
 `DATABASE_URL` locally and the suite runs the draw and cleans up afterwards.
 
 **"The specification says X and the code does Y."** The code wins, and the difference is
-usually already documented: see the deviations table in `apps/api/README.md` and §13 of the
+usually already documented: see the deviations table in the root `README.md` and §13 of the
 technical documentation. If it is not documented, you have found a gap worth a pull request.
+
+---
+
+## 9. How a junior developer is guided through this — a worked example
+
+Everything above is what a new developer reads. This section is the other half: what the
+person guiding them does, day by day, for someone joining with a year or two of
+TypeScript, no AWS, and no experience of a codebase this opinionated. The example follows
+one developer, Ana, through her first two weeks and her first pull request — the
+`cooldown_seconds` issue of §6.
+
+### 9.1 The principles behind it
+
+- **One named mentor, and a time that is theirs.** Thirty minutes a day blocked in both
+  calendars for the first two weeks, used or not. A junior who has to judge whether a
+  question is worth someone's interruption will sit on it for a day instead.
+- **Ship something real in the first week.** Not a tutorial, not a toy: a merged change on
+  the real codebase, small enough to finish. Nothing builds confidence like seeing your
+  change on the dev environment.
+- **Explain why before what.** Every convention in §5 has a story behind it. A rule given
+  with its reason is followed in the cases nobody thought of; a rule given bare is followed
+  until it is inconvenient.
+- **Questions in writing, by default in public.** In the team channel or on the pull
+  request, not in a private message — so the answer helps the next person too, and so
+  asking is visibly normal. The mentor asks their own questions in public as well.
+- **Review is teaching, so it is never a verdict.** A review comment names the problem, the
+  reason and a direction, and leaves the solution to the author when there is time to.
+
+### 9.2 The first two weeks
+
+| When | Ana | The mentor |
+|---|---|---|
+| **Day 1, morning** | Reads §1–§2 of this guide and `PRODUCT.md` | Walks the product with her on the dev environment, as a resident and as an administrator — a draw run end to end, live. 45 minutes. Gives her the dev accounts |
+| **Day 1, afternoon** | Clones, installs, runs the stub, the app and the three test suites (§3) | Is available for the install. If anything in §3 was wrong or unclear, the first pull request of the week is fixing this guide — the newcomer is the only person who can still see what is missing |
+| **Day 2** | Reads `priority-key.ts` and `allocate.ts`, then explains the draw back in her own words | Listens and asks two questions: "why is rule F a subtraction?" and "why is the raffle token derived from the resident and not from the array position?" Fills in, does not lecture |
+| **Day 3** | Starts the first issue (§6). Writes a short plan as a draft pull request before writing code: which files, which tests | Reviews the *plan* within the day. Cheap to correct a direction now; expensive after two days of code |
+| **Day 4–5** | Implements, with tests beside the code | One 30-minute pairing session, Ana driving. Daily check-in: "what did you learn, what is blocking you, what are you unsure about?" |
+| **Day 6–7** | Opens the pull request with the template filled in | Reviews it the same day (§9.3). Answers in threads, never only in a call |
+| **Day 8** | Addresses review, gets approval, merges | Releases with her: she starts the pipeline, watches Verify, announces it in the channel (communication plan §6) |
+| **Day 9–10** | Picks her second issue alone, from §6's list | Reviews only. Leads the week's retrospective question to her: "what in the guide or the process slowed you down?" — and her answer becomes a change |
+
+### 9.3 What the first review actually looks like
+
+Ana's pull request reads the cooldown from `plate_config`. Three of the comments it gets,
+as they would be written:
+
+> **Blocker — `ingest-plate-read.ts`, line 61.** The cooldown is read once, in the
+> constructor, so a row inserted after the container starts is ignored until it is
+> recycled. The issue asks for the opposite. Could the use case ask the provider on each
+> read, the way it already does for the thresholds? The provider caches for a minute, so
+> it costs nothing.
+
+> **Question — `kysely-plate-thresholds.provider.ts`, line 40.** If the table has no row,
+> this now throws. What should a gate do when its configuration cannot be read? The
+> comment at the top of the file has an answer — worth checking that this still honours it.
+
+> **Not a blocker — `access-decision.ts`.** I would name the field `cooldownSeconds` to
+> match the column and the environment variable, so a search finds all three. Your call.
+
+What makes those useful to a junior rather than discouraging:
+
+- **Each one is labelled.** "Blocker", "question", "not a blocker" — so the author knows
+  what must change and what is an opinion.
+- **Each one says why**, in terms of what the code is for (the issue's goal, the gate's
+  behaviour), not of the reviewer's taste.
+- **The question is a real question.** The reviewer could have said "add a fallback".
+  Asking makes Ana read the file's own reasoning, which is the habit §5.1 is about.
+- **Something that went well is said too**, once, specifically: "the test for the cache
+  expiry is exactly the case that would have regressed — good".
+
+And when Ana disagrees — say she thinks reading the cooldown on every call is premature —
+she answers in the thread with her reason, and the mentor either accepts it or explains
+the case she has not seen. Neither of them settles it in a call without writing the
+outcome back.
+
+### 9.4 How the mentor knows it is working
+
+Not by hours or by the number of pull requests. By these, roughly in this order:
+
+1. Her questions move from *where* ("where is the route for this?") to *why* ("why is this
+   a 404 and not a 403?") to *whether* ("should this be a domain rule?").
+2. Her pull request bodies start carrying the "considered and rejected" section without
+   being asked.
+3. She finds a gap in this guide and fixes it.
+4. She reviews someone else's pull request, and the comments are labelled and give reasons.
+5. She can be given an issue with a product question inside it — the kind §5 of the
+   communication plan routes to the product owner — and she recognises it as one rather
+   than deciding it in code.
+
+When the fourth happens, the daily check-in becomes weekly. When the fifth happens, she is
+the right person to guide the next one.
+
+### 9.5 When something goes wrong
+
+- **Stuck for more than half a day** on the same thing is the signal to ask, and the
+  mentor says so on day one, in those words. Struggling for an hour is learning;
+  struggling for a day is waste nobody wanted.
+- **Broke the dev environment.** It is recoverable — §14 of the technical documentation
+  has the runbook — and the mentor recovers it *with* her, then they write down what
+  would have prevented it. Blame teaches people to hide mistakes.
+- **A review felt harsh.** The check-in question "how did the review feel?" is asked
+  explicitly after the first one. If the answer is "bad", the reviewer's wording is the
+  first thing to change, not her skin.

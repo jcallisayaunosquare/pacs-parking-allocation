@@ -299,7 +299,7 @@ fix and waiting out the tests to be told about it is twenty seconds spent learni
 <p>The hook is version-controlled rather than living in <code>.git/hooks</code>, and <code>pnpm install</code> points
 git at it through the root <code>prepare</code> script. A fresh clone gets it by installing.</p>
 <h3>3.2 What a human is for</h3>
-<p>The machine has already established that it compiles, lints, passes 231 API tests and 29
+<p>The machine has already established that it compiles, lints, passes 267 API tests and 69
 web tests, builds, and survives Playwright. A review that re-checks any of that is wasted.
 What a reviewer is actually reading for, in rough order of value on this codebase:</p>
 <ol>
@@ -322,8 +322,12 @@ get read twice.</li>
 <li><strong>Would a resident understand the refusal?</strong> Every blocker in this codebase returns the
 sentence an administrator is shown, not a boolean. A new one that returns <code>false</code> is
 sending somebody to support.</li>
-<li><strong>Is the change one subject?</strong> The seven pull requests merged so far run from 23 to
-1,367 lines changed, each with a single subject in its title. A branch that has
+<li><strong>Is the change one subject?</strong> Twenty-two pull requests have merged. Twelve of the last
+thirteen are under 400 lines changed, most under 100, each with one subject in its
+title — a defect found in use, fixed and released the same day. The exception proves
+the rule: #10 is 9,105 lines, its title is a branch name (&quot;Fix/smoke asserts the draw
+rule&quot;) and it carried a menu reorder, a new domain rule and a smoke fix together. It
+was the hardest to review and the hardest to describe afterwards. A branch that has
 accumulated two subjects is two pull requests.</li>
 </ol>
 <h3>3.3 How review is conducted</h3>
@@ -373,7 +377,7 @@ that makes the second engineer&#39;s first review feel normal rather than ceremo
 </tr>
 <tr>
 <td>Why the deployed reality differs from the specification</td>
-<td>The deviations table in <code>apps/api/README.md</code>, and §13 of the technical documentation</td>
+<td>The deviations table in the root <code>README.md</code>, and §13 of the technical documentation</td>
 </tr>
 </tbody></table>
 <p>The rule behind the table: <strong>a decision is not made until it is written somewhere a stranger
@@ -438,7 +442,7 @@ standard the Verify stage holds itself to.</p>
 <p>Three standing sources of backlog items, each of which has already produced real work:</p>
 <ol>
 <li><strong>The gap list</strong> — §13 of the technical documentation, and the &quot;Not built yet&quot; section
-of <code>apps/api/README.md</code>.</li>
+of the root <code>README.md</code>.</li>
 <li><strong>Defects found in use.</strong> Two periods ACTIVE at once with the same bay assigned to two
 residents was found by looking at the dev environment, not by a test. It became
 <code>drawBlocker</code> and <code>POST /cycles/{id}/close</code> in a single sprint item.</li>
@@ -488,7 +492,7 @@ NAT gateway&quot; consequence is &quot;an in-VPC function reaches exactly RDS an
 strange thing about this architecture descends from that one line. An ADR that lists only
 benefits has not been written yet.</p>
 <p><strong>A constraint the account imposes is recorded as a constraint, never as a preference.</strong>
-The deviations table in <code>apps/api/README.md</code> has a &quot;Why&quot; column for exactly this, and some
+The deviations table in the root <code>README.md</code> has a &quot;Why&quot; column for exactly this, and some
 of its rows are not flattering: <code>us-east-2</code> because an SCP denies everything else; CodePipeline
 because an SCP makes OIDC impossible; no reserved concurrency because the account quota is
 10. A reader who cannot tell a forced constraint from a design choice will undo the
@@ -507,11 +511,113 @@ down as open is a decision; leaving it undiscussed is not.</p>
 <p><strong>Decisions are revisited when the evidence arrives, and the revision replaces the
 original.</strong> The fairness model is the example that matters: <code>docs/analisis.html</code> sections 12
 and 13 describe a probabilistic weighted lottery that was superseded by the deterministic
-rules A–F. The lesson the team took from it is in this plan: when a decision is replaced,
+rules A–F, later extended to A–H when the building settled how withdrawing and sitting a
+period out should count. The lesson the team took from it is in this plan: when a decision is replaced,
 the superseded text must be marked as superseded where it lives, or the next reader
 implements it.</p>
 <hr>
-<h2>6. Communicating outside the team</h2>
+<h2>6. Channels, and what goes in each</h2>
+<p>Five places, each with one job. The failure this table exists to prevent is a decision that
+lives only where it was made — a call, a chat thread — and is therefore lost to the next
+person.</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>What belongs there</th>
+<th>Expected response</th>
+<th>What never goes there</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>The pull request</strong></td>
+<td>Review, the reasoning behind a change, anything decided about this diff</td>
+<td>Same working day for a first review; the author answers every thread</td>
+<td>A decision reached elsewhere and not written back</td>
+</tr>
+<tr>
+<td><strong>Jira</strong> (<code>PACS</code> project)</td>
+<td>The backlog: outcome, the rule or screen it touches, the observable that says it is done. Status of work in flight</td>
+<td>Updated when the state changes, not at the end of the sprint</td>
+<td>Design discussion — link the pull request or the ADR instead</td>
+</tr>
+<tr>
+<td><strong>Team chat</strong></td>
+<td>Blockers, &quot;I am about to release&quot;, &quot;I am demonstrating on dev until 15:00&quot;, quick questions</td>
+<td>Within the hour during working time</td>
+<td>Anything someone will need to find in a month. If it matters, it moves to the PR, Jira or a document, and the chat links it</td>
+</tr>
+<tr>
+<td><strong>The written daily</strong></td>
+<td>Three lines in the team channel: what moved, what is next, what is blocked</td>
+<td>Read by everyone before noon</td>
+<td>Status theatre. A day with nothing to report says so in one line</td>
+</tr>
+<tr>
+<td><strong>The repository&#39;s documents</strong></td>
+<td>Product rules (<code>PRODUCT.md</code>), architecture (ADRs in <code>docs/analisis.html</code>), this set</td>
+<td>Changed in the same pull request as the behaviour they describe</td>
+<td>Plans that are not yet decisions</td>
+</tr>
+</tbody></table>
+<p>Two announcements are <strong>mandatory</strong> in the team channel, because each one changes the
+environment under somebody else:</p>
+<ul>
+<li><strong>Before a release</strong> — &quot;starting <code>pacs-development</code> at commit <code>abc1234</code>: #21, #22&quot; —
+and its outcome when Verify finishes.</li>
+<li><strong>Before anything destructive on a shared environment</strong> — a migration, <code>reset-periods</code>,
+<code>keep-only-users</code>, a hand-edit in the database. Whoever is demonstrating loses their data
+too, and finding that out mid-demo is the worst way to.</li>
+</ul>
+<hr>
+<div class="figure figure--flow"><h2>7. A worked example: an incident, from report to release</h2><p>What the plan looks like when it is used. On 2026-10-14 a person reported, in chat, that a
+resident they had just created never received the invitation email and could not sign in.</p>
+<pre class="mermaid">sequenceDiagram
+  autonumber
+  actor U as Reporter
+  participant CH as Team chat
+  actor E as Engineer
+  participant AWS as dev account
+  participant PR as Pull request
+  participant J as Jira
+  participant CP as CodePipeline
+
+  U-&gt;&gt;CH: "registered a resident, no email arrived"
+  E-&gt;&gt;CH: acknowledged — looking
+  E-&gt;&gt;AWS: pool config, newest users, CloudTrail AdminCreateUser
+  AWS--&gt;&gt;E: 50 × LimitExceededException — daily email limit
+  E-&gt;&gt;AWS: which addresses spent the quota?
+  AWS--&gt;&gt;E: smoke residents @example.test, one invitation each per deploy
+  E-&gt;&gt;PR: fix — suppress invitations to reserved domains, with tests
+  E-&gt;&gt;CH: cause, fix link, what the reporter must do now
+  E-&gt;&gt;J: follow-ups for planning — SES identity,&lt;br/&gt;DLQ on the stream, logger key
+  PR-&gt;&gt;CP: merged, then released deliberately
+  CP--&gt;&gt;CH: Verify green — announced
+</pre></div>
+<p>What each step demonstrates, and why it is done that way:</p>
+<ol>
+<li><strong>Acknowledge first, diagnose second.</strong> A one-line &quot;looking&quot; stops three people
+investigating the same thing.</li>
+<li><strong>Evidence before theory.</strong> The obvious guesses — spam folder, a typo in the address —
+were not tested; the account was asked. CloudTrail named the error in one query.</li>
+<li><strong>The cause is stated in the pull request, not only in chat.</strong> PR #22&#39;s body quotes the
+error, names the quota and explains why the smoke suites spent it. A reader in six
+months finds it from <code>git blame</code> on the line it changed.</li>
+<li><strong>The fix is the smallest one that removes the cause.</strong> Not &quot;configure SES&quot;, which needs
+a verified identity and production access; that is a backlog item with its reason.</li>
+<li><strong>The reporter is told what to do now</strong>, in their language, separately from the fix:
+the affected resident must be provisioned again once the quota resets, because the
+failed event was dropped.</li>
+<li><strong>Every gap found on the way becomes a backlog item, not a footnote.</strong> Three were found:
+the quota itself, the missing DLQ, and a log line that drops the error text. They are
+written in §13 of the technical documentation, each with its reason, ready to be lifted
+into the backlog at the next planning.</li>
+<li><strong>The runbook is updated.</strong> §14.2 of the technical documentation now has the exact
+command that re-provisions a resident. The second time this happens it takes minutes.</li>
+</ol>
+<p>The total elapsed time was under an hour, and nothing about it needed a meeting.</p>
+<hr>
+<h2>8. Communicating outside the team</h2>
 <table>
 <thead>
 <tr>
@@ -542,13 +648,13 @@ implements it.</p>
 </tr>
 </tbody></table>
 <hr>
-<h2>7. What is deliberately not in place yet</h2>
+<h2>9. What is deliberately not in place yet</h2>
 <p>Named so that nobody mistakes an absence for an oversight.</p>
 <ul>
-<li><strong>No <code>CODEOWNERS</code> file and no pull request template.</strong> Both are one-person-team noise
-today and both should land on the day the team is two: <code>CODEOWNERS</code> so the right person is
-requested automatically, and a template so &quot;what did you consider and reject&quot; is a field
-rather than a habit.</li>
+<li><strong>No <code>CODEOWNERS</code> file.</strong> One-person-team noise today; it lands on the day the team is
+two, so the right person is requested automatically. The pull request template is
+already in place (<code>.github/pull_request_template.md</code>), so &quot;what did you consider and
+reject&quot; is a field rather than a habit.</li>
 <li><strong><code>enforce_admins</code> is off.</strong> It should go on when the team is two. Until then, turning it
 on would mean no change could ever be merged.</li>
 <li><strong>No scheduled dependency updates.</strong> <code>pnpm install --frozen-lockfile</code> everywhere means the
