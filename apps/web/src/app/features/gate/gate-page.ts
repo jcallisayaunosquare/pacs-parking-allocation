@@ -391,16 +391,16 @@ interface Verdict {
                 id="gate-device"
                 class="set__i"
                 [ngModel]="deviceId()"
-                (ngModelChange)="deviceId.set($event)"
+                (ngModelChange)="chooseDevice($event)"
               >
-                @for (d of devices(); track d.deviceId) {
-                  <option [value]="d.deviceId">{{ d.label || 'Camera' }}</option>
+                @for (d of devices(); track $index; let i = $index) {
+                  <option [value]="d.deviceId">{{ d.label || 'Camera ' + (i + 1) }}</option>
                 }
                 @if (devices().length === 0) {
                   <option value="">No camera found</option>
                 }
               </select>
-              <p class="set__h">Listed once permission is granted.</p>
+              <p class="set__h">Named once the browser is allowed to use the camera.</p>
             </div>
 
             <div>
@@ -1040,6 +1040,17 @@ export default class GatePage implements OnDestroy {
 
   constructor() {
     /*
+     * The camera list, filled as soon as the page opens and again whenever a camera is
+     * plugged in or out. It used to be read only after a stream had started, so the
+     * select said "No camera found" next to a working camera until Start was pressed -
+     * and a camera connected afterwards never appeared at all. Before permission the
+     * browser gives no labels; the list still shows how many there are, and gets its
+     * names once the first stream is granted.
+     */
+    void this.refreshDevices();
+    navigator.mediaDevices?.addEventListener?.('devicechange', this.onDeviceChange);
+
+    /*
      * The loop is an effect on (running, auto, interval) rather than something each
      * handler starts and stops. Three controls can change it, and with the timer owned by
      * the handlers one path or another always ended up leaving a second interval running
@@ -1129,12 +1140,11 @@ export default class GatePage implements OnDestroy {
        * the word "captured". The log below is the record and it is always there.
        */
       if (this.isAdmin) this.arrivals.start();
-      // Labels are blank until permission is granted, so the list is only worth filling
-      // once a stream exists.
-      const all = await navigator.mediaDevices.enumerateDevices();
-      const cams = all.filter((d) => d.kind === 'videoinput');
-      this.devices.set(cams);
-      if (!this.deviceId() && cams[0]) this.deviceId.set(cams[0].deviceId);
+      // Read again now that permission exists: this is when the cameras get their names.
+      await this.refreshDevices();
+      // Lock the choice to the camera actually streaming, so the select shows it.
+      const live = this.stream.getVideoTracks()[0]?.getSettings().deviceId;
+      if (live) this.deviceId.set(live);
     } catch (e) {
       this.running.set(false);
       this.mediaError.set(
@@ -1142,6 +1152,40 @@ export default class GatePage implements OnDestroy {
           ? 'The browser refused access to the camera. Grant it for this site and start again.'
           : `The camera could not be opened: ${e instanceof Error ? e.message : String(e)}`,
       );
+    }
+  }
+
+  private readonly onDeviceChange = () => void this.refreshDevices();
+
+  /** Lists the video inputs. Never throws: a browser without the API lists none. */
+  async refreshDevices(): Promise<void> {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      this.mediaError.set(
+        'This browser does not expose cameras to the page. Use a current Chrome, Edge or Firefox over https.',
+      );
+      return;
+    }
+    try {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
+        (d) => d.kind === 'videoinput',
+      );
+      this.devices.set(cams);
+      const chosen = this.deviceId();
+      // Keep the choice while it is still plugged in; otherwise fall back to the first.
+      if (!cams.some((c) => c.deviceId === chosen) && cams[0]?.deviceId) {
+        this.deviceId.set(cams[0].deviceId);
+      }
+    } catch {
+      this.devices.set([]);
+    }
+  }
+
+  /** Choosing another camera while one is streaming switches to it, not on the next Start. */
+  async chooseDevice(id: string): Promise<void> {
+    this.deviceId.set(id);
+    if (this.running()) {
+      this.stop();
+      await this.start();
     }
   }
 
@@ -1473,6 +1517,7 @@ export default class GatePage implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    navigator.mediaDevices?.removeEventListener?.('devicechange', this.onDeviceChange);
     this.stop();
     const preview = this.filePreview();
     if (preview !== null) URL.revokeObjectURL(preview);
