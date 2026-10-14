@@ -86,6 +86,14 @@ class FakeRegistrations implements RegistrationRepository {
   async isRegistered(): Promise<boolean> {
     return this.registered.length > 0;
   }
+  async listEntrants() {
+    return this.registered.map((id) => ({
+      id,
+      fullName: 'Entered Resident',
+      unitNumber: '101',
+      registeredAt: new Date('2026-03-01T00:00:00Z'),
+    }));
+  }
 }
 
 class FakeCycles implements CycleRepository {
@@ -350,5 +358,20 @@ describe('CycleUseCases dashboard cache', () => {
     });
     expect(r.ok).toBe(true);
     expect(await cache.get(`dashboard:${RESIDENT_ID}`)).toBeNull();
+  });
+});
+
+/*
+ * The draw screen showed every eligible resident as "in this draw". Only those who
+ * entered are drawn, so the review list is the entrants and nothing else.
+ */
+describe('CycleUseCases.entrants', () => {
+  it('lists only residents who entered the draw', async () => {
+    const { useCases, registrations } = build(resident());
+    expect(await useCases.entrants(CYCLE_ID)).toEqual({ ok: true, value: [] });
+    await useCases.register(CYCLE_ID, RESIDENT_ID, false);
+    const r = await useCases.entrants(CYCLE_ID);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((e) => e.id)).toEqual(registrations.registered);
   });
 });

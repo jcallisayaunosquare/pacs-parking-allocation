@@ -2,14 +2,13 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import {
   CycleRepository,
   LotRepository,
-  ResidentRepository,
   RunRepository,
+  type Entrant,
 } from '../domain/repositories';
 import type {
   ApiError,
   Cycle,
   DecidedBy,
-  Resident,
   RunAssignment,
   RunCandidate,
   RunResult,
@@ -37,12 +36,11 @@ export type DrawStep = 0 | 1 | 2;
 export class DrawFacade {
   private readonly cycles = inject(CycleRepository);
   private readonly runs = inject(RunRepository);
-  private readonly residents = inject(ResidentRepository);
   private readonly lots = inject(LotRepository);
 
   private readonly _step = signal<DrawStep>(0);
   private readonly _cycle = signal<Cycle | null>(null);
-  private readonly _candidates = signal<readonly Resident[]>([]);
+  private readonly _candidates = signal<readonly Entrant[]>([]);
   private readonly _run = signal<RunResult | null>(null);
   private readonly _assignments = signal<readonly RunAssignment[]>([]);
   private readonly _explanation = signal<readonly RunCandidate[]>([]);
@@ -141,11 +139,10 @@ export class DrawFacade {
       const cycle = cycles.find((c) => c.state === 'REGISTRATION_CLOSED') ?? null;
       this._cycle.set(cycle);
 
-      // The authoritative candidate list is computed on the server at run time, from the
-      // registrations for this period. This is the register it will be drawn from, which
-      // is what an administrator needs to see before committing.
-      const page = await this.residents.list({ limit: 100, eligible: true });
-      this._candidates.set(page.items);
+      // Who entered this period's draw - the pool the server draws from. It used to be
+      // every eligible resident, which listed people who never pressed "Enter the draw"
+      // as if they were in it. No period ready to draw means nobody to list.
+      this._candidates.set(cycle ? await this.cycles.entrants(cycle.id) : []);
 
       const levels = await this.lots.levels();
       this._level.set(levels[0] ?? null);

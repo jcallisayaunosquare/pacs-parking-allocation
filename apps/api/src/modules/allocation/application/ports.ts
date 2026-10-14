@@ -191,6 +191,18 @@ export interface RegistrationRepository {
   /** `at` is stored: a withdrawal counts as having held the bay and restarts the clock. */
   withdraw(cycleId: string, residentId: string, at: Date): Promise<boolean>;
   isRegistered(cycleId: string, residentId: string): Promise<boolean>;
+  /**
+   * Who is entered in a period's draw: active, not withdrawn, eligible and not an
+   * administrator - the same pool the run is drawn from.
+   */
+  listEntrants(cycleId: string): Promise<readonly Entrant[]>;
+}
+
+export interface Entrant {
+  readonly id: string;
+  readonly fullName: string;
+  readonly unitNumber: string;
+  readonly registeredAt: Date;
 }
 
 export interface CycleRepository {

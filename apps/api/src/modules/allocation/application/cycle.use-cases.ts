@@ -120,6 +120,17 @@ export class CycleUseCases {
     return ok(created);
   }
 
+  /**
+   * Who is entered in a period's draw, for the administrator to review before running
+   * it. The same pool the run snapshots: a resident who never pressed "Enter the draw",
+   * withdrew, is ineligible or is an administrator is not in it.
+   */
+  async entrants(cycleId: string) {
+    const cycle = await this.cycles.findById(cycleId);
+    if (!cycle) return fail('NOT_FOUND', 'No such period.');
+    return ok(await this.registrations.listEntrants(cycleId));
+  }
+
   async openRegistration(cycleId: string): Promise<Result<CycleRecord>> {
     return this.transition(cycleId, 'REGISTRATION_OPEN');
   }
