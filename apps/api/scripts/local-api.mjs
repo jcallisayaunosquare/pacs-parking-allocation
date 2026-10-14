@@ -1254,6 +1254,16 @@ on('GET', '/spots', (q, _b, p) => {
   return ok({ items: spots.filter((s) => !level || s.level === level) });
 });
 
+on('GET', '/lots', (_q, _b, p) => {
+  if (!p) return err(401, 'UNAUTHENTICATED', 'No token');
+  const counts = new Map();
+  for (const s of spots) counts.set(s.level, (counts.get(s.level) ?? 0) + 1);
+  const items = [...counts]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([levelId, bays]) => ({ levelId, bays }));
+  return ok({ items });
+});
+
 // The lot plan's live state, as the real API derives it: inventory plus ACTIVE
 // assignments, occupants named to an administrator only, `isMine` for the viewer.
 on('GET', '/lots/{level}/occupancy', (_q, _b, p, params) => {

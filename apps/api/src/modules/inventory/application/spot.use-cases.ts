@@ -29,6 +29,8 @@ export interface SpotRepository {
   remove(id: string): Promise<boolean>;
   /** Every bay on a level with its live (ACTIVE) assignment, if it has one. */
   occupancy(level: string): Promise<readonly BayRow[]>;
+  /** The levels the inventory has bays on, with how many each, in level order. */
+  levels(): Promise<readonly { readonly level: string; readonly bays: number }[]>;
 }
 
 export class SpotUseCases {
@@ -39,6 +41,11 @@ export class SpotUseCases {
 
   async list(input: { activeOnly?: boolean; type?: SpotType }) {
     return ok(await this.repo.list(input));
+  }
+
+  /** The levels of the lot, as the inventory has them - the plan draws one per level. */
+  async levels() {
+    return ok(await this.repo.levels());
   }
 
   /** The lot plan's live state for one level, redacted for who is asking. */

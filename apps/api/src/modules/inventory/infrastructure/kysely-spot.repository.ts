@@ -169,4 +169,14 @@ export class KyselySpotRepository implements SpotRepository {
           : null,
     }));
   }
+
+  async levels() {
+    const rows = await this.db
+      .selectFrom('parking_spot')
+      .select(['level', (eb) => eb.fn.countAll<string>().as('bays')])
+      .groupBy('level')
+      .orderBy('level')
+      .execute();
+    return rows.map((r) => ({ level: r.level, bays: Number(r.bays) }));
+  }
 }

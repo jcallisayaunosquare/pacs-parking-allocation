@@ -139,6 +139,20 @@ const PERSPECTIVES: readonly { readonly value: Perspective; readonly label: stri
             </mat-form-field>
           }
 
+          <!--
+            Reads the plan again: after a draw, a release or a period closing, the bays
+            change on the server and this screen does not hear about it on its own.
+          -->
+          <button
+            class="tools__refresh"
+            type="button"
+            aria-label="Refresh the plan"
+            title="Refresh the plan"
+            (click)="facade.refresh()"
+          >
+            <mat-icon aria-hidden="true">refresh</mat-icon>
+          </button>
+
           <!-- Each option carries its count, so choosing a filter is also reading the lot. -->
           <mat-form-field appearance="outline" subscriptSizing="dynamic" class="tools__f">
             <mat-label>Show</mat-label>
@@ -400,6 +414,26 @@ const PERSPECTIVES: readonly { readonly value: Perspective; readonly label: stri
 
         display: block;
         /* A floor plan is the one screen that wants every pixel it can get. */
+      }
+
+      .tools__refresh {
+        display: inline-grid;
+        place-items: center;
+        width: 2.75rem;
+        height: 2.75rem;
+        padding: 0;
+        border: 1px solid var(--rule);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--ink-2);
+        cursor: pointer;
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .tools__refresh:hover {
+          background: var(--surface-3);
+          color: var(--ink-1);
+        }
       }
 
       .skip {

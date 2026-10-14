@@ -867,6 +867,28 @@ paths:
               schema: { $ref: '#/components/schemas/ParkingSpot' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /lots:
+    get:
+      tags: [spots]
+      summary: The levels of the lot, from the inventory
+      responses:
+        '200':
+          description: Levels in order, with how many bays each has
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [levelId, bays]
+                      properties:
+                        levelId: { type: string, example: B1 }
+                        bays: { type: integer }
+
   /lots/{level}/occupancy:
     get:
       tags: [spots]
