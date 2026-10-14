@@ -11,6 +11,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBStreamEvent, DynamoDBBatchResponse } from 'aws-lambda';
+import { isUndeliverable } from './undeliverable-email';
 
 /**
  * The only function outside the VPC (§10 Lambda inventory, ADR-016).
@@ -64,6 +65,9 @@ async function provisionResident(p: ResidentCreated): Promise<string | null> {
         // Cognito emails the temporary password itself; no password passes through
         // this code, and the default sender needs no SES verification.
         DesiredDeliveryMediums: ['EMAIL'],
+        // A reserved test address would only spend the daily email quota (50 on the
+        // default sender) that real residents need; create the user without the email.
+        ...(isUndeliverable(p.email) ? { MessageAction: 'SUPPRESS' as const } : {}),
         UserAttributes: attributes,
       }),
     );
