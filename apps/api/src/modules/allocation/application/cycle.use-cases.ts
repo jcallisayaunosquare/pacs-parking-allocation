@@ -108,15 +108,16 @@ export class CycleUseCases {
         { field: 'registrationClosesAt', issue: 'must be after registrationOpensAt' },
       ]);
     }
-    return ok(
-      await this.cycles.create({
-        label: input.label ?? periodLabel(input.startsOn, allocationDurationMonths),
-        startsOn: input.startsOn,
-        endsOn,
-        registrationOpensAt: input.registrationOpensAt,
-        registrationClosesAt: input.registrationClosesAt,
-      }),
-    );
+    const created = await this.cycles.create({
+      label: input.label ?? periodLabel(input.startsOn, allocationDurationMonths),
+      startsOn: input.startsOn,
+      endsOn,
+      registrationOpensAt: input.registrationOpensAt,
+      registrationClosesAt: input.registrationClosesAt,
+    });
+    // A new period can be the one every resident's dashboard announces as next.
+    await this.cache.invalidate('dashboard:').catch(() => undefined);
+    return ok(created);
   }
 
   /**
@@ -145,6 +146,13 @@ export class CycleUseCases {
   ): Promise<Result<CycleRecord>> {
     const cycle = await this.cycles.transition(cycleId, to);
     if (cycle === null) return fail('NOT_FOUND', 'Cycle not found.');
+    /*
+     * The state is what every resident's dashboard keys its action on: opening
+     * registration is what shows "Enter the draw". Without this the cached payload kept
+     * saying DRAFT for up to five minutes after the period was opened, and the button
+     * did not appear.
+     */
+    await this.cache.invalidate('dashboard:').catch(() => undefined);
     return ok(cycle);
   }
 
